@@ -23,7 +23,8 @@ export function App() {
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [matches, setMatches] = useState<AssetSummary[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
-  const [message, setMessage] = useState('')
+  // One place for what the rail says: an info line, or an error (shown the same way for every failure).
+  const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
   // Bumped by every lookup or open; a result that returns after a newer one started is discarded.
   const latest = useRef(0)
@@ -37,8 +38,8 @@ export function App() {
     try {
       await work(isStale)
     } catch (err) {
-      // ponytail: raw error text; ticket 04 adds proper error messages
-      if (!isStale()) setMessage((err as Error).message)
+      // The current Asset and rail stay as they were; only the message changes.
+      if (!isStale()) setMessage({ text: (err as Error).message, error: true })
     } finally {
       search.current?.focus()
     }
@@ -48,7 +49,7 @@ export function App() {
     const full = await window.snipeIt.getAsset(id)
     if (isStale()) return
     setAsset(full)
-    setMessage('')
+    setMessage({ text: '' })
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
   }
 
@@ -62,7 +63,7 @@ export function App() {
       if (isStale()) return
       if (!result.exact) {
         setMatches(result.assets)
-        return setMessage(result.assets.length ? '' : `No Asset matches "${q}"`)
+        return setMessage({ text: result.assets.length ? '' : `No Asset matches "${q}"` })
       }
       // Only an exact Asset Tag hit clears the box; a text search keeps the query to refine.
       setMatches([])
@@ -94,7 +95,11 @@ export function App() {
             aria-label="Scan or type an Asset Tag"
           />
         </form>
-        {message && <p className="message">{message}</p>}
+        {message.text && (
+          <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
+            {message.text}
+          </p>
+        )}
         <div className="list">
           {matches.length > 0 && <AssetList label={`Matches (${matches.length})`} assets={matches} selected={asset?.id} onPick={pick} />}
           {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={asset?.id} onPick={pick} />}
@@ -186,7 +191,7 @@ function AssetSheet({ asset: a }: { asset: AssetWithHistory }) {
         </tbody>
       </table>
       {a.historyError ? (
-        <p className="message history-error">History unavailable: {a.historyError}</p>
+        <p className="message error" role="alert">History unavailable: {a.historyError}</p>
       ) : (
         a.history.length === 0 && <p className="empty">No History</p>
       )}

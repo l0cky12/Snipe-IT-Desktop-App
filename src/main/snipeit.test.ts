@@ -156,7 +156,7 @@ describe('getAsset', () => {
     const asset = await snipeItWith(chromebook, { status: 403, body: { message: 'Forbidden' } }).getAsset(4812)
     expect(asset.assetTag).toBe('NOMMA-004812')
     expect(asset.history).toEqual([])
-    expect(asset.historyError).toBe('Snipe-IT returned HTTP 403')
+    expect(asset.historyError).toBe('Snipe-IT returned HTTP 403: Forbidden')
   })
 
   it('HTML-escaped text from Snipe-IT is decoded', async () => {
@@ -182,6 +182,50 @@ describe('getAsset', () => {
     const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
     const { fetch } = fakeFetch({ '/hardware/4812': { body: denied } })
     await expect(createSnipeIt(config, fetch).getAsset(4812)).rejects.toThrow('You do not have permission.')
+  })
+})
+
+describe('connection errors', () => {
+  const rejected = { status: 401, body: { message: 'Unauthenticated.' } }
+
+  it('a rejected API key says so and tells the Operator to check or regenerate it', async () => {
+    const { fetch } = fakeFetch({ '/hardware/bytag/NOMMA-004812': rejected })
+    const error = createSnipeIt(config, fetch).lookup('NOMMA-004812')
+    await expect(error).rejects.toThrow(/rejected your API key/)
+    await expect(error).rejects.toThrow(/generate a new personal API key/)
+  })
+
+  it('a rejected API key fails getAsset too, rather than showing an Asset', async () => {
+    const { fetch } = fakeFetch({ '/hardware/4812': rejected, '/reports/activity': rejected })
+    await expect(createSnipeIt(config, fetch).getAsset(4812)).rejects.toThrow(/rejected your API key/)
+  })
+
+  it('an unreachable Snipe-IT names the configured URL', async () => {
+    const offline = (async () => {
+      throw new TypeError('fetch failed')
+    }) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, offline).lookup('NOMMA-004812')).rejects.toThrow(
+      /Can't reach Snipe-IT at https:\/\/snipe\.example\.org/,
+    )
+    await expect(createSnipeIt(config, offline).getAsset(4812)).rejects.toThrow(/Can't reach Snipe-IT/)
+  })
+
+  it("an HTTP error carries Snipe-IT's own reason", async () => {
+    const { fetch } = fakeFetch({ '/hardware/bytag/X': { status: 500, body: { status: 'error', messages: 'Server Error' } } })
+    await expect(createSnipeIt(config, fetch).lookup('X')).rejects.toThrow('Snipe-IT returned HTTP 500: Server Error')
+  })
+
+  it('a reply that is not JSON (wrong URL, login page) says so and names the URL', async () => {
+    const html = (async () => new Response('<html>Login</html>', { status: 200 })) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, html).lookup('X')).rejects.toThrow(
+      /https:\/\/snipe\.example\.org did not answer like Snipe-IT/,
+    )
+  })
+
+  it("field-by-field messages from Snipe-IT are joined into one readable reason", async () => {
+    const invalid = { status: 'error', messages: { asset_tag: ['The asset tag field is required.'], name: ['Too long.'] } }
+    const { fetch } = fakeFetch({ '/hardware': { body: invalid } })
+    await expect(createSnipeIt(config, fetch).lookup('cb')).rejects.toThrow('The asset tag field is required. Too long.')
   })
 })
 

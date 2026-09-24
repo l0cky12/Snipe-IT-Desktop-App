@@ -80,6 +80,12 @@ const decodeHtml = (s: string) =>
     e[0] !== '#' ? entities[e.toLowerCase()]
     : String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))))
 
+// Snipe-IT's messages are a string, or field → messages for validation errors; flatten to one line.
+const reason = (messages: unknown): string =>
+  messages == null ? ''
+  : typeof messages === 'object' ? Object.values(messages).flat().map(reason).join(' ')
+  : String(messages)
+
 // ponytail: matches Snipe-IT's English action_type values; other actions show as-is, capitalized.
 const actions: Record<string, { label: string; prep: string }> = {
   checkout: { label: 'Checkout', prep: 'to ' },
@@ -134,14 +140,33 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
-  // ponytail: other failures are a bare HTTP-status error; ticket 04 adds the full error mapping.
+  // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
   async function get<T>(path: string): Promise<T | SnipeItError> {
-    const res = await fetch(api + path, {
-      headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json' },
-    })
+    let res: Response
+    try {
+      res = await fetch(api + path, {
+        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json' },
+      })
+    } catch {
+      throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and the "baseUrl" in config.json.`)
+    }
+    if (res.status === 401)
+      throw new Error('Snipe-IT rejected your API key. Check the "apiKey" in config.json, or generate a new personal API key in Snipe-IT.')
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
-    if (!res.ok) throw new Error(`Snipe-IT returned HTTP ${res.status}`)
-    return JSON.parse(await res.text(), (_k, v) => (typeof v === 'string' ? decodeHtml(v) : v))
+    let body: unknown
+    try {
+      body = JSON.parse(await res.text(), (_k, v) => (typeof v === 'string' ? decodeHtml(v) : v))
+    } catch {
+      body = undefined
+    }
+    if (!res.ok) {
+      const failure = body as { messages?: unknown; message?: unknown } | undefined
+      const snipeItReason = reason(failure?.messages ?? failure?.message)
+      throw new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`)
+    }
+    if (body === undefined)
+      throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the "baseUrl" in config.json.`)
+    return body as T | SnipeItError
   }
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
@@ -155,7 +180,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
       // Snipe-IT's search covers name, Asset Tag, and Serial (and more).
       const found = await get<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`)
-      if (isError(found)) throw new Error(String(found.messages))
+      if (isError(found)) throw new Error(reason(found.messages))
       return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))) }
     },
 
@@ -167,11 +192,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const [body, historyRows] = await Promise.all([
         get<RawAsset>(`/hardware/${id}`),
         get<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&order=desc&limit=500`).then(
-          (log) => (isError(log) ? String(log.messages) : log.rows),
+          (log) => (isError(log) ? reason(log.messages) : log.rows),
           (e: Error) => e.message,
         ),
       ])
-      if (isError(body)) throw new Error(String(body.messages))
+      if (isError(body)) throw new Error(reason(body.messages))
       const asset = toAsset(body, today())
       if (typeof historyRows === 'string') return { ...asset, history: [], historyError: historyRows }
       // Sort here too: newest first is a promise of this interface, not of every Snipe-IT version.
