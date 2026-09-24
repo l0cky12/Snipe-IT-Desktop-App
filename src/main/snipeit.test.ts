@@ -46,16 +46,20 @@ const snipeItWith = (hardware: object, history: { status?: number; body: unknown
 
 const notFound = { status: 'error', messages: 'Asset does not exist.', payload: null }
 
-// A fake fetch that answers from a path → JSON map and records the paths it was asked for.
+// A fake fetch that answers from a path → JSON map and records the paths it was asked for,
+// plus every request as Snipe-IT would receive it (method, path, parsed JSON body).
+type FakeRequest = { method: string; path: string; body: unknown }
 function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
   const calls: string[] = []
-  const fetch = async (input: string | URL | Request) => {
+  const requests: FakeRequest[] = []
+  const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input)).pathname.replace('/api/v1', '')
     calls.push(path)
+    requests.push({ method: init?.method ?? 'GET', path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
     const route = routes[path] ?? { status: 404, body: notFound }
     return new Response(JSON.stringify(route.body), { status: route.status ?? 200 })
   }
-  return { fetch: fetch as typeof globalThis.fetch, calls }
+  return { fetch: fetch as typeof globalThis.fetch, calls, requests }
 }
 
 describe('lookup', () => {
@@ -273,5 +277,55 @@ describe('warranty (today is 2026-09-24)', () => {
 
   it('no warranty date means no chip', async () => {
     expect(await warrantyOn(null)).toBeNull()
+  })
+})
+
+describe('statusLabels', () => {
+  it('lists every status label by id and name', async () => {
+    const labels = {
+      total: 2,
+      rows: [
+        { id: 2, name: 'Deployed', type: 'deployable', color: '#00ff00' },
+        { id: 5, name: 'Out for Repair', type: 'undeployable', color: null },
+      ],
+    }
+    const { fetch } = fakeFetch({ '/statuslabels': { body: labels } })
+    expect(await createSnipeIt(config, fetch).statusLabels()).toEqual([
+      { id: 2, name: 'Deployed' },
+      { id: 5, name: 'Out for Repair' },
+    ])
+  })
+})
+
+describe('checkin', () => {
+  const checkedIn = { status: 'success', messages: 'Asset checked in successfully.', payload: { asset: 'NOMMA-004812' } }
+  const checkinWith = (hardware: object, reply: { status?: number; body: unknown } = { body: checkedIn }) =>
+    fakeFetch({ '/hardware/4812': { body: hardware }, '/hardware/4812/checkin': reply })
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
+
+  it('keeps the current status when the Operator picks none', async () => {
+    const { fetch, requests } = checkinWith(chromebook)
+    await createSnipeIt(config, fetch).checkin(4812, {})
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 2 } }])
+  })
+
+  it('sends the chosen status and the note', async () => {
+    const { fetch, requests } = checkinWith(chromebook)
+    await createSnipeIt(config, fetch).checkin(4812, { statusId: 5, note: 'cracked screen' })
+    expect(posted(requests)).toEqual([
+      { method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 5, note: 'cracked screen' } },
+    ])
+  })
+
+  it('an Asset with no Assignee cannot be checked in, and Snipe-IT is not asked to', async () => {
+    const { fetch, requests } = checkinWith({ ...chromebook, assigned_to: null })
+    await expect(createSnipeIt(config, fetch).checkin(4812, {})).rejects.toThrow(/NOMMA-004812 is not checked out/)
+    expect(posted(requests)).toEqual([])
+  })
+
+  it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
+    const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
+    const { fetch } = checkinWith(chromebook, { body: refused })
+    await expect(createSnipeIt(config, fetch).checkin(4812, {})).rejects.toThrow('That asset is already checked in.')
   })
 })

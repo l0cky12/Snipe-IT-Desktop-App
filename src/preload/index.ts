@@ -12,6 +12,8 @@ const call = (name: keyof SnipeIt) => (...args: unknown[]) =>
 const snipeIt: SnipeIt = {
   lookup: call('lookup'),
   getAsset: call('getAsset'),
+  statusLabels: call('statusLabels'),
+  checkin: call('checkin'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)

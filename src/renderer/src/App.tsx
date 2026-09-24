@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory } from '../../main/snipeit'
+import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type StatusLabel } from '../../main/snipeit'
 
 const configError = new URLSearchParams(location.search).get('configError')
 
@@ -23,6 +23,9 @@ export function App() {
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [matches, setMatches] = useState<AssetSummary[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
+  const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
+  // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
+  const [opened, setOpened] = useState(0)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
@@ -30,6 +33,10 @@ export function App() {
   const latest = useRef(0)
 
   useEffect(() => search.current?.focus(), [])
+  // ponytail: if the status list can't load, the dropdown offers only the Asset's current status; Checkin still works.
+  useEffect(() => {
+    if (!configError) window.snipeIt.statusLabels().then(setStatusLabels, () => {})
+  }, [])
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
   async function run(work: (isStale: () => boolean) => Promise<void>) {
@@ -49,11 +56,22 @@ export function App() {
     const full = await window.snipeIt.getAsset(id)
     if (isStale()) return
     setAsset(full)
+    setOpened((n) => n + 1)
     setMessage({ text: '' })
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
   }
 
   const pick = (id: number) => run((isStale) => open(id, isStale))
+
+  // A rejected Checkin throws before the refresh, so the sheet stays as it was and the rail shows Snipe-IT's reason.
+  const checkin = (id: number, options: CheckinOptions) =>
+    run(async (isStale) => {
+      await window.snipeIt.checkin(id, options)
+      // Don't let a failed refresh read as a failed Checkin; retrying would only say "not checked out".
+      await open(id, isStale).catch((e: Error) => {
+        throw new Error(`Checked in, but couldn't refresh the Asset: ${e.message}`)
+      })
+    })
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -105,7 +123,7 @@ export function App() {
           {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={asset?.id} onPick={pick} />}
         </div>
       </aside>
-      <main className="sheet">{asset ? <AssetSheet asset={asset} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -129,7 +147,50 @@ function AssetList(props: { label: string; assets: AssetSummary[]; selected?: nu
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
-function AssetSheet({ asset: a }: { asset: AssetWithHistory }) {
+function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+  const a = props.asset
+  const [statusId, setStatusId] = useState(a.statusId)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const off = !a.assignee || busy
+  // The current status is always offered, even if the status list didn't load.
+  const labels = props.statusLabels.some((l) => l.id === a.statusId) || a.statusId === null
+    ? props.statusLabels
+    : [{ id: a.statusId, name: a.status }, ...props.statusLabels]
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    await props.onCheckin(a.id, { statusId: statusId ?? undefined, note })
+    setBusy(false)
+  }
+
+  return (
+    <form className="actions" onSubmit={onSubmit}>
+      <select
+        value={statusId ?? ''}
+        onChange={(e) => setStatusId(Number(e.target.value))}
+        disabled={off}
+        aria-label="Status after Checkin"
+      >
+        {statusId === null && <option value="" disabled>Choose a status</option>}
+        {labels.map((l) => (
+          <option key={l.id} value={l.id}>{l.name}</option>
+        ))}
+      </select>
+      <input value={note} onChange={(e) => setNote(e.target.value)} disabled={off} placeholder="Note (optional)" aria-label="Checkin note" />
+      <button disabled={off} title={a.assignee ? undefined : 'Not checked out'}>
+        {busy ? 'Checking in…' : 'Checkin'}
+      </button>
+    </form>
+  )
+}
+
+function AssetSheet({ asset: a, statusLabels, onCheckin }: {
+  asset: AssetWithHistory
+  statusLabels: StatusLabel[]
+  onCheckin: (id: number, o: CheckinOptions) => Promise<void>
+}) {
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
@@ -155,8 +216,8 @@ function AssetSheet({ asset: a }: { asset: AssetWithHistory }) {
           ) : (
             <span className="chip c-amber">Warranty {a.warranty.daysLeft}d left</span>
           ))}
-        {/* Checkout and Checkin buttons go here (tickets 05, 06). */}
-        <div className="actions" />
+        {/* Checkout button goes here too (ticket 06). */}
+        <CheckinForm asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
       <div className="grid">
         {facts.map(([k, v, mono]) => (

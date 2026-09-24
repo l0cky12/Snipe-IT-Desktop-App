@@ -8,6 +8,8 @@ export type Asset = {
   name: string
   model: string
   status: string
+  /** Snipe-IT's status label id; the Checkin status dropdown defaults to it */
+  statusId: number | null
   /** Snipe-IT's status_meta: deployed, deployable, pending, archived, undeployable */
   statusMeta: string
   assignee: Assignee | null
@@ -28,6 +30,10 @@ export type HistoryEntry = { when: string; action: string; operator: string; det
 /** historyError is set when History couldn't be loaded (e.g. the key lacks permission); the Asset still shows. */
 export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?: string }
 
+export type StatusLabel = { id: number; name: string }
+
+export type CheckinOptions = { statusId?: number; note?: string }
+
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
 
@@ -44,7 +50,7 @@ type RawAsset = {
   name: string | null
   serial: string | null
   model: Named
-  status_label: { name: string; status_meta: string } | null
+  status_label: { id: number; name: string; status_meta: string } | null
   category: Named
   location: Named
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
@@ -119,6 +125,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     name: raw.name ?? '',
     model: raw.model?.name ?? '',
     status: raw.status_label?.name ?? '',
+    statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     location: raw.location?.name ?? '',
@@ -140,12 +147,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
+  // Pass `post` to POST it as JSON instead of GETting.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
-  async function get<T>(path: string): Promise<T | SnipeItError> {
+  async function request<T>(path: string, post?: object): Promise<T | SnipeItError> {
     let res: Response
     try {
       res = await fetch(api + path, {
-        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json' },
+        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && { 'Content-Type': 'application/json' }) },
+        ...(post && { method: 'POST', body: JSON.stringify(post) }),
       })
     } catch {
       throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and the "baseUrl" in config.json.`)
@@ -171,27 +180,31 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
+  // id arrives from the screen over IPC; check it before it becomes part of a URL.
+  const checkId = (id: number) => {
+    if (!Number.isInteger(id)) throw new Error(`Invalid Asset id: ${id}`)
+  }
+
   return {
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
       if (!tag) return { exact: false, assets: [] }
-      const body = await get<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
+      const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
       // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
       if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
       // Snipe-IT's search covers name, Asset Tag, and Serial (and more).
-      const found = await get<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`)
+      const found = await request<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`)
       if (isError(found)) throw new Error(reason(found.messages))
       return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))) }
     },
 
     async getAsset(id: number): Promise<AssetWithHistory> {
-      // id arrives from the screen over IPC; check it before it becomes part of a URL.
-      if (!Number.isInteger(id)) throw new Error(`Invalid Asset id: ${id}`)
+      checkId(id)
       // ponytail: one page of 500 History entries; page through if an Asset ever has more.
       // History may need a permission the Operator's key lacks; that must not hide the Asset itself.
       const [body, historyRows] = await Promise.all([
-        get<RawAsset>(`/hardware/${id}`),
-        get<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&order=desc&limit=500`).then(
+        request<RawAsset>(`/hardware/${id}`),
+        request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&order=desc&limit=500`).then(
           (log) => (isError(log) ? reason(log.messages) : log.rows),
           (e: Error) => e.message,
         ),
@@ -203,6 +216,27 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const rows = [...historyRows].sort((a, b) =>
         (b.created_at?.datetime ?? '').localeCompare(a.created_at?.datetime ?? '') || b.id - a.id)
       return { ...asset, history: rows.map(toHistoryEntry) }
+    },
+
+    async statusLabels(): Promise<StatusLabel[]> {
+      // ponytail: first 500 status labels; a school has a handful.
+      const body = await request<{ rows: StatusLabel[] }>('/statuslabels?limit=500')
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.rows.map(({ id, name }) => ({ id, name }))
+    },
+
+    // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.
+    // Re-reads the Asset so the rule and the default status come from Snipe-IT, not from a possibly stale screen.
+    async checkin(id: number, { statusId, note }: CheckinOptions): Promise<void> {
+      checkId(id)
+      const body = await request<RawAsset>(`/hardware/${id}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      if (!body.assigned_to) throw new Error(`${body.asset_tag} is not checked out, so there is nothing to check in.`)
+      const result = await request(`/hardware/${id}/checkin`, {
+        status_id: statusId ?? body.status_label?.id,
+        ...(note?.trim() && { note: note.trim() }),
+      })
+      if (isError(result)) throw new Error(reason(result.messages))
     },
   }
 }
