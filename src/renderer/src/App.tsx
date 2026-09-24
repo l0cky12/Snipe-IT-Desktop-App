@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Asset } from '../../main/snipeit'
+import type { Assignee, AssetWithHistory } from '../../main/snipeit'
 
 const configError = new URLSearchParams(location.search).get('configError')
 
@@ -13,7 +13,7 @@ const statusColor: Record<string, string> = {
 
 export function App() {
   const [query, setQuery] = useState('')
-  const [asset, setAsset] = useState<Asset | null>(null)
+  const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [message, setMessage] = useState('')
   const search = useRef<HTMLInputElement>(null)
 
@@ -64,9 +64,13 @@ export function App() {
   )
 }
 
-function AssetSheet({ asset: a }: { asset: Asset }) {
+const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
+
+function AssetSheet({ asset: a }: { asset: AssetWithHistory }) {
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
+    ['Type', a.assignee ? kind[a.assignee.type] : ''],
+    ['Expected checkin', a.expectedCheckin ?? '', true],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial, true],
@@ -81,6 +85,15 @@ function AssetSheet({ asset: a }: { asset: Asset }) {
           {a.name} <span className="dim">— {a.model}</span>
         </h1>
         <span className={`chip c-${statusColor[a.statusMeta] ?? 'grey'}`}>{a.status}</span>
+        {a.overdueDays !== null && <span className="chip c-red">Overdue {a.overdueDays}d</span>}
+        {a.warranty &&
+          (a.warranty.expired ? (
+            <span className="chip c-grey">Warranty expired</span>
+          ) : (
+            <span className="chip c-amber">Warranty {a.warranty.daysLeft}d left</span>
+          ))}
+        {/* Checkout and Checkin buttons go here (tickets 05, 06). */}
+        <div className="actions" />
       </header>
       <div className="grid">
         {facts.map(([k, v, mono]) => (
@@ -90,6 +103,35 @@ function AssetSheet({ asset: a }: { asset: Asset }) {
           </div>
         ))}
       </div>
+      <div className="section">History</div>
+      <table className="history">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Operator</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {a.history.map((h, i) => (
+            <tr key={i}>
+              <td className="dim">{h.when}</td>
+              <td>{h.action}</td>
+              <td>{h.operator}</td>
+              <td>
+                {h.detail}
+                {h.note && <span className="note">{h.detail && ' · '}{h.note}</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {a.historyError ? (
+        <p className="message history-error">History unavailable: {a.historyError}</p>
+      ) : (
+        a.history.length === 0 && <p className="empty">No History</p>
+      )}
     </>
   )
 }

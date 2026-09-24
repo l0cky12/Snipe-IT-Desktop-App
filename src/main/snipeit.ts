@@ -16,14 +16,24 @@ export type Asset = {
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  expectedCheckin: string | null
+  /** Days past the Expected Checkin, or null when not Overdue */
+  overdueDays: number | null
+  /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
+  warranty: { expired: false; daysLeft: number } | { expired: true } | null
 }
+
+export type HistoryEntry = { when: string; action: string; operator: string; detail: string; note: string }
+
+/** historyError is set when History couldn't be loaded (e.g. the key lacks permission); the Asset still shows. */
+export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?: string }
 
 export type LookupResult = { exact: boolean; assets: Asset[] }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
 type SnipeItError = { status: 'error'; messages: unknown }
-type Named ={ id: number; name: string } | null
+type Named = { id: number; name: string } | null
 type RawAsset = {
   id: number
   asset_tag: string
@@ -36,9 +46,58 @@ type RawAsset = {
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
+  expected_checkin: { date: string } | null
+}
+type RawActivity = {
+  id: number
+  action_type: string
+  created_at: { datetime: string } | null
+  // Snipe-IT v8 renamed `admin` to `created_by`.
+  created_by?: Named
+  admin?: Named
+  target: Named
+  note: string | null
 }
 
-function toAsset(raw: RawAsset): Asset {
+const EXPIRING_DAYS = 90
+
+// Whole days from today to a Snipe-IT date ("YYYY-MM-DD"); negative when the date is past.
+function daysFrom(today: Date, date: string): number {
+  const [y, m, d] = date.split('-').map(Number)
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5)
+}
+
+// Snipe-IT HTML-escapes text fields; decode every string in a response before reshaping it.
+const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+const decodeHtml = (s: string) =>
+  s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e: string) =>
+    e[0] !== '#' ? entities[e.toLowerCase()]
+    : String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))))
+
+// ponytail: matches Snipe-IT's English action_type values; other actions show as-is, capitalized.
+const actions: Record<string, { label: string; prep: string }> = {
+  checkout: { label: 'Checkout', prep: 'to ' },
+  'checkin from': { label: 'Checkin', prep: 'from ' },
+}
+
+function toHistoryEntry(raw: RawActivity): HistoryEntry {
+  const known = actions[raw.action_type]
+  const target = raw.target?.name
+  return {
+    when: raw.created_at?.datetime.slice(0, 16) ?? '',
+    action: known?.label ?? raw.action_type.charAt(0).toUpperCase() + raw.action_type.slice(1),
+    operator: (raw.created_by ?? raw.admin)?.name ?? '',
+    detail: target ? (known?.prep ?? '') + target : '',
+    // Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
+    note: raw.note?.replace(/<[^>]*>/g, '') ?? '',
+  }
+}
+
+function toAsset(raw: RawAsset, today: Date): Asset {
+  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const warrantyEnd = raw.warranty_expires?.date ?? null
+  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
+  const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
     assetTag: raw.asset_tag,
@@ -51,11 +110,18 @@ function toAsset(raw: RawAsset): Asset {
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
-    warrantyEnd: raw.warranty_expires?.date ?? null,
+    warrantyEnd,
+    expectedCheckin,
+    overdueDays: overdue > 0 ? overdue : null,
+    warranty:
+      warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
+      : warrantyLeft < 0 ? { expired: true }
+      : { expired: false, daysLeft: warrantyLeft },
   }
 }
 
-export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch) {
+// `today` is injectable so the date rules can be tested with a fixed date.
+export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, today = () => new Date()) {
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
@@ -66,7 +132,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch) {
     })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     if (!res.ok) throw new Error(`Snipe-IT returned HTTP ${res.status}`)
-    return res.json()
+    return JSON.parse(await res.text(), (_k, v) => (typeof v === 'string' ? decodeHtml(v) : v))
   }
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
@@ -77,15 +143,28 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch) {
       if (!tag) return { exact: false, assets: [] }
       const body = await get<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
       // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
-      return isError(body) ? { exact: false, assets: [] } : { exact: true, assets: [toAsset(body)] }
+      return isError(body) ? { exact: false, assets: [] } : { exact: true, assets: [toAsset(body, today())] }
     },
 
-    async getAsset(id: number): Promise<Asset> {
+    async getAsset(id: number): Promise<AssetWithHistory> {
       // id arrives from the screen over IPC; check it before it becomes part of a URL.
       if (!Number.isInteger(id)) throw new Error(`Invalid Asset id: ${id}`)
-      const body = await get<RawAsset>(`/hardware/${id}`)
+      // ponytail: one page of 500 History entries; page through if an Asset ever has more.
+      // History may need a permission the Operator's key lacks; that must not hide the Asset itself.
+      const [body, historyRows] = await Promise.all([
+        get<RawAsset>(`/hardware/${id}`),
+        get<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&order=desc&limit=500`).then(
+          (log) => (isError(log) ? String(log.messages) : log.rows),
+          (e: Error) => e.message,
+        ),
+      ])
       if (isError(body)) throw new Error(String(body.messages))
-      return toAsset(body)
+      const asset = toAsset(body, today())
+      if (typeof historyRows === 'string') return { ...asset, history: [], historyError: historyRows }
+      // Sort here too: newest first is a promise of this interface, not of every Snipe-IT version.
+      const rows = [...historyRows].sort((a, b) =>
+        (b.created_at?.datetime ?? '').localeCompare(a.created_at?.datetime ?? '') || b.id - a.id)
+      return { ...asset, history: rows.map(toHistoryEntry) }
     },
   }
 }
