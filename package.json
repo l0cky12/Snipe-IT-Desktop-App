@@ -15,7 +15,8 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "dist": "electron-vite build && electron-builder --linux --win"
+    "dist": "electron-vite build && electron-builder --linux --win",
+    "postinstall": "node node_modules/electron/install.js"
   },
   "build": {
     "appId": "net.nomma.snipe-it-desktop",
