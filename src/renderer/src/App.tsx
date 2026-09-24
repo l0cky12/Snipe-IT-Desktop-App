@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type StatusLabel } from '../../main/snipeit'
+import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type StatusLabel } from '../../main/snipeit'
 
 const configError = new URLSearchParams(location.search).get('configError')
 
@@ -21,6 +21,7 @@ const RECENT_MAX = 20
 export function App() {
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
+  const [showDashboard, setShowDashboard] = useState(false)
   const [matches, setMatches] = useState<AssetSummary[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
@@ -56,6 +57,7 @@ export function App() {
     const full = await window.snipeIt.getAsset(id)
     if (isStale()) return
     setAsset(full)
+    setShowDashboard(false)
     setOpened((n) => n + 1)
     setMessage({ text: '' })
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
@@ -93,6 +95,8 @@ export function App() {
     })
   }
 
+  const selected = showDashboard ? undefined : asset?.id
+
   if (configError)
     return (
       <div className="fatal">
@@ -115,17 +119,21 @@ export function App() {
             aria-label="Scan or type an Asset Tag"
           />
         </form>
+        {/* Bumping `latest` discards an open still loading, so it can't pull the Operator off the dashboard. */}
+        <button className={`nav${showDashboard ? ' sel' : ''}`} onClick={() => (latest.current++, setShowDashboard(true))}>
+          Dashboard
+        </button>
         {message.text && (
           <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
             {message.text}
           </p>
         )}
         <div className="list">
-          {matches.length > 0 && <AssetList label={`Matches (${matches.length})`} assets={matches} selected={asset?.id} onPick={pick} />}
-          {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={asset?.id} onPick={pick} />}
+          {matches.length > 0 && <AssetList label={`Matches (${matches.length})`} assets={matches} selected={selected} onPick={pick} />}
+          {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
         </div>
       </aside>
-      <main className="sheet">{asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showDashboard ? <DashboardView onPick={pick} /> : asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -343,6 +351,84 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout }: {
         <p className="message error" role="alert">History unavailable: {a.historyError}</p>
       ) : (
         a.history.length === 0 && <p className="empty">No History</p>
+      )}
+    </>
+  )
+}
+
+// Loads when opened and on Refresh; no background polling.
+function DashboardView({ onPick }: { onPick: (id: number) => void }) {
+  const [data, setData] = useState<Dashboard | null>(null)
+  const [loadedAt, setLoadedAt] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  function load() {
+    setLoading(true)
+    window.snipeIt.dashboard()
+      .then((d) => (setData(d), setLoadedAt(new Date().toLocaleTimeString()), setError('')), (e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+
+  const tag = (a: AssetSummary) => (
+    <td>
+      <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
+    </td>
+  )
+  return (
+    <>
+      <header className="head">
+        <h1>Dashboard</h1>
+        <span className="dim mono">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
+        <div className="actions">
+          <button onClick={load} disabled={loading}>Refresh</button>
+        </div>
+      </header>
+      {error && <p className="message error" role="alert">{error}</p>}
+      {data && (
+        <>
+          <div className="section">Assets by status</div>
+          <div className="counts">
+            {data.counts.map((c) => (
+              <span key={c.status} className={`chip c-${statusColor[c.statusMeta] ?? 'grey'}`}>{c.status || 'No status'} {c.count}</span>
+            ))}
+          </div>
+          <div className="section">Overdue ({data.overdue.length})</div>
+          <table className="history">
+            <thead>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Days late</th></tr>
+            </thead>
+            <tbody>
+              {data.overdue.map((a) => (
+                <tr key={a.id}>
+                  {tag(a)}
+                  <td>{a.name || '—'}</td>
+                  <td>{a.assignee?.name}</td>
+                  <td className="late">{a.overdueDays}d</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.overdue.length === 0 && <p className="empty">Nothing Overdue</p>}
+          <div className="section">Warranty expiring in 90 days ({data.expiring.length})</div>
+          <table className="history">
+            <thead>
+              <tr><th>Asset Tag</th><th>Name</th><th>Status</th><th>Days left</th></tr>
+            </thead>
+            <tbody>
+              {data.expiring.map((a) => (
+                <tr key={a.id}>
+                  {tag(a)}
+                  <td>{a.name || '—'}</td>
+                  <td>{a.status}</td>
+                  <td>{a.daysLeft}d</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.expiring.length === 0 && <p className="empty">No warranties expiring</p>}
+        </>
       )}
     </>
   )

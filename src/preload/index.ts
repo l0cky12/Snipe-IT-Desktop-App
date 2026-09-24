@@ -17,6 +17,7 @@ const snipeIt: SnipeIt = {
   searchLocations: call('searchLocations'),
   checkout: call('checkout'),
   checkin: call('checkin'),
+  dashboard: call('dashboard'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)

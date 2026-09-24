@@ -427,3 +427,82 @@ describe('checkout', () => {
     )
   })
 })
+
+describe('dashboard (today is 2026-09-24)', () => {
+  // A fake /hardware that pages through `assets` by limit/offset, like Snipe-IT; records each page's offset.
+  function fleet(assets: object[], pageMax = 500) {
+    const offsets: number[] = []
+    const fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname !== '/api/v1/hardware') return new Response(JSON.stringify(notFound), { status: 404 })
+      const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), pageMax)
+      const offset = Number(url.searchParams.get('offset') ?? 0)
+      offsets.push(offset)
+      return new Response(JSON.stringify({ total: assets.length, rows: assets.slice(offset, offset + limit) }))
+    }) as typeof globalThis.fetch
+    return { snipeIt: createSnipeIt(config, fetch, today), offsets }
+  }
+  const asset = (id: number, fields: object = {}) => ({
+    ...chromebook, id, asset_tag: `NOMMA-${id}`, expected_checkin: null, warranty_expires: null, ...fields,
+  })
+  const ready = { id: 1, name: 'Ready to Deploy', status_meta: 'deployable' }
+  const repair = { id: 3, name: 'Out for Repair', status_meta: 'undeployable' }
+
+  it('pages through every Asset, 500 at a time', async () => {
+    const assets = Array.from({ length: 1234 }, (_, i) => asset(i + 1))
+    const { snipeIt, offsets } = fleet(assets)
+    const { counts } = await snipeIt.dashboard()
+    expect(offsets).toEqual([0, 500, 1000])
+    expect(counts).toEqual([{ status: 'Deployed', statusMeta: 'deployed', count: 1234 }])
+  })
+
+  it('still gets every Asset when the server caps pages below 500', async () => {
+    const { snipeIt, offsets } = fleet(Array.from({ length: 250 }, (_, i) => asset(i + 1)), 100)
+    const { counts } = await snipeIt.dashboard()
+    expect(offsets).toEqual([0, 100, 200])
+    expect(counts[0].count).toBe(250)
+  })
+
+  it('counts Assets by status, most first', async () => {
+    const { snipeIt } = fleet([
+      asset(1), asset(2, { status_label: ready, assigned_to: null }), asset(3),
+      asset(4, { status_label: repair, assigned_to: null }), asset(5, { status_label: ready, assigned_to: null }), asset(6),
+    ])
+    expect((await snipeIt.dashboard()).counts).toEqual([
+      { status: 'Deployed', statusMeta: 'deployed', count: 3 },
+      { status: 'Ready to Deploy', statusMeta: 'deployable', count: 2 },
+      { status: 'Out for Repair', statusMeta: 'undeployable', count: 1 },
+    ])
+  })
+
+  it('lists every Overdue Asset with its Assignee and days late, most late first', async () => {
+    const { snipeIt } = fleet([
+      asset(1, { expected_checkin: { date: '2026-09-23' } }),
+      asset(2, { expected_checkin: { date: '2026-09-24' } }), // due today: not Overdue
+      asset(3, { expected_checkin: { date: '2026-09-01' } }),
+      asset(4, { expected_checkin: { date: '2026-09-01' }, assigned_to: null }), // no Assignee: not Overdue
+      asset(5), // no Expected Checkin: never Overdue
+    ])
+    const { overdue } = await snipeIt.dashboard()
+    expect(overdue.map((a) => [a.assetTag, a.overdueDays])).toEqual([['NOMMA-3', 23], ['NOMMA-1', 1]])
+    expect(overdue[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+  })
+
+  it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
+    const { snipeIt } = fleet([
+      asset(1, { warranty_expires: { date: '2026-12-23' } }), // 90 days
+      asset(2, { warranty_expires: { date: '2026-12-24' } }), // 91 days: not Expiring
+      asset(3, { warranty_expires: { date: '2026-09-24' } }), // today
+      asset(4, { warranty_expires: { date: '2026-09-23' } }), // expired
+      asset(5, { warranty_expires: { date: '2026-10-01' } }),
+    ])
+    const { expiring } = await snipeIt.dashboard()
+    expect(expiring.map((a) => [a.assetTag, a.daysLeft])).toEqual([['NOMMA-3', 0], ['NOMMA-5', 7], ['NOMMA-1', 90]])
+  })
+
+  it("an Asset list Snipe-IT refuses is thrown as Snipe-IT's message", async () => {
+    const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
+    const { fetch } = fakeFetch({ '/hardware': { body: denied } })
+    await expect(createSnipeIt(config, fetch).dashboard()).rejects.toThrow('You do not have permission.')
+  })
+})

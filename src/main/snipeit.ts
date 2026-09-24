@@ -48,6 +48,13 @@ export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | '
 /** An exact Asset Tag hit carries the full Asset; a text search carries summaries. */
 export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[] }
 
+/** Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out), and Asset counts by status, most first. */
+export type Dashboard = {
+  overdue: (AssetSummary & { overdueDays: number })[]
+  expiring: (AssetSummary & { daysLeft: number })[]
+  counts: { status: string; statusMeta: string; count: number }[]
+}
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
 type SnipeItError = { status: 'error'; messages: unknown }
@@ -80,6 +87,8 @@ type RawActivity = {
 const EXPIRING_DAYS = 90
 // ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
 const SEARCH_LIMIT = 50
+// The usual server maximum per page; a server that caps lower still gets paged through.
+const PAGE_LIMIT = 500
 
 // Whole days from today to a Snipe-IT date ("YYYY-MM-DD"); negative when the date is past.
 function daysFrom(today: Date, date: string): number {
@@ -281,6 +290,34 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // ponytail: pages through every Asset and computes in the app; fine for a fleet under ~5k Assets (~10 requests).
+    async dashboard(): Promise<Dashboard> {
+      const now = today()
+      const assets: Asset[] = []
+      // Until `total` Assets are in (a server may cap pages below PAGE_LIMIT); an empty page ends it early.
+      // Sorted by id so an Asset added mid-load doesn't shift later pages.
+      for (let total = Infinity; assets.length < total; ) {
+        const page = await request<{ total: number; rows: RawAsset[] }>(`/hardware?limit=${PAGE_LIMIT}&offset=${assets.length}&sort=id&order=asc`)
+        if (isError(page)) throw new Error(reason(page.messages))
+        if (!page.rows.length) break
+        total = page.total
+        assets.push(...page.rows.map((r) => toAsset(r, now)))
+      }
+      const counts = new Map<string, Dashboard['counts'][number]>()
+      for (const a of assets) {
+        const c = counts.get(a.status)
+        if (c) c.count++
+        else counts.set(a.status, { status: a.status, statusMeta: a.statusMeta, count: 1 })
+      }
+      return {
+        overdue: assets.flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
+          .sort((a, b) => b.overdueDays - a.overdueDays),
+        expiring: assets.flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
+          .sort((a, b) => a.daysLeft - b.daysLeft),
+        counts: [...counts.values()].sort((a, b) => b.count - a.count),
+      }
     },
   }
 }
