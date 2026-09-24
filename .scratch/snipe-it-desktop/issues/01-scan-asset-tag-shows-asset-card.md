@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 Spec: `.scratch/snipe-it-desktop/spec.md`. See ADR 0001 for the stack.
 
