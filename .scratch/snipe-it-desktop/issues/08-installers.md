@@ -4,7 +4,7 @@
 
 **Blocked by:** 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** done
 
 Spec: `.scratch/snipe-it-desktop/spec.md`. No macOS build (ADR 0001 / spec out of scope).
 
