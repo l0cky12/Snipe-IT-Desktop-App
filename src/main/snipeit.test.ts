@@ -88,4 +88,10 @@ describe('getAsset', () => {
     const asset = await createSnipeIt(config, fetch).getAsset(4812)
     expect(asset).toMatchObject({ assignee: null, purchaseDate: null, warrantyEnd: null, location: '' })
   })
+
+  it("a 200 with status error is thrown as Snipe-IT's message", async () => {
+    const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
+    const { fetch } = fakeFetch({ '/hardware/4812': { body: denied } })
+    await expect(createSnipeIt(config, fetch).getAsset(4812)).rejects.toThrow('You do not have permission.')
+  })
 })

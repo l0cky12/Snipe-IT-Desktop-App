@@ -22,7 +22,8 @@ export type LookupResult = { exact: boolean; assets: Asset[] }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
-type Named = { id: number; name: string } | null
+type SnipeItError = { status: 'error'; messages: unknown }
+type Named ={ id: number; name: string } | null
 type RawAsset = {
   id: number
   asset_tag: string
@@ -57,30 +58,34 @@ function toAsset(raw: RawAsset): Asset {
 export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch) {
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
-  // Returns null when Snipe-IT says the thing doesn't exist (404, or 200 with status "error").
+  // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // ponytail: other failures are a bare HTTP-status error; ticket 04 adds the full error mapping.
-  async function get<T>(path: string): Promise<T | null> {
+  async function get<T>(path: string): Promise<T | SnipeItError> {
     const res = await fetch(api + path, {
       headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json' },
     })
-    if (res.status === 404) return null
+    if (res.status === 404) return { status: 'error', messages: 'Not found' }
     if (!res.ok) throw new Error(`Snipe-IT returned HTTP ${res.status}`)
-    const body = await res.json()
-    return body?.status === 'error' ? null : body
+    return res.json()
   }
+
+  const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
   return {
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
       if (!tag) return { exact: false, assets: [] }
-      const raw = await get<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
-      return raw ? { exact: true, assets: [toAsset(raw)] } : { exact: false, assets: [] }
+      const body = await get<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
+      // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
+      return isError(body) ? { exact: false, assets: [] } : { exact: true, assets: [toAsset(body)] }
     },
 
     async getAsset(id: number): Promise<Asset> {
-      const raw = await get<RawAsset>(`/hardware/${id}`)
-      if (!raw) throw new Error(`Asset ${id} not found in Snipe-IT`)
-      return toAsset(raw)
+      // id arrives from the screen over IPC; check it before it becomes part of a URL.
+      if (!Number.isInteger(id)) throw new Error(`Invalid Asset id: ${id}`)
+      const body = await get<RawAsset>(`/hardware/${id}`)
+      if (isError(body)) throw new Error(String(body.messages))
+      return toAsset(body)
     },
   }
 }
