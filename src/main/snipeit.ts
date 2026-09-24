@@ -28,7 +28,11 @@ export type HistoryEntry = { when: string; action: string; operator: string; det
 /** historyError is set when History couldn't be loaded (e.g. the key lacks permission); the Asset still shows. */
 export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?: string }
 
-export type LookupResult = { exact: boolean; assets: Asset[] }
+/** What the rail shows for a match or a recent scan. */
+export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
+
+/** An exact Asset Tag hit carries the full Asset; a text search carries summaries. */
+export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[] }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
@@ -60,6 +64,8 @@ type RawActivity = {
 }
 
 const EXPIRING_DAYS = 90
+// ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
+const SEARCH_LIMIT = 50
 
 // Whole days from today to a Snipe-IT date ("YYYY-MM-DD"); negative when the date is past.
 function daysFrom(today: Date, date: string): number {
@@ -92,6 +98,9 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
     note: raw.note?.replace(/<[^>]*>/g, '') ?? '',
   }
 }
+
+export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee }: Asset): AssetSummary =>
+  ({ id, assetTag, name, status, statusMeta, assignee })
 
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = raw.expected_checkin?.date ?? null
@@ -143,7 +152,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (!tag) return { exact: false, assets: [] }
       const body = await get<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
       // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
-      return isError(body) ? { exact: false, assets: [] } : { exact: true, assets: [toAsset(body, today())] }
+      if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
+      // Snipe-IT's search covers name, Asset Tag, and Serial (and more).
+      const found = await get<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`)
+      if (isError(found)) throw new Error(String(found.messages))
+      return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))) }
     },
 
     async getAsset(id: number): Promise<AssetWithHistory> {

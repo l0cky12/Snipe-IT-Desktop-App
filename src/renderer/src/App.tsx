@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Assignee, AssetWithHistory } from '../../main/snipeit'
+import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory } from '../../main/snipeit'
 
 const configError = new URLSearchParams(location.search).get('configError')
 
@@ -11,28 +11,65 @@ const statusColor: Record<string, string> = {
   undeployable: 'red',
 }
 
+const StatusChip = ({ asset }: { asset: AssetSummary }) => (
+  <span className={`chip c-${statusColor[asset.statusMeta] ?? 'grey'}`}>{asset.status}</span>
+)
+
+// Session only: recent scans live in memory and are never written to disk.
+const RECENT_MAX = 20
+
 export function App() {
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
+  const [matches, setMatches] = useState<AssetSummary[]>([])
+  const [recent, setRecent] = useState<AssetSummary[]>([])
   const [message, setMessage] = useState('')
   const search = useRef<HTMLInputElement>(null)
+  // Bumped by every lookup or open; a result that returns after a newer one started is discarded.
+  const latest = useRef(0)
 
   useEffect(() => search.current?.focus(), [])
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  // Runs one lookup/open; `work` gets an isStale() check to call after each await.
+  async function run(work: (isStale: () => boolean) => Promise<void>) {
+    const mine = ++latest.current
+    const isStale = () => mine !== latest.current
     try {
-      const result = await window.snipeIt.lookup(query)
-      if (!result.exact) return setMessage(`No Asset has the Asset Tag "${query.trim()}"`)
-      setAsset(await window.snipeIt.getAsset(result.assets[0].id))
-      setMessage('')
-      setQuery('')
+      await work(isStale)
     } catch (err) {
       // ponytail: raw error text; ticket 04 adds proper error messages
-      setMessage((err as Error).message)
+      if (!isStale()) setMessage((err as Error).message)
     } finally {
       search.current?.focus()
     }
+  }
+
+  async function open(id: number, isStale: () => boolean) {
+    const full = await window.snipeIt.getAsset(id)
+    if (isStale()) return
+    setAsset(full)
+    setMessage('')
+    setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
+  }
+
+  const pick = (id: number) => run((isStale) => open(id, isStale))
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const q = query.trim()
+    run(async (isStale) => {
+      const result = await window.snipeIt.lookup(q)
+      if (isStale()) return
+      if (!result.exact) {
+        setMatches(result.assets)
+        return setMessage(result.assets.length ? '' : `No Asset matches "${q}"`)
+      }
+      // Only an exact Asset Tag hit clears the box; a text search keeps the query to refine.
+      setMatches([])
+      // Leave the box alone if the next scan has already started typing into it.
+      setQuery((current) => (current.trim() === q ? '' : current))
+      await open(result.assets[0].id, isStale)
+    })
   }
 
   if (configError)
@@ -58,9 +95,30 @@ export function App() {
           />
         </form>
         {message && <p className="message">{message}</p>}
+        <div className="list">
+          {matches.length > 0 && <AssetList label={`Matches (${matches.length})`} assets={matches} selected={asset?.id} onPick={pick} />}
+          {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={asset?.id} onPick={pick} />}
+        </div>
       </aside>
       <main className="sheet">{asset ? <AssetSheet asset={asset} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
+  )
+}
+
+function AssetList(props: { label: string; assets: AssetSummary[]; selected?: number; onPick: (id: number) => void }) {
+  return (
+    <>
+      <div className="section">{props.label}</div>
+      {props.assets.map((a) => (
+        <button key={a.id} className={`row${a.id === props.selected ? ' sel' : ''}`} onClick={() => props.onPick(a.id)}>
+          <span className="mono t">{a.assetTag}</span>
+          <StatusChip asset={a} />
+          <span className="n">
+            {a.name || '—'} · {a.assignee?.name ?? 'Unassigned'}
+          </span>
+        </button>
+      ))}
+    </>
   )
 }
 
@@ -84,7 +142,7 @@ function AssetSheet({ asset: a }: { asset: AssetWithHistory }) {
         <h1>
           {a.name} <span className="dim">— {a.model}</span>
         </h1>
-        <span className={`chip c-${statusColor[a.statusMeta] ?? 'grey'}`}>{a.status}</span>
+        <StatusChip asset={a} />
         {a.overdueDays !== null && <span className="chip c-red">Overdue {a.overdueDays}d</span>}
         {a.warranty &&
           (a.warranty.expired ? (

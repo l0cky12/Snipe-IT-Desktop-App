@@ -74,10 +74,39 @@ describe('lookup', () => {
     expect(result.assets[0].assetTag).toBe('NOMMA-004812')
   })
 
-  it('an unknown Asset Tag is not an exact match', async () => {
-    const { fetch } = fakeFetch({})
+  it('a query that is not an exact Asset Tag falls back to a text search, not marked exact', async () => {
+    const projector = { ...chromebook, id: 77, asset_tag: 'NOMMA-000077', name: 'Epson Room 204', assigned_to: null }
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 2, rows: [chromebook, projector] } } })
+    const result = await createSnipeIt(config, fetch).lookup('  cb-lib ')
+    expect(result.exact).toBe(false)
+    expect(result.assets.map((a) => a.assetTag)).toEqual(['NOMMA-004812', 'NOMMA-000077'])
+  })
+
+  it('search matches are Asset summaries: Asset Tag, name, status, and Assignee', async () => {
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 1, rows: [chromebook] } } })
+    const result = await createSnipeIt(config, fetch).lookup('Reyes')
+    expect(result.assets).toEqual([
+      {
+        id: 4812,
+        assetTag: 'NOMMA-004812',
+        name: 'CB-LIB-012',
+        status: 'Deployed',
+        statusMeta: 'deployed',
+        assignee: { type: 'user', id: 311, name: 'Jordan Reyes' },
+      },
+    ])
+  })
+
+  it('nothing matching the tag or the text search finds no Assets', async () => {
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
     const result = await createSnipeIt(config, fetch).lookup('NOPE-1')
     expect(result).toEqual({ exact: false, assets: [] })
+  })
+
+  it("a text search Snipe-IT rejects is thrown as Snipe-IT's message", async () => {
+    const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
+    const { fetch } = fakeFetch({ '/hardware': { body: denied } })
+    await expect(createSnipeIt(config, fetch).lookup('cb-lib')).rejects.toThrow('You do not have permission.')
   })
 
   it('a blank query finds nothing without asking Snipe-IT', async () => {
