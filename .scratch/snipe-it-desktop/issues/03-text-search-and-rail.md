@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
 Spec: `.scratch/snipe-it-desktop/spec.md`. Layout reference: branch `prototype/main-screen`, variant B.
 
