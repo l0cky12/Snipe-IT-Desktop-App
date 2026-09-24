@@ -57,7 +57,8 @@ Never commit config.json. Do not push."
 
   sed -i 's/^\*\*Status:\*\* .*/**Status:** done/' "$ticket"
   git add "$ticket"
-  git commit -q -m "Mark ticket $name done"
+  # the session sometimes marks its own ticket done; only commit if there's a change
+  git diff --cached --quiet || git commit -q -m "Mark ticket $name done"
   echo "done  $name"
 done
-echo "All tickets done."
+[[ -n "${DRY_RUN:-}" ]] && echo "Dry run finished." || echo "All tickets done."
