@@ -6,7 +6,9 @@ import { createSnipeIt } from './snipeit'
 app.whenReady().then(() => {
   let configError = ''
   try {
-    const snipeIt = createSnipeIt(readConfig(join(app.getAppPath(), 'config.json')), fetch)
+    // Installed: the per-user app data folder (the install folder is read-only). From source: the project folder.
+    const configDir = app.isPackaged ? app.getPath('userData') : app.getAppPath()
+    const snipeIt = createSnipeIt(readConfig(join(configDir, 'config.json')), fetch)
     // One IPC channel per SnipeIt function, named after it; the preload mirrors these.
     for (const [name, fn] of Object.entries(snipeIt))
       ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (fn as (...a: unknown[]) => unknown)(...args))

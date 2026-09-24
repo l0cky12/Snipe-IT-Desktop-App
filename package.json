@@ -3,17 +3,37 @@
   "version": "0.1.0",
   "private": true,
   "description": "Desktop console for looking up and checking Assets in and out of Snipe-IT",
+  "homepage": "https://nomma.net",
+  "author": {
+    "name": "NOMMA IT",
+    "email": "ecaldwell@nomma.net"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist": "electron-vite build && electron-builder --linux --win"
   },
-  "dependencies": {
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+  "build": {
+    "appId": "net.nomma.snipe-it-desktop",
+    "productName": "Snipe-IT Desktop",
+    "files": [
+      "out/**/*",
+      "!config.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
+    }
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
@@ -21,7 +41,10 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"

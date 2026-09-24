@@ -83,7 +83,7 @@ The main screen uses the **Rail + detail sheet** layout (variant B from the prot
 
 **Modules:**
 
-- **Config**: reads `config.json` from the app folder, containing the Snipe-IT base URL and the Operator's personal API key. Validates both fields are present and the URL is well-formed. Returns a specific error naming what's wrong. `config.json` is gitignored and must never be committed.
+- **Config**: reads `config.json` from the project folder when run from source, or from the per-user app data folder when installed (see README), containing the Snipe-IT base URL and the Operator's personal API key. Validates both fields are present and the URL is well-formed. Returns a specific error naming what's wrong. `config.json` is gitignored and must never be committed.
 - **SnipeIt** (the deep module; nearly all logic lives here). Created with the config and a fetch function (injected, so tests can fake HTTP). Its interface:
   - `lookup(query)`: trims the query. Tries an exact Asset Tag match first. On a hit, returns that single Asset marked as an exact match. Otherwise it falls back to a text search across name, tag, and Serial, returning a list of Asset summaries. The caller uses the exact-match mark to decide whether to clear the search box.
   - `getAsset(id)`: returns the full Asset plus its History, newest first.

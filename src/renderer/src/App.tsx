@@ -102,7 +102,7 @@ export function App() {
       <div className="fatal">
         <h1>Can't start: config.json problem</h1>
         <p>{configError}</p>
-        <p className="dim">Fix config.json in the app folder, then restart the app.</p>
+        <p className="dim">Fix config.json at that path, then restart the app.</p>
       </div>
     )
 
