@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
 Spec: `.scratch/snipe-it-desktop/spec.md`.
 
