@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type StatusLabel } from '../../main/snipeit'
+import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type StatusLabel } from '../../main/snipeit'
 
 const configError = new URLSearchParams(location.search).get('configError')
 
@@ -63,15 +63,17 @@ export function App() {
 
   const pick = (id: number) => run((isStale) => open(id, isStale))
 
-  // A rejected Checkin throws before the refresh, so the sheet stays as it was and the rail shows Snipe-IT's reason.
-  const checkin = (id: number, options: CheckinOptions) =>
+  // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
+  const act = (id: number, done: string, work: Promise<void>) =>
     run(async (isStale) => {
-      await window.snipeIt.checkin(id, options)
-      // Don't let a failed refresh read as a failed Checkin; retrying would only say "not checked out".
+      await work
+      // Don't let a failed refresh read as a failed action; retrying would only be refused.
       await open(id, isStale).catch((e: Error) => {
-        throw new Error(`Checked in, but couldn't refresh the Asset: ${e.message}`)
+        throw new Error(`${done}, but couldn't refresh the Asset: ${e.message}`)
       })
     })
+  const checkin = (id: number, options: CheckinOptions) => act(id, 'Checked in', window.snipeIt.checkin(id, options))
+  const checkout = (id: number, options: CheckoutOptions) => act(id, 'Checked out', window.snipeIt.checkout(id, options))
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -123,7 +125,7 @@ export function App() {
           {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={asset?.id} onPick={pick} />}
         </div>
       </aside>
-      <main className="sheet">{asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -186,11 +188,88 @@ function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin }: {
+function CheckoutForm(props: { asset: AssetWithHistory; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
+  const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
+  const [text, setText] = useState('')
+  const [found, setFound] = useState<CheckoutTarget[]>([])
+  const [searchError, setSearchError] = useState('')
+  const [target, setTarget] = useState<CheckoutTarget | null>(null)
+  const [expectedCheckin, setExpectedCheckin] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // Search as the Operator types, after a short pause; an answer for older text is discarded.
+  useEffect(() => {
+    let stale = false
+    const timer = setTimeout(() => {
+      const search = targetType === 'user' ? window.snipeIt.searchUsers : window.snipeIt.searchLocations
+      search(text).then(
+        (t) => !stale && (setFound(t), setSearchError('')),
+        (e: Error) => !stale && setSearchError(e.message),
+      )
+    }, 250)
+    return () => {
+      stale = true
+      clearTimeout(timer)
+    }
+  }, [targetType, text])
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!target) return
+    setBusy(true)
+    await props.onCheckout(props.asset.id, { targetType, targetId: target.id, expectedCheckin: expectedCheckin || undefined, note })
+    setBusy(false)
+  }
+
+  return (
+    <form className="checkout" onSubmit={onSubmit}>
+      <div className="actions">
+        <select
+          value={targetType}
+          // Drop the other kind's results so a User id is never sent as a Location (or vice versa).
+          onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setTarget(null), setFound([]))}
+          aria-label="Check out to"
+        >
+          <option value="user">User</option>
+          <option value="location">Location</option>
+        </select>
+        <input
+          autoFocus
+          value={text}
+          onChange={(e) => (setText(e.target.value), setTarget(null))}
+          placeholder={`Search ${kind[targetType]}s by name…`}
+          aria-label={`Search ${kind[targetType]}s`}
+        />
+        <input type="date" value={expectedCheckin} onChange={(e) => setExpectedCheckin(e.target.value)} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Checkout note" />
+        <button disabled={!target || busy}>{busy ? 'Checking out…' : target ? `Checkout to ${target.name}` : 'Checkout'}</button>
+      </div>
+      {searchError ? (
+        <p className="message error" role="alert">{searchError}</p>
+      ) : (
+        !target && text.trim() && (
+          <div className="targets">
+            {found.map((t) => (
+              <button type="button" key={t.id} onClick={() => setTarget(t)}>
+                {t.name} {t.detail && <span className="dim">{t.detail}</span>}
+              </button>
+            ))}
+            {found.length === 0 && <span className="dim">No {kind[targetType]} matches "{text.trim()}"</span>}
+          </div>
+        )
+      )}
+    </form>
+  )
+}
+
+function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout }: {
   asset: AssetWithHistory
   statusLabels: StatusLabel[]
   onCheckin: (id: number, o: CheckinOptions) => Promise<void>
+  onCheckout: (id: number, o: CheckoutOptions) => Promise<void>
 }) {
+  const [checkingOut, setCheckingOut] = useState(false)
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
@@ -216,9 +295,18 @@ function AssetSheet({ asset: a, statusLabels, onCheckin }: {
           ) : (
             <span className="chip c-amber">Warranty {a.warranty.daysLeft}d left</span>
           ))}
-        {/* Checkout button goes here too (ticket 06). */}
+        <div className="actions">
+          <button
+            disabled={!a.checkoutAllowed}
+            onClick={() => setCheckingOut((o) => !o)}
+            title={a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}
+          >
+            {checkingOut ? 'Cancel' : 'Checkout…'}
+          </button>
+        </div>
         <CheckinForm asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
+      {checkingOut && a.checkoutAllowed && <CheckoutForm asset={a} onCheckout={onCheckout} />}
       <div className="grid">
         {facts.map(([k, v, mono]) => (
           <div className="cell" key={k}>

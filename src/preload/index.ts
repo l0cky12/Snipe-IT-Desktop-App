@@ -13,6 +13,9 @@ const snipeIt: SnipeIt = {
   lookup: call('lookup'),
   getAsset: call('getAsset'),
   statusLabels: call('statusLabels'),
+  searchUsers: call('searchUsers'),
+  searchLocations: call('searchLocations'),
+  checkout: call('checkout'),
   checkin: call('checkin'),
 }
 

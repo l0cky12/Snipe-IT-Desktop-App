@@ -13,6 +13,8 @@ export type Asset = {
   /** Snipe-IT's status_meta: deployed, deployable, pending, archived, undeployable */
   statusMeta: string
   assignee: Assignee | null
+  /** Checkout allowed: no Assignee and a deployable status */
+  checkoutAllowed: boolean
   location: string
   category: string
   serial: string
@@ -33,6 +35,12 @@ export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?:
 export type StatusLabel = { id: number; name: string }
 
 export type CheckinOptions = { statusId?: number; note?: string }
+
+/** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
+export type CheckoutTarget = { id: number; name: string; detail: string }
+
+/** Checkout targets are Users and Locations only; Asset-to-Asset isn't supported. expectedCheckin is "YYYY-MM-DD". */
+export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
 
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
@@ -128,6 +136,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
+    checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
@@ -181,8 +190,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
-  const checkId = (id: number) => {
-    if (!Number.isInteger(id)) throw new Error(`Invalid Asset id: ${id}`)
+  const checkId = (id: number, what = 'Asset') => {
+    if (!Number.isInteger(id)) throw new Error(`Invalid ${what} id: ${id}`)
+  }
+
+  // ponytail: first 20 matches; the Operator types more of the name to narrow it.
+  async function searchTargets(kind: 'users' | 'locations', text: string): Promise<CheckoutTarget[]> {
+    const q = text.trim()
+    if (!q) return []
+    const body = await request<{ rows: { id: number; name: string; username?: string }[] }>(`/${kind}?search=${encodeURIComponent(q)}&limit=20`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? '' }))
+  }
+
+  // Re-reads the Asset so Checkout/Checkin rules and the default status come from Snipe-IT, not from a possibly stale screen.
+  async function current(id: number): Promise<RawAsset> {
+    checkId(id)
+    const body = await request<RawAsset>(`/hardware/${id}`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return body
   }
 
   return {
@@ -225,12 +251,30 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return body.rows.map(({ id, name }) => ({ id, name }))
     },
 
+    searchUsers: (text: string) => searchTargets('users', text),
+    searchLocations: (text: string) => searchTargets('locations', text),
+
+    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent.
+    async checkout(id: number, { targetType, targetId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
+      if (targetType !== 'user' && targetType !== 'location') throw new Error('An Asset can only be checked out to a User or a Location.')
+      checkId(targetId, targetType === 'user' ? 'User' : 'Location')
+      const body = await current(id)
+      if (body.assigned_to) throw new Error(`${body.asset_tag} is already checked out to ${body.assigned_to.name}. Check it in first.`)
+      if (body.status_label?.status_meta !== 'deployable')
+        throw new Error(`${body.asset_tag} is "${body.status_label?.name ?? 'no status'}", which can't be checked out.`)
+      const result = await request(`/hardware/${id}/checkout`, {
+        status_id: body.status_label.id,
+        checkout_to_type: targetType,
+        [`assigned_${targetType}`]: targetId,
+        ...(expectedCheckin && { expected_checkin: expectedCheckin }),
+        ...(note?.trim() && { note: note.trim() }),
+      })
+      if (isError(result)) throw new Error(reason(result.messages))
+    },
+
     // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.
-    // Re-reads the Asset so the rule and the default status come from Snipe-IT, not from a possibly stale screen.
     async checkin(id: number, { statusId, note }: CheckinOptions): Promise<void> {
-      checkId(id)
-      const body = await request<RawAsset>(`/hardware/${id}`)
-      if (isError(body)) throw new Error(reason(body.messages))
+      const body = await current(id)
       if (!body.assigned_to) throw new Error(`${body.asset_tag} is not checked out, so there is nothing to check in.`)
       const result = await request(`/hardware/${id}/checkin`, {
         status_id: statusId ?? body.status_label?.id,

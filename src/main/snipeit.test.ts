@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSnipeIt } from './snipeit'
+import { createSnipeIt, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -327,5 +327,103 @@ describe('checkin', () => {
     const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
     const { fetch } = checkinWith(chromebook, { body: refused })
     await expect(createSnipeIt(config, fetch).checkin(4812, {})).rejects.toThrow('That asset is already checked in.')
+  })
+})
+
+describe('Checkout targets', () => {
+  it('searching Users returns each User by id and name, with their username to tell namesakes apart', async () => {
+    const users = { total: 1, rows: [{ id: 311, name: 'Jordan Reyes', first_name: 'Jordan', last_name: 'Reyes', username: 'jreyes' }] }
+    const { fetch } = fakeFetch({ '/users': { body: users } })
+    expect(await createSnipeIt(config, fetch).searchUsers('reyes')).toEqual([{ id: 311, name: 'Jordan Reyes', detail: 'jreyes' }])
+  })
+
+  it('searching Locations returns each Location by id and name', async () => {
+    const locations = { total: 1, rows: [{ id: 12, name: 'Room 204', address: null }] }
+    const { fetch } = fakeFetch({ '/locations': { body: locations } })
+    expect(await createSnipeIt(config, fetch).searchLocations(' 204 ')).toEqual([{ id: 12, name: 'Room 204', detail: '' }])
+  })
+
+  it('a blank target search finds nothing without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    expect(await createSnipeIt(config, fetch).searchUsers('  ')).toEqual([])
+    expect(calls).toEqual([])
+  })
+})
+
+describe('checkout', () => {
+  const ready = { ...chromebook, assigned_to: null, expected_checkin: null, status_label: { id: 1, name: 'Ready to Deploy', status_type: 'deployable', status_meta: 'deployable' } }
+  const checkedOut = { status: 'success', messages: 'Asset checked out successfully.', payload: { asset: 'NOMMA-004812' } }
+  const checkoutWith = (hardware: object, reply: { status?: number; body: unknown } = { body: checkedOut }) =>
+    fakeFetch({ '/hardware/4812': { body: hardware }, '/hardware/4812/checkout': reply })
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
+
+  it('to a User sends the current status, the target type, and the assigned user', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311 })
+    expect(posted(requests)).toEqual([
+      { method: 'POST', path: '/hardware/4812/checkout', body: { status_id: 1, checkout_to_type: 'user', assigned_user: 311 } },
+    ])
+  })
+
+  it('to a Location sends the assigned location, the Expected Checkin, and the note', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'location', targetId: 12, expectedCheckin: '2026-10-01', note: ' scuffed lid ' })
+    expect(posted(requests)).toEqual([
+      {
+        method: 'POST',
+        path: '/hardware/4812/checkout',
+        body: { status_id: 1, checkout_to_type: 'location', assigned_location: 12, expected_checkin: '2026-10-01', note: 'scuffed lid' },
+      },
+    ])
+  })
+
+  it('to a User with an Expected Checkin sends it', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, expectedCheckin: '2026-10-01' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-01' })
+  })
+
+  it('to a Location without an Expected Checkin sends neither date nor note', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'location', targetId: 12, note: '  ' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'location', assigned_location: 12 })
+  })
+
+  it('an Asset in inventory with a deployable status can be checked out', async () => {
+    expect((await snipeItWith(ready).getAsset(4812)).checkoutAllowed).toBe(true)
+  })
+
+  it('an Asset that already has an Assignee cannot be checked out, and Snipe-IT is not asked to', async () => {
+    expect((await snipeItWith(chromebook).getAsset(4812)).checkoutAllowed).toBe(false)
+    const { fetch, requests } = checkoutWith(chromebook)
+    await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311 })).rejects.toThrow(
+      /NOMMA-004812 is already checked out to Jordan Reyes/,
+    )
+    expect(posted(requests)).toEqual([])
+  })
+
+  it('an Asset whose status is not deployable cannot be checked out', async () => {
+    const broken = { ...ready, status_label: { id: 5, name: 'Out for Repair', status_type: 'undeployable', status_meta: 'undeployable' } }
+    expect((await snipeItWith(broken).getAsset(4812)).checkoutAllowed).toBe(false)
+    const { fetch, requests } = checkoutWith(broken)
+    await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311 })).rejects.toThrow(
+      /Out for Repair.*can't be checked out/,
+    )
+    expect(posted(requests)).toEqual([])
+  })
+
+  it('Checkout to another Asset is refused', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    const toAsset = { targetType: 'asset', targetId: 77 } as unknown as CheckoutOptions
+    await expect(createSnipeIt(config, fetch).checkout(4812, toAsset)).rejects.toThrow(/User or a Location/)
+    expect(posted(requests)).toEqual([])
+  })
+
+  it("a Checkout Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
+    const refused = { status: 'error', messages: { assigned_user: ['The selected assigned user is invalid.'] }, payload: null }
+    const { fetch } = checkoutWith(ready, { body: refused })
+    await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 999 })).rejects.toThrow(
+      'The selected assigned user is invalid.',
+    )
   })
 })

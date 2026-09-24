@@ -38,6 +38,13 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(-
                                                    font: 12px var(--mono); padding: 5px 8px; border-radius: 4px; }
 .actions button { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 600; cursor: pointer; }
 .actions :disabled { opacity: .45; cursor: default; }
+.checkout { padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+.checkout .actions input:not([type]) { flex: 1; }
+.checkout .message.error { margin: 8px 0 0; }
+.targets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font: 12px var(--mono); }
+.targets button { background: var(--bg); border: 1px solid var(--line); color: var(--text); font: inherit;
+                  padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.targets button:hover, .targets button:focus-visible { border-color: var(--accent); }
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
 .cell { padding: 8px 18px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .cell .k { font: 10px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
