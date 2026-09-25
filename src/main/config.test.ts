@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -34,22 +34,24 @@ it('saves only encrypted credentials, reloads preferences, keeps a blank token, 
   expect(readFileSync(path, 'utf8')).not.toContain('encryptedToken')
 })
 
-it('without secure storage keeps the token in memory only, so the app is still usable', () => {
+it('without secure storage saves the token to the owner-only file so it survives a restart', () => {
   const { path, storage, store } = setup()
   storage.isEncryptionAvailable.mockReturnValue(false)
-  expect(store.save(input)).toMatchObject({ hasToken: true, sessionOnly: true, defaultLocation: input.defaultLocation })
+  expect(store.save(input)).toMatchObject({ hasToken: true, plaintext: true, defaultLocation: input.defaultLocation })
   expect(storage.encryptString).not.toHaveBeenCalled()
+  if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get().hasToken).toBe(true)
+  expect(relaunched.credentials().apiKey).toBe('secret-token')
+  expect(() => relaunched.credentials({ ...input, baseUrl: 'https://other.example.org', apiKey: '' })).toThrow('Enter an API token')
+  expect(relaunched.clearToken().hasToken).toBe(false)
   expect(readFileSync(path, 'utf8')).not.toContain('secret-token')
-  expect(store.credentials().apiKey).toBe('secret-token')
-  // A fresh launch reads only the file: the token is gone.
-  expect(createSettingsStore(path, storage, '0.1.0').get().hasToken).toBe(false)
-  expect(store.clearToken().hasToken).toBe(false)
 })
 
 it.skipIf(process.platform !== 'linux')('treats the Linux basic_text fallback as unavailable', () => {
   const { storage, store } = setup()
   storage.getSelectedStorageBackend.mockReturnValue('basic_text')
-  expect(store.save(input).sessionOnly).toBe(true)
+  expect(store.save(input).plaintext).toBe(true)
   expect(storage.encryptString).not.toHaveBeenCalled()
 })
 

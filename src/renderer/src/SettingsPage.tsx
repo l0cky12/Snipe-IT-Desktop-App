@@ -31,7 +31,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
     <header><span className="eyebrow">WORKSPACE</span><h1>Settings</h1><p className="dim">Connect to Snipe-IT and set your default Location.</p></header>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
-      setApiKey(''); onSaved(saved); setMessage(saved.sessionOnly ? 'Settings saved. No OS password store was found, so the API token is kept only until you quit. Enter it again next launch.' : 'Settings saved.')
+      setApiKey(''); onSaved(saved); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
     }) }}>
       <fieldset disabled={busy}>
         <section className="settings-section">
@@ -39,13 +39,13 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
           <label htmlFor="server-url">Snipe-IT server URL</label>
           <input id="server-url" type="url" required placeholder="https://snipeit.example.org" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setApiKey(''); setLocation(null); setLocations([]); setVersion('Not connected'); setMessage('') }} />
           <label htmlFor="api-token">API token</label>
-          <div className="connection-row"><input id="api-token" type="password" autoComplete="new-password" value={apiKey} placeholder={settings.hasToken && baseUrl === settings.baseUrl ? (settings.sessionOnly ? 'Kept for this session' : 'Saved securely') + ' · leave blank to keep' : 'Paste your API token'} onChange={(e) => { setApiKey(e.target.value); setMessage(''); setVersion('Not connected') }} />
+          <div className="connection-row"><input id="api-token" type="password" autoComplete="new-password" value={apiKey} placeholder={settings.hasToken && baseUrl === settings.baseUrl ? (settings.plaintext ? 'Saved (unencrypted)' : 'Saved securely') + ' · leave blank to keep' : 'Paste your API token'} onChange={(e) => { setApiKey(e.target.value); setMessage(''); setVersion('Not connected') }} />
             <button type="button" onClick={() => run(async () => {
               const result = await window.settings.test(input)
               setVersion(result.version); setMessage('Connected successfully. Credentials have not been saved yet.')
               setLocations(await window.settings.locations(input))
             })}>Test connection</button></div>
-          <p className="hint">Encrypted with your OS credential store. Never saved as plaintext.</p>
+          <p className="hint">{settings.plaintext ? 'No OS password store found: saved unencrypted, readable only by your user account.' : 'Encrypted with your OS credential store when available.'}</p>
         </section>
         <section className="settings-section">
           <h2>Default Location</h2><p className="dim">Pre-fills Checkin and Checkout to a Location. You can change it for each Asset.</p>

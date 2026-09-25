@@ -3,8 +3,8 @@ import type { safeStorage } from 'electron'
 import type { Config, StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
-// sessionOnly: no OS secure storage, so the token lives in memory until the app quits.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; sessionOnly: boolean; appVersion: string }
+// plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string }
 export type SettingsApi = {
   get(): Promise<Settings>
   save(input: SettingsInput): Promise<Settings>
@@ -12,10 +12,9 @@ export type SettingsApi = {
   locations(input: SettingsInput): Promise<StatusLabel[]>
   clearToken(): Promise<Settings>
 }
-type Stored = { baseUrl: string; encryptedToken?: string; defaultLocation: StatusLabel | null }
+type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null }
 
 export function createSettingsStore(path: string, storage: Pick<typeof safeStorage, 'isEncryptionAvailable' | 'getSelectedStorageBackend' | 'encryptString' | 'decryptString'>, appVersion: string) {
-  let session: { baseUrl: string; apiKey: string } | undefined
   function read(): Stored {
     try { return JSON.parse(readFileSync(path, 'utf8')) }
     catch (error) {
@@ -34,8 +33,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
   }
   function get(): Settings {
     const value = read()
-    const sessionOnly = !value.encryptedToken && session?.baseUrl === value.baseUrl
-    return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!value.encryptedToken || sessionOnly, sessionOnly, appVersion }
+    return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion }
   }
   function credentials(input?: SettingsInput): Config {
     const saved = read()
@@ -45,7 +43,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
       throw new Error('Use an HTTP(S) server URL without credentials, query parameters, or a fragment.')
     let apiKey = input?.apiKey.trim() ?? ''
-    if (!apiKey && !saved.encryptedToken && session?.baseUrl === baseUrl) apiKey = session.apiKey
+    if (!apiKey && saved.plainToken && baseUrl === saved.baseUrl) apiKey = saved.plainToken
     if (!apiKey && saved.encryptedToken && baseUrl === saved.baseUrl) {
       secure()
       try { apiKey = storage.decryptString(Buffer.from(saved.encryptedToken, 'base64')) }
@@ -62,18 +60,12 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       if (loc !== null && (!Number.isSafeInteger(loc?.id) || loc.id <= 0 || typeof loc.name !== 'string'))
         throw new Error('Choose a valid default Location.')
       const defaultLocation = loc && { id: loc.id, name: loc.name }
-      // No keychain: keep the token for this session only rather than locking the Operator out.
-      if (!available()) {
-        session = { baseUrl: config.baseUrl, apiKey: config.apiKey }
-        write({ baseUrl: config.baseUrl, defaultLocation })
-        return get()
-      }
-      session = undefined
-      write({ baseUrl: config.baseUrl, encryptedToken: storage.encryptString(config.apiKey).toString('base64'), defaultLocation })
+      // No keychain: fall back to the owner-only (0600) file rather than locking the Operator out every launch.
+      if (!available()) write({ baseUrl: config.baseUrl, plainToken: config.apiKey, defaultLocation })
+      else write({ baseUrl: config.baseUrl, encryptedToken: storage.encryptString(config.apiKey).toString('base64'), defaultLocation })
       return get()
     },
     clearToken() {
-      session = undefined
       const saved = read()
       write({ baseUrl: saved.baseUrl, defaultLocation: saved.defaultLocation })
       return get()
