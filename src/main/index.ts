@@ -11,7 +11,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:clearToken', () => store.clearToken())
   ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard'] as const)
+  for (const name of ['testConnection', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'names', 'updateStatus'] as const)
     ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
 
   const win = new BrowserWindow({

@@ -45,8 +45,23 @@ export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: numbe
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
 
-/** An exact Asset Tag hit carries the full Asset; a text search carries summaries. */
-export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[] }
+/** Lookup's matches of one other kind, or why that kind couldn't be searched (e.g. the key can't read Users). */
+export type Matches = { kind: 'users' | 'locations' | 'models'; rows: CheckoutTarget[] } | { kind: 'users' | 'locations' | 'models'; error: string }
+
+/** An exact Asset Tag hit carries the full Asset; a text search carries Asset summaries and the other kinds' matches. */
+export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[]; others: Matches[] }
+
+export type UserRow = { id: number; name: string; username: string; email: string; department: string; location: string; assets: number }
+export type LocationRow = { id: number; name: string; parent: string; city: string; assets: number; checkedOut: number; users: number }
+/** available is null when Snipe-IT doesn't say. */
+export type ModelRow = { id: number; name: string; modelNumber: string; manufacturer: string; category: string; assets: number; available: number | null }
+/** One Activity Report entry; item is what was acted on (an Asset, a License…). */
+export type ActivityRow = HistoryEntry & { id: number; item: { type: string; id: number; name: string } | null }
+export type ListRows = { assets: Asset; users: UserRow; locations: LocationRow; models: ModelRow; activity: ActivityRow }
+export type ListKind = keyof ListRows
+/** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
+export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
+export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] }
 
 /** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
@@ -92,6 +107,7 @@ type RawAsset = {
 }
 type RawActivity = {
   id: number
+  item?: { id: number; name: string; type: string } | null
   action_type: string
   created_at: { datetime: string } | null
   // Snipe-IT v8 renamed `admin` to `created_by`.
@@ -102,6 +118,8 @@ type RawActivity = {
 }
 
 const EXPIRING_DAYS = 90
+// Rows per List page.
+export const LIST_PAGE = 50
 // Kinds counted by quantity: their list, and the fields for the whole quantity and the available part. Used is the rest.
 const QUANTITIES = {
   licenses: ['/licenses', 'seats', 'free_seats_count'],
@@ -184,21 +202,60 @@ function toAsset(raw: RawAsset, today: Date): Asset {
   }
 }
 
+type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
+type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
+type RawModel = { id: number; name: string; model_number: string | null; manufacturer: Named; category: Named; assets_count: number | null; remaining?: number | null }
+
+// Which row fields each List can sort by, and Snipe-IT's name for that sort. The screen offers only these.
+export const LIST_SORTS = {
+  assets: { assetTag: 'asset_tag', name: 'name', status: 'status', model: 'model', category: 'category', location: 'location', assignee: 'assigned_to', serial: 'serial', expectedCheckin: 'expected_checkin', purchaseDate: 'purchase_date' },
+  users: { name: 'last_name', username: 'username', email: 'email', department: 'department', location: 'location', assets: 'assets_count' },
+  locations: { name: 'name', parent: 'parent', city: 'city', assets: 'assets_count', checkedOut: 'assigned_assets_count', users: 'users_count' },
+  models: { name: 'name', modelNumber: 'model_number', manufacturer: 'manufacturer', category: 'category', assets: 'assets_count', available: 'remaining' },
+  activity: { when: 'created_at', action: 'action_type', operator: 'created_by' },
+} satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
+
+// Snipe-IT action_type and item_type values the Activity Report can be filtered by.
+export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
+export const ACTIVITY_ITEMS = ['asset', 'accessory', 'license', 'consumable', 'component'] as const
+
+// Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
+// user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type).
+const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
+  assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', status: ['Deployed', 'RTD'] }, row: toAsset },
+  users: {
+    path: '/users', filters: { location_id: 'id', department_id: 'id' },
+    row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: r.department?.name ?? '', location: r.location?.name ?? '', assets: r.assets_count ?? 0 }),
+  },
+  locations: {
+    path: '/locations', filters: {},
+    row: (r: RawLocation) => ({ id: r.id, name: r.name, parent: r.parent?.name ?? '', city: r.city ?? '', assets: r.assets_count ?? 0, checkedOut: r.assigned_assets_count ?? 0, users: r.users_count ?? 0 }),
+  },
+  models: {
+    path: '/models', filters: { category_id: 'id' },
+    row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: r.manufacturer?.name ?? '', category: r.category?.name ?? '', assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
+  },
+  activity: {
+    path: '/reports/activity', filters: { action_type: ACTIVITY_ACTIONS, item_type: ACTIVITY_ITEMS },
+    row: (r: RawActivity) => ({ id: r.id, ...toHistoryEntry(r), item: r.item ? { type: r.item.type, id: r.item.id, name: r.item.name } : null }),
+  },
+}
+
 // `today` is injectable so the date rules can be tested with a fixed date.
 export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, today = () => new Date()) {
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
-  // Pass `post` to POST it as JSON instead of GETting.
+  // Pass `post` to send it as JSON with `method` (POST unless told otherwise) instead of GETting.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
-  async function request<T>(path: string, post?: object): Promise<T | SnipeItError> {
+  async function request<T>(path: string, post?: object, method = 'POST'): Promise<T | SnipeItError> {
     let res: Response
     try {
       res = await fetch(api + path, {
         signal: AbortSignal.timeout(15000),
         redirect: 'error',
         headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && { 'Content-Type': 'application/json' }) },
-        ...(post && { method: 'POST', body: JSON.stringify(post) }),
+        ...(post && { method, body: JSON.stringify(post) }),
       })
     } catch {
       throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
@@ -246,12 +303,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
-  async function searchTargets(kind: 'users' | 'locations', text: string): Promise<CheckoutTarget[]> {
+  // detail tells namesakes apart: a User's username, an Asset Model's model number.
+  async function searchTargets(kind: 'users' | 'locations' | 'models', text: string): Promise<CheckoutTarget[]> {
     const q = text.trim()
     if (!q) return []
-    const body = await request<{ rows: { id: number; name: string; username?: string }[] }>(`/${kind}?search=${encodeURIComponent(q)}&limit=20`)
+    const body = await request<{ rows: { id: number; name: string; username?: string; model_number?: string | null }[] }>(`/${kind}?search=${encodeURIComponent(q)}&limit=20`)
     if (isError(body)) throw new Error(reason(body.messages))
-    return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? '' }))
+    return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? r.model_number ?? '' }))
   }
 
   // Re-reads the Asset so Checkout/Checkin rules and the default status come from Snipe-IT, not from a possibly stale screen.
@@ -284,14 +342,19 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
-      if (!tag) return { exact: false, assets: [] }
+      if (!tag) return { exact: false, assets: [], others: [] }
       const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
       // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
       if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
-      // Snipe-IT's search covers name, Asset Tag, and Serial (and more).
-      const found = await request<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`)
+      // Snipe-IT's search covers name, Asset Tag, and Serial (and more). The other kinds are searched alongside;
+      // one the key can't read says so without hiding the rest.
+      const [found, ...others] = await Promise.all([
+        request<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`),
+        ...(['users', 'locations', 'models'] as const).map((kind) =>
+          searchTargets(kind, tag).then((rows): Matches => ({ kind, rows }), (e: Error): Matches => ({ kind, error: e.message }))),
+      ])
       if (isError(found)) throw new Error(reason(found.messages))
-      return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))) }
+      return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))), others }
     },
 
     async getAsset(id: number): Promise<AssetWithHistory> {
@@ -319,6 +382,42 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<{ rows: StatusLabel[] }>('/statuslabels?limit=500')
       if (isError(body)) throw new Error(reason(body.messages))
       return body.rows.map(({ id, name }) => ({ id, name }))
+    },
+
+    // One page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
+    async list<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery = {}): Promise<ListPage<K>> {
+      if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
+      const spec = LISTS[kind]
+      const params = new URLSearchParams({ limit: String(LIST_PAGE), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
+      if (search?.trim()) params.set('search', search.trim())
+      for (const [key, value] of Object.entries(filters)) {
+        if (value === '') continue
+        const allowed = Object.hasOwn(spec.filters, key) ? spec.filters[key] : undefined
+        if (!allowed || !(allowed === 'id' ? /^[1-9]\d*$/.test(value) : allowed.includes(value))) throw new Error(`Invalid filter: ${key}`)
+        if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
+        else params.set(key, value)
+      }
+      const sorts: Record<string, string> = LIST_SORTS[kind]
+      if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
+      const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      const now = today()
+      return { total: page.total, rows: page.rows.map((r) => spec.row(r as never, now)) as ListRows[K][] }
+    },
+
+    // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.
+    async names(kind: 'models' | 'categories' | 'departments'): Promise<StatusLabel[]> {
+      const paths = { models: '/models', categories: '/categories?category_type=asset', departments: '/departments' }
+      if (!Object.hasOwn(paths, kind)) throw new Error(`Unknown list: ${kind}`)
+      return (await allRows<StatusLabel>(paths[kind])).map(({ id, name }) => ({ id, name }))
+    },
+
+    // A Quick Action; Snipe-IT decides whether the status fits (e.g. a checked-out Asset needs a deployable one).
+    async updateStatus(id: number, statusId: number): Promise<void> {
+      checkId(id)
+      checkId(statusId, 'status')
+      const result = await request(`/hardware/${id}`, { status_id: statusId }, 'PATCH')
+      if (isError(result)) throw new Error(reason(result.messages))
     },
 
     searchUsers: (text: string) => searchTargets('users', text),

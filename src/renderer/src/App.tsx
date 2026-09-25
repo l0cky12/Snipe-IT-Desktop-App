@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { DASHBOARD_PIECES, toSummary, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type StatusLabel } from '../../main/snipeit'
+import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
+import { ListView, listName, type Drill } from './ListView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -11,12 +12,21 @@ const statusColor: Record<string, string> = {
   undeployable: 'red',
 }
 
-const StatusChip = ({ asset }: { asset: AssetSummary }) => (
+export const StatusChip = ({ asset }: { asset: AssetSummary }) => (
   <span className={`chip c-${statusColor[asset.statusMeta] ?? 'grey'}`}>{asset.status}</span>
 )
 
+// The current status is always offered, even if the status list didn't load.
+export const statusChoices = (labels: StatusLabel[], a: Asset) =>
+  labels.some((l) => l.id === a.statusId) || a.statusId === null ? labels : [{ id: a.statusId, name: a.status }, ...labels]
+
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
+const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
+const otherName = { users: 'Users', locations: 'Locations', models: 'Asset Models' } as const
+
+// What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
+type View = { page: 'dashboard' } | { page: ListKind; drill?: Drill; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -25,9 +35,11 @@ export function App() {
   const [locations, setLocations] = useState<StatusLabel[]>([])
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
-  const [showDashboard, setShowDashboard] = useState(false)
+  const [view, setView] = useState<View | null>(null)
   // Search Matches, or the Assets of a clicked Inventory Chart segment; both list the same way.
   const [matches, setMatches] = useState<{ label: string; assets: AssetSummary[] }>({ label: '', assets: [] })
+  // Lookup's Users, Locations and Asset Models; opening one opens the Assets List filtered to it.
+  const [others, setOthers] = useState<Matches[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
   // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
@@ -53,7 +65,7 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    latest.current++; setSettings(value); setAsset(null); setRecent([]); setMatches({ label: '', assets: [] }); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
+    latest.current++; setSettings(value); setAsset(null); setRecent([]); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -75,7 +87,7 @@ export function App() {
     if (isStale()) return
     setShowSettings(false)
     setAsset(full)
-    setShowDashboard(false)
+    setView(null)
     setOpened((n) => n + 1)
     setMessage({ text: '' })
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
@@ -102,20 +114,28 @@ export function App() {
       const result = await window.snipeIt.lookup(q)
       if (isStale()) return
       if (!result.exact) {
-        setMatches({ label: `Matches (${result.assets.length})`, assets: result.assets })
-        return setMessage({ text: result.assets.length ? '' : `No Asset matches "${q}"` })
+        setMatches({ label: `Assets (${result.assets.length})`, assets: result.assets })
+        setOthers(result.others)
+        const none = !result.assets.length && result.others.every((m) => 'rows' in m && !m.rows.length)
+        return setMessage({ text: none ? `Nothing matches "${q}"` : '' })
       }
       // Only an exact Asset Tag hit clears the box; a text search keeps the query to refine.
       setMatches({ label: '', assets: [] })
+      setOthers([])
       // Leave the box alone if the next scan has already started typing into it.
       setQuery((current) => (current.trim() === q ? '' : current))
       await open(result.assets[0].id, isStale)
     })
   }
 
-  const selected = showDashboard ? undefined : asset?.id
+  const selected = view ? undefined : asset?.id
   // The dashboard stays in the main area, so the Operator can click through several segments in turn.
-  const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setMessage({ text: '' }))
+  const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
+  // Bumping `latest` discards an open still loading, so it can't pull the Operator off the page they chose.
+  const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: ++latest.current }))
+  const drillFrom = (m: Matches, t: CheckoutTarget) =>
+    go('assets', m.kind === 'users' ? { filters: { user_id: String(t.id) }, label: `Checked out to ${t.name}` } : { filters: { [m.kind === 'locations' ? 'location_id' : 'model_id']: String(t.id) } })
+  const page = !showSettings && view?.page
 
   return (
     <div className="layout">
@@ -131,10 +151,12 @@ export function App() {
             aria-label="Scan or type an Asset Tag"
           />
         </form>
-        {/* Bumping `latest` discards an open still loading, so it can't pull the Operator off the dashboard. */}
-        <button disabled={!settings?.hasToken} className={`nav${showDashboard && !showSettings ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setShowDashboard(true))}>
+        <button disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setView({ page: 'dashboard' }))}>
           Dashboard
         </button>
+        {LISTS.map((k) => (
+          <button key={k} disabled={!settings?.hasToken} className={`nav sub${page === k ? ' sel' : ''}`} onClick={() => go(k)}>{listName[k]}</button>
+        ))}
         {message.text && (
           <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
             {message.text}
@@ -142,11 +164,24 @@ export function App() {
         )}
         <div className="list">
           {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={pick} />}
+          {others.map((m) => 'error' in m
+            ? <p key={m.kind} className="message">{otherName[m.kind]}: {m.error}</p>
+            : m.rows.length > 0 && (
+              <div key={m.kind}>
+                <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
+                {m.rows.map((t) => (
+                  <button key={t.id} className="row" onClick={() => drillFrom(m, t)}>
+                    <span className="t">{t.name}</span>
+                    {t.detail && <span className="n mono">{t.detail}</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
           {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
         </div>
         <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><span aria-hidden="true">⚙</span> Settings</button>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : showDashboard ? <DashboardView onPick={pick} onSegment={showSegment} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -170,17 +205,14 @@ function AssetList(props: { label: string; assets: AssetSummary[]; selected?: nu
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
-function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: AssetWithHistory; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
   const [statusId, setStatusId] = useState(a.statusId)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const off = !a.assignee || busy
-  // The current status is always offered, even if the status list didn't load.
-  const labels = props.statusLabels.some((l) => l.id === a.statusId) || a.statusId === null
-    ? props.statusLabels
-    : [{ id: a.statusId, name: a.status }, ...props.statusLabels]
+  const labels = statusChoices(props.statusLabels, a)
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -215,7 +247,7 @@ function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: St
   )
 }
 
-function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset: AssetWithHistory; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset: Asset; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
