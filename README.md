@@ -31,9 +31,9 @@ docker run --rm -v "$PWD":/project -w /project electronuserland/builder:wine npx
 
 ## Settings
 
-Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, choose an optional default Location, and save. New installations open Settings automatically.
+Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
 
-The default Location pre-fills Checkin and Checkout to a Location; each action can override it. Asset creation is not currently supported. Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
+Asset creation is not currently supported. Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
 
 Credentials use Electron safeStorage: macOS Keychain, Windows DPAPI, or the Linux system password store. Only encrypted token bytes are written to `settings.json` in Electron's per-user app data directory. With no usable password store (including Linux's `basic_text` fallback), the token is saved unencrypted in `settings.json` with owner-only (0600) permissions, and Settings says so. The saved token is never returned to the renderer. Log out / clear token removes the encrypted token.
 
