@@ -34,7 +34,7 @@ export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?:
 
 export type StatusLabel = { id: number; name: string }
 
-export type CheckinOptions = { statusId?: number; note?: string }
+export type CheckinOptions = { statusId?: number; locationId?: number; note?: string }
 
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
@@ -195,14 +195,16 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     let res: Response
     try {
       res = await fetch(api + path, {
+        signal: AbortSignal.timeout(15000),
+        redirect: 'error',
         headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && { 'Content-Type': 'application/json' }) },
         ...(post && { method: 'POST', body: JSON.stringify(post) }),
       })
     } catch {
-      throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and the "baseUrl" in config.json.`)
+      throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
     }
     if (res.status === 401)
-      throw new Error('Snipe-IT rejected your API key. Check the "apiKey" in config.json, or generate a new personal API key in Snipe-IT.')
+      throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     let body: unknown
     try {
@@ -216,7 +218,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       throw new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`)
     }
     if (body === undefined)
-      throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the "baseUrl" in config.json.`)
+      throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
     return body as T | SnipeItError
   }
 
@@ -261,6 +263,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   return {
+    async testConnection(): Promise<{ version: string }> {
+      const user = await request<{ id: number }>('/users/me')
+      if (isError(user)) throw new Error(reason(user.messages))
+      if (!Number.isInteger(user?.id)) throw new Error('Server did not return a valid Snipe-IT user.')
+      // Older servers or restricted tokens may not expose version information.
+      const version = await request<{ version: string }>('/version').catch(() => null)
+      return { version: version && !isError(version) && typeof version.version === 'string' ? version.version : 'Unavailable' }
+    },
+    async locations(): Promise<StatusLabel[]> {
+      const rows: StatusLabel[] = []
+      for (let total = Infinity; rows.length < total;) {
+        const page = await request<{ total: number; rows: StatusLabel[] }>(`/locations?limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
+        if (isError(page)) throw new Error(reason(page.messages))
+        if (!page.rows.length) break
+        total = page.total
+        rows.push(...page.rows.map(({ id, name }) => ({ id, name })))
+      }
+      return rows
+    },
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
       if (!tag) return { exact: false, assets: [] }
@@ -322,11 +343,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.
-    async checkin(id: number, { statusId, note }: CheckinOptions): Promise<void> {
+    async checkin(id: number, { statusId, locationId, note }: CheckinOptions): Promise<void> {
+      if (locationId !== undefined) checkId(locationId, 'Location')
       const body = await current(id)
       if (!body.assigned_to) throw new Error(`${body.asset_tag} is not checked out, so there is nothing to check in.`)
       const result = await request(`/hardware/${id}/checkin`, {
         status_id: statusId ?? body.status_label?.id,
+        ...(locationId !== undefined && { location_id: locationId }),
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))

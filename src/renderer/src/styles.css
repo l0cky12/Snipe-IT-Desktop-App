@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --line: #2a3140;
   --text: #d6dde8; --dim: #8591a3; --accent: #4ea1ff;
   --green: #2ea043; --amber: #d29922; --red: #e5534b; --grey: #6e7681; --blue: #388bfd;
@@ -105,7 +106,32 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(-
 .c-grey  { color: var(--grey);  border-color: #6e768155; background: #6e768118; }
 .c-blue  { color: var(--blue);  border-color: #388bfd55; background: #388bfd18; }
 
-.fatal { max-width: 640px; margin: 80px auto; padding: 24px; background: var(--panel);
-         border: 1px solid var(--red); border-radius: 6px; }
-.fatal h1 { font: 600 16px var(--sans); color: var(--red); margin: 0 0 12px; }
-.fatal p { font-family: var(--mono); margin: 0 0 8px; }
+.settings-nav { display: flex; align-items: center; gap: 10px; padding: 16px; border-top: 1px solid var(--line); }
+.settings-nav span { font: 24px/1 var(--sans); }
+.nav:disabled { opacity: .45; cursor: default; }
+.settings-page { max-width: 800px; margin: 0 auto; padding: 24px 44px; }
+.settings-page h1 { font-size: 28px; margin: 6px 0; letter-spacing: -.03em; }
+.settings-page h2 { font-size: 15px; margin: 0 0 6px; }
+.settings-page p { margin: 6px 0 12px; }
+.eyebrow { font: 10px var(--mono); letter-spacing: .14em; color: var(--dim); }
+.settings-page fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.settings-section { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.settings-page label { display: block; font-weight: 600; margin: 12px 0 8px; }
+.settings-page input, .settings-page select, .settings-page button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.settings-page input, .settings-page select { width: 100%; min-width: 0; }
+.settings-page input:focus, .settings-page select:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-page button { cursor: pointer; white-space: nowrap; font-weight: 600; }
+.settings-page button:hover { border-color: var(--accent); }
+.settings-page :disabled { opacity: .5; cursor: default; }
+.connection-row { display: flex; gap: 10px; }
+.settings-page .hint { font-size: 12px; color: var(--dim); margin: 10px 0 0; }
+.settings-footer { display: flex; align-items: center; gap: 16px; padding: 16px 0; font-size: 12px; }
+.settings-page .primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.settings-about { margin-top: 0; padding-top: 16px; border-top: 1px solid var(--line); }
+.settings-about dl { margin: 10px 0 12px; }
+.settings-about dl div { display: flex; justify-content: space-between; margin: 8px 0; }
+.settings-about dt { color: var(--dim); }
+.settings-about dd { margin: 0; font-family: var(--mono); }
+.settings-page .clear-token { color: var(--red); background: transparent; }
+.settings-page .settings-success { color: #67cb7b; }
+.head { flex-wrap: wrap; }
