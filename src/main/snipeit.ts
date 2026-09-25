@@ -48,11 +48,28 @@ export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | '
 /** An exact Asset Tag hit carries the full Asset; a text search carries summaries. */
 export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[] }
 
-/** Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out), and Asset counts by status, most first. */
+/** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
+
+/** One Asset status segment of the Inventory Chart. color is Snipe-IT's status label color, or null when it has none. */
+export type AssetSegment = { status: string; statusMeta: string; color: string | null; count: number; assets: AssetSummary[] }
+/** Why a dashboard piece couldn't load: Snipe-IT's reason, or the app's connection message. */
+export type Failed = { error: string }
+/** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
+export type Split = { used: number; available: number }
+
+/**
+ * One entry per requested piece: its data, or { error } with the reason it couldn't load.
+ * Asset segments most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
+ */
 export type Dashboard = {
-  overdue: (AssetSummary & { overdueDays: number })[]
-  expiring: (AssetSummary & { daysLeft: number })[]
-  counts: { status: string; statusMeta: string; count: number }[]
+  [K in DashboardPiece]?: Failed | {
+    assets: AssetSegment[]
+    licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
+    overdue: (AssetSummary & { overdueDays: number })[]
+    expiring: (AssetSummary & { daysLeft: number })[]
+  }[K]
 }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
@@ -85,6 +102,13 @@ type RawActivity = {
 }
 
 const EXPIRING_DAYS = 90
+// Kinds counted by quantity: their list, and the fields for the whole quantity and the available part. Used is the rest.
+const QUANTITIES = {
+  licenses: ['/licenses', 'seats', 'free_seats_count'],
+  accessories: ['/accessories', 'qty', 'remaining_qty'],
+  consumables: ['/consumables', 'qty', 'remaining'],
+  components: ['/components', 'qty', 'remaining'],
+} as const
 // ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
 const SEARCH_LIMIT = 50
 // The usual server maximum per page; a server that caps lower still gets paged through.
@@ -198,6 +222,22 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
+  // ponytail: pages through a whole list and counts in the app; fine under ~5k rows (~10 requests). Users may be the largest list.
+  // Past that, ask Snipe-IT for counts instead (e.g. limit=1 and read `total` per status or filter).
+  // Until `total` rows are in (a server may cap pages below PAGE_LIMIT); an empty page ends it early.
+  // Sorted by id so a row added mid-load doesn't shift later pages.
+  async function allRows<T>(path: string): Promise<T[]> {
+    const rows: T[] = []
+    for (let total = Infinity; rows.length < total; ) {
+      const page = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      if (!page.rows.length) break
+      total = page.total
+      rows.push(...page.rows)
+    }
+    return rows
+  }
+
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
   const checkId = (id: number, what = 'Asset') => {
     if (!Number.isInteger(id)) throw new Error(`Invalid ${what} id: ${id}`)
@@ -292,32 +332,60 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
-    // ponytail: pages through every Asset and computes in the app; fine for a fleet under ~5k Assets (~10 requests).
-    async dashboard(): Promise<Dashboard> {
+    // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
+    // ponytail: each Asset segment carries its Assets' summaries over IPC (the whole fleet); fine at the same ~5k ceiling.
+    async dashboard(requested: DashboardPiece[]): Promise<Dashboard> {
+      // The list arrives from the screen over IPC; keep only pieces this module knows.
+      const pieces = DASHBOARD_PIECES.filter((p) => Array.isArray(requested) && requested.includes(p))
       const now = today()
-      const assets: Asset[] = []
-      // Until `total` Assets are in (a server may cap pages below PAGE_LIMIT); an empty page ends it early.
-      // Sorted by id so an Asset added mid-load doesn't shift later pages.
-      for (let total = Infinity; assets.length < total; ) {
-        const page = await request<{ total: number; rows: RawAsset[] }>(`/hardware?limit=${PAGE_LIMIT}&offset=${assets.length}&sort=id&order=asc`)
-        if (isError(page)) throw new Error(reason(page.messages))
-        if (!page.rows.length) break
-        total = page.total
-        assets.push(...page.rows.map((r) => toAsset(r, now)))
-      }
-      const counts = new Map<string, Dashboard['counts'][number]>()
-      for (const a of assets) {
-        const c = counts.get(a.status)
-        if (c) c.count++
-        else counts.set(a.status, { status: a.status, statusMeta: a.statusMeta, count: 1 })
-      }
-      return {
-        overdue: assets.flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
-          .sort((a, b) => b.overdueDays - a.overdueDays),
-        expiring: assets.flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
-          .sort((a, b) => a.daysLeft - b.daysLeft),
-        counts: [...counts.values()].sort((a, b) => b.count - a.count),
-      }
+      const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
+      // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
+      const assets = wants('assets', 'overdue', 'expiring') ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
+      // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
+      const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined
+      // Without status labels the segments just have no color.
+      const colors = wants('assets')
+        ? allRows<{ id: number; color: string | null }>('/statuslabels').then((rows) => new Map<number | null, string>(rows.flatMap((l) => (l.color ? [[l.id, l.color]] : []))), () => new Map())
+        : undefined
+      const entry = async <T>(piece: DashboardPiece, work: () => Promise<T>): Promise<[DashboardPiece, T | Failed] | []> =>
+        !pieces.includes(piece) ? [] : [piece, await work().catch((e: Error) => ({ error: e.message }))]
+      const entries = await Promise.all([
+        entry('assets', async () => {
+          const [list, shelved, color] = await Promise.all([assets!, archived!, colors!])
+          const listed = new Set(list.map((a) => a.id))
+          const segments = new Map<string, AssetSegment>()
+          for (const a of [...list, ...shelved.filter((a) => !listed.has(a.id))]) {
+            const s = segments.get(a.status)
+            if (s) s.count++, s.assets.push(toSummary(a))
+            else segments.set(a.status, { status: a.status, statusMeta: a.statusMeta, color: color.get(a.statusId) ?? null, count: 1, assets: [toSummary(a)] })
+          }
+          return [...segments.values()].sort((a, b) => b.count - a.count)
+        }),
+        entry('overdue', async () => (await assets!)
+          .flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
+          .sort((a, b) => b.overdueDays - a.overdueDays)),
+        entry('expiring', async () => (await assets!)
+          .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
+          .sort((a, b) => a.daysLeft - b.daysLeft)),
+        ...Object.entries(QUANTITIES).map(([piece, [path, whole, free]]) =>
+          entry(piece as DashboardPiece, async () => (await allRows<Record<string, number | null>>(path)).reduce<Split>((sum, r) => {
+            // An older Snipe-IT may not send a field; say so rather than show a wrong number.
+            // A quantity of 0 arrives as null (Accessories, Components), so null counts as 0.
+            const [all, left] = [whole, free].map((field) => {
+              if (r[field] !== null && typeof r[field] !== 'number') throw new Error(`Snipe-IT didn't send "${field}" for ${path.slice(1)}; it may be too old for this chart.`)
+              return r[field] ?? 0
+            })
+            return { used: sum.used + all - left, available: sum.available + left }
+          }, { used: 0, available: 0 }))),
+        // Holding: at least one Asset, License seat or Accessory checked out. Consumables never come back, so they don't count.
+        entry('users', async () => {
+          const users = await allRows<{ assets_count: number; licenses_count: number; accessories_count: number }>('/users')
+          const used = users.filter((u) => u.assets_count + u.licenses_count + u.accessories_count > 0).length
+          return { used, available: users.length - used }
+        }),
+      ])
+      return Object.fromEntries(entries.filter((e) => e.length))
     },
   }
 }

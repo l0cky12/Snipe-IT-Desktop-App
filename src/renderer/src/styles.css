@@ -3,6 +3,7 @@
   --text: #d6dde8; --dim: #8591a3; --accent: #4ea1ff;
   --green: #2ea043; --amber: #d29922; --red: #e5534b; --grey: #6e7681; --blue: #388bfd;
   --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --bar-used: var(--blue); --bar-free: var(--line); --bar-h: 8px; --bar-name-w: 104px;
   --sans: system-ui, "Segoe UI", Inter, sans-serif;
 }
 * { box-sizing: border-box; }
@@ -58,7 +59,39 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(-
        cursor: pointer; font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
 .nav:hover, .nav:focus-visible { background: var(--panel2); color: var(--text); }
 .nav.sel { border-left-color: var(--accent); color: var(--text); }
-.counts { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 18px 10px; }
+
+/* Inventory Chart: a ledger of full-width bars, label | bar | total, segment counts underneath. */
+.chart { display: grid; grid-template-columns: var(--bar-name-w) 1fr auto; column-gap: 12px; align-items: center; padding: 0 18px 6px;
+         font: 12px var(--mono); border-bottom: 1px solid var(--line); }
+.bar-row { display: contents; }
+.bar-name { grid-column: 1; align-self: start; color: var(--text); line-height: 16px; }
+.bar { display: flex; gap: 1px; height: var(--bar-h); background: var(--bar-free); overflow: hidden; }
+.bar > * { all: unset; min-width: 2px; }
+/* A total of 0: an outline, not a track, so "none" doesn't read as "all Free". */
+.bar:empty { background: none; outline: 1px dashed var(--line); outline-offset: -1px; }
+.bar > button { cursor: pointer; }
+.bar > button:hover { outline: 1px solid var(--text); outline-offset: -1px; }
+.bar-total { font-weight: 600; text-align: right; min-width: 5ch; line-height: 16px; align-self: start; }
+.bar-key { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 0 14px; padding: 0 0 4px; line-height: 13px; color: var(--dim); font-size: 11px; }
+.bar-key > * { all: unset; display: inline-flex; align-items: center; gap: 5px; }
+.bar-key > button { cursor: pointer; }
+.bar-key > button:hover, .bar-key > button:focus-visible { color: var(--text); text-decoration: underline; }
+.bar-key i { width: 8px; height: 8px; flex: none; box-shadow: inset 0 0 0 1px #ffffff1f; }
+.bar-key b { color: var(--text); font-weight: 600; }
+/* Same height as a bar plus its key, so the ledger keeps its rhythm. */
+.bar-error { color: var(--red); line-height: 16px; padding-bottom: 17px; }
+
+.actions button.quiet { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 500; }
+.actions button.quiet.on { border-color: var(--accent); color: var(--accent); }
+.customize { display: flex; gap: 32px; padding: 8px 18px; border-bottom: 1px solid var(--line); background: var(--panel2); font: 12px var(--mono); }
+.customize ol { list-style: none; margin: 0; padding: 0; min-width: 200px; }
+.customize li { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+.customize li.k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; padding-bottom: 3px; }
+.customize label { flex: 1; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.customize input { accent-color: var(--accent); margin: 0; }
+.customize button { background: var(--bg); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono);
+                    width: 22px; height: 20px; padding: 0; border-radius: 3px; cursor: pointer; }
+.customize button:disabled { opacity: .35; cursor: default; }
 .link { all: unset; color: var(--accent); cursor: pointer; }
 .link:hover, .link:focus-visible { text-decoration: underline; }
 .history .late { color: var(--red); }

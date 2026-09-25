@@ -50,14 +50,35 @@ The Snipe-IT activity log for one Asset: every Checkout, Checkin, and edit, with
 **Lookup**:
 Finding an Asset by typing or scanning into the single search box. A barcode scan is just fast typing.
 
+**License**:
+A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise.
+
+**Accessory**:
+A stocked item tracked by quantity, not individually (a charger, a keyboard). Each unit is **Checked out** or **Available**.
+
+**Consumable**:
+A stocked item that is handed out and never returns (toner, paper). Each unit is **Used** or **Remaining**.
+
+**Component**:
+A stocked part installed into Assets (RAM, a drive). Each unit is **In use** or **Available**.
+
+**Holding**:
+A User who currently has at least one Asset, License seat, or Accessory checked out. Consumables don't count; they never come back.
+
+**Inventory Chart**:
+The dashboard's one-bar-per-kind summary: Assets split by status, Licenses, Accessories, Consumables, and Components split by use, Users split by Holding.
+_Avoid_: stats, widgets
+
 ## Relationships
 
 - An **Asset** has at most one **Assignee** at a time
 - An **Asset** has exactly one **Asset Tag** and zero or one **Serial**
 - Every **Checkout** and **Checkin** adds an entry to the Asset's **History**, credited to the **Operator**
 - An Asset can only be **Overdue** if it was given an **Expected Checkin**
+- Only Assets have a status; the other kinds are counted by quantity
 
 ## Flagged ambiguities
 
 - "Overdue" was used for both late returns and late audits. Resolved: **Overdue** means late return only. Audits are out of scope.
+- "People" on the dashboard means **Users**.
 - "User" could mean the person running the app or the person holding the Asset. Resolved: **Operator** runs the app, **User** holds the Asset.
