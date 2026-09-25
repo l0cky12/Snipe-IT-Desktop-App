@@ -405,7 +405,8 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
       <div className="bar">
         {entry.filter((s) => s.count).map((s) =>
           s.onClick
-            ? <button key={s.name} style={{ flexGrow: s.count, background: s.color }} onClick={s.onClick} title={`${s.name} ${s.count}`} aria-label={`List ${s.name} Assets`} />
+            // Mouse only; the labelled button in the key underneath is the keyboard's way in, so Tab stops once per segment.
+            ? <button key={s.name} style={{ flexGrow: s.count, background: s.color }} onClick={s.onClick} title={`${s.name} ${s.count}`} tabIndex={-1} aria-hidden />
             : <span key={s.name} style={{ flexGrow: s.count, background: s.color }} title={`${s.name} ${s.count}`} />)}
       </div>
       <span className="bar-total">{total.toLocaleString()}</span>

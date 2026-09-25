@@ -3,7 +3,7 @@
   --text: #d6dde8; --dim: #8591a3; --accent: #4ea1ff;
   --green: #2ea043; --amber: #d29922; --red: #e5534b; --grey: #6e7681; --blue: #388bfd;
   --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
-  --bar-used: var(--blue); --bar-free: #2a3140; --bar-h: 8px; --bar-name-w: 104px;
+  --bar-used: var(--blue); --bar-free: var(--line); --bar-h: 8px; --bar-name-w: 104px;
   --sans: system-ui, "Segoe UI", Inter, sans-serif;
 }
 * { box-sizing: border-box; }
@@ -67,8 +67,10 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(-
 .bar-name { grid-column: 1; align-self: start; color: var(--text); line-height: 16px; }
 .bar { display: flex; gap: 1px; height: var(--bar-h); background: var(--bar-free); overflow: hidden; }
 .bar > * { all: unset; min-width: 2px; }
+/* A total of 0: an outline, not a track, so "none" doesn't read as "all Free". */
+.bar:empty { background: none; outline: 1px dashed var(--line); outline-offset: -1px; }
 .bar > button { cursor: pointer; }
-.bar > button:hover, .bar > button:focus-visible { outline: 1px solid var(--text); outline-offset: -1px; }
+.bar > button:hover { outline: 1px solid var(--text); outline-offset: -1px; }
 .bar-total { font-weight: 600; text-align: right; min-width: 5ch; line-height: 16px; align-self: start; }
 .bar-key { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 0 14px; padding: 0 0 4px; line-height: 13px; color: var(--dim); font-size: 11px; }
 .bar-key > * { all: unset; display: inline-flex; align-items: center; gap: 5px; }

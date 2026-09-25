@@ -431,20 +431,23 @@ describe('checkout', () => {
 describe('dashboard (today is 2026-09-24)', () => {
   // A fake Snipe-IT that pages each list (hardware, licenses, users, …) by limit/offset, capped at pageMax.
   // A list given as { status, body } answers that instead, e.g. a permission error. Records every URL it was asked for.
+  // A status filter is its own list, e.g. 'hardware?status=Archived'; the fake answers it with nothing unless given.
   type Refusal = { status?: number; body: unknown }
   function fleet(lists: Record<string, object[] | Refusal>, pageMax = 500) {
     const urls: URL[] = []
     const fetch = (async (input: string | URL | Request) => {
       const url = new URL(String(input))
       urls.push(url)
-      const list = lists[url.pathname.replace('/api/v1/', '')]
+      const status = url.searchParams.get('status')
+      const path = url.pathname.replace('/api/v1/', '')
+      const list = status ? lists[`${path}?status=${status}`] ?? [] : lists[path]
       if (!list) return new Response(JSON.stringify(notFound), { status: 404 })
       if (!Array.isArray(list)) return new Response(JSON.stringify(list.body), { status: list.status ?? 200 })
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), pageMax)
       const offset = Number(url.searchParams.get('offset') ?? 0)
       return new Response(JSON.stringify({ total: list.length, rows: list.slice(offset, offset + limit) }))
     }) as typeof globalThis.fetch
-    const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}`).map((u) => Number(u.searchParams.get('offset')))
+    const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}` && !u.searchParams.has('status')).map((u) => Number(u.searchParams.get('offset')))
     const listsAsked = () => [...new Set(urls.map((u) => u.pathname.replace('/api/v1/', '')))].sort()
     return { snipeIt: createSnipeIt(config, fetch, today), offsets, listsAsked }
   }
@@ -490,6 +493,26 @@ describe('dashboard (today is 2026-09-24)', () => {
       { status: 'Ready to Deploy', statusMeta: 'deployable', color: '#2ea043', count: 2 },
       { status: 'Out for Repair', statusMeta: 'undeployable', color: '#ff8800', count: 1 },
     ])
+  })
+
+  // Snipe-IT's plain Asset list leaves Archived Assets out unless the admin turned on "show archived in list".
+  const archived = { id: 4, name: 'Archived', status_meta: 'archived' }
+  it('counts Archived Assets in the Assets bar, once each, whether or not the plain list includes them', async () => {
+    const shelved = [asset(7, { status_label: archived, assigned_to: null }), asset(8, { status_label: archived, assigned_to: null })]
+    const hidden = fleet({ hardware: [asset(1)], 'hardware?status=Archived': shelved, statuslabels: labels })
+    const shown = fleet({ hardware: [asset(1), ...shelved], 'hardware?status=Archived': shelved, statuslabels: labels })
+    for (const { snipeIt } of [hidden, shown])
+      expect(await snipeIt.dashboard(['assets'])).toEqual({ assets: [
+        expect.objectContaining({ status: 'Archived', count: 2 }),
+        expect.objectContaining({ status: 'Deployed', count: 1 }),
+      ] })
+  })
+
+  it('Overdue and Warranty expiring leave Archived Assets out, as before', async () => {
+    const late = { expected_checkin: { date: '2026-09-01' }, warranty_expires: { date: '2026-10-01' } }
+    const { snipeIt } = fleet({ hardware: [asset(1, late)], 'hardware?status=Archived': [asset(9, { ...late, status_label: archived })] })
+    const { overdue, expiring } = await snipeIt.dashboard(['overdue', 'expiring'])
+    expect([overdue, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
   })
 
   it('each Asset segment carries its Assets, so the rail can list them', async () => {
@@ -578,6 +601,17 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(await snipeIt.dashboard(['accessories', 'consumables'])).toEqual({
       accessories: { error: expect.stringMatching(/remaining_qty/) },
       consumables: { used: 14, available: 6 },
+    })
+  })
+
+  it('an Accessory or Component of quantity 0 counts as 0, though Snipe-IT sends its qty as null', async () => {
+    const { snipeIt } = fleet({
+      accessories: [...accessories, { id: 3, name: 'Stylus', qty: null, remaining_qty: 0, min_qty: null }],
+      components: [...components, { id: 3, name: '16GB SODIMM', qty: null, remaining: 0, min_amt: null }],
+    })
+    expect(await snipeIt.dashboard(['accessories', 'components'])).toEqual({
+      accessories: { used: 42, available: 43 },
+      components: { used: 8, available: 7 },
     })
   })
 

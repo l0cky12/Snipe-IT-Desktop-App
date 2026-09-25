@@ -229,7 +229,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   async function allRows<T>(path: string): Promise<T[]> {
     const rows: T[] = []
     for (let total = Infinity; rows.length < total; ) {
-      const page = await request<{ total: number; rows: T[] }>(`${path}?limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
+      const page = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
       if (isError(page)) throw new Error(reason(page.messages))
       if (!page.rows.length) break
       total = page.total
@@ -341,6 +341,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
       // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
       const assets = wants('assets', 'overdue', 'expiring') ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
+      // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
+      const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined
       // Without status labels the segments just have no color.
       const colors = wants('assets')
         ? allRows<{ id: number; color: string | null }>('/statuslabels').then((rows) => new Map<number | null, string>(rows.flatMap((l) => (l.color ? [[l.id, l.color]] : []))), () => new Map())
@@ -349,9 +352,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         !pieces.includes(piece) ? [] : [piece, await work().catch((e: Error) => ({ error: e.message }))]
       const entries = await Promise.all([
         entry('assets', async () => {
-          const [list, color] = await Promise.all([assets!, colors!])
+          const [list, shelved, color] = await Promise.all([assets!, archived!, colors!])
+          const listed = new Set(list.map((a) => a.id))
           const segments = new Map<string, AssetSegment>()
-          for (const a of list) {
+          for (const a of [...list, ...shelved.filter((a) => !listed.has(a.id))]) {
             const s = segments.get(a.status)
             if (s) s.count++, s.assets.push(toSummary(a))
             else segments.set(a.status, { status: a.status, statusMeta: a.statusMeta, color: color.get(a.statusId) ?? null, count: 1, assets: [toSummary(a)] })
@@ -365,11 +369,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),
         ...Object.entries(QUANTITIES).map(([piece, [path, whole, free]]) =>
-          entry(piece as DashboardPiece, async () => (await allRows<Record<string, number>>(path)).reduce((sum, r) => {
+          entry(piece as DashboardPiece, async () => (await allRows<Record<string, number | null>>(path)).reduce<Split>((sum, r) => {
             // An older Snipe-IT may not send a field; say so rather than show a wrong number.
-            for (const field of [whole, free])
-              if (typeof r[field] !== 'number') throw new Error(`Snipe-IT didn't send "${field}" for ${path.slice(1)}; it may be too old for this chart.`)
-            return { used: sum.used + r[whole] - r[free], available: sum.available + r[free] }
+            // A quantity of 0 arrives as null (Accessories, Components), so null counts as 0.
+            const [all, left] = [whole, free].map((field) => {
+              if (r[field] !== null && typeof r[field] !== 'number') throw new Error(`Snipe-IT didn't send "${field}" for ${path.slice(1)}; it may be too old for this chart.`)
+              return r[field] ?? 0
+            })
+            return { used: sum.used + all - left, available: sum.available + left }
           }, { used: 0, available: 0 }))),
         // Holding: at least one Asset, License seat or Accessory checked out. Consumables never come back, so they don't count.
         entry('users', async () => {
