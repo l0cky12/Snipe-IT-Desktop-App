@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { toSummary, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type StatusLabel } from '../../main/snipeit'
-
-const configError = new URLSearchParams(location.search).get('configError')
+import type { Settings } from '../../main/config'
+import { SettingsPage } from './SettingsPage'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -19,6 +19,10 @@ const StatusChip = ({ asset }: { asset: AssetSummary }) => (
 const RECENT_MAX = 20
 
 export function App() {
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const [locations, setLocations] = useState<StatusLabel[]>([])
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [showDashboard, setShowDashboard] = useState(false)
@@ -34,10 +38,22 @@ export function App() {
   const latest = useRef(0)
 
   useEffect(() => search.current?.focus(), [])
-  // ponytail: if the status list can't load, the dropdown offers only the Asset's current status; Checkin still works.
   useEffect(() => {
-    if (!configError) window.snipeIt.statusLabels().then(setStatusLabels, () => {})
+    window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
+  useEffect(() => {
+    let stale = false
+    if (settings?.hasToken) {
+      // Keep the Asset's current status available if loading labels fails.
+      window.snipeIt.statusLabels().then((v) => !stale && setStatusLabels(v), () => {})
+      window.snipeIt.locations().then((v) => !stale && setLocations(v), () => {})
+    }
+    return () => { stale = true }
+  }, [settings])
+
+  function saved(value: Settings) {
+    latest.current++; setSettings(value); setAsset(null); setRecent([]); setMatches([]); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
+  }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
   async function run(work: (isStale: () => boolean) => Promise<void>) {
@@ -56,6 +72,7 @@ export function App() {
   async function open(id: number, isStale: () => boolean) {
     const full = await window.snipeIt.getAsset(id)
     if (isStale()) return
+    setShowSettings(false)
     setAsset(full)
     setShowDashboard(false)
     setOpened((n) => n + 1)
@@ -97,20 +114,12 @@ export function App() {
 
   const selected = showDashboard ? undefined : asset?.id
 
-  if (configError)
-    return (
-      <div className="fatal">
-        <h1>Can't start: config.json problem</h1>
-        <p>{configError}</p>
-        <p className="dim">Fix config.json at that path, then restart the app.</p>
-      </div>
-    )
-
   return (
     <div className="layout">
       <aside className="rail">
         <form onSubmit={onSubmit}>
           <input
+            disabled={!settings?.hasToken || showSettings}
             ref={search}
             className="search"
             value={query}
@@ -120,7 +129,7 @@ export function App() {
           />
         </form>
         {/* Bumping `latest` discards an open still loading, so it can't pull the Operator off the dashboard. */}
-        <button className={`nav${showDashboard ? ' sel' : ''}`} onClick={() => (latest.current++, setShowDashboard(true))}>
+        <button disabled={!settings?.hasToken} className={`nav${showDashboard && !showSettings ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setShowDashboard(true))}>
           Dashboard
         </button>
         {message.text && (
@@ -132,8 +141,9 @@ export function App() {
           {matches.length > 0 && <AssetList label={`Matches (${matches.length})`} assets={matches} selected={selected} onPick={pick} />}
           {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
         </div>
+        <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><span aria-hidden="true">⚙</span> Settings</button>
       </aside>
-      <main className="sheet">{showDashboard ? <DashboardView onPick={pick} /> : asset ? <AssetSheet key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : showDashboard ? <DashboardView onPick={pick} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -157,7 +167,8 @@ function AssetList(props: { label: string; assets: AssetSummary[]; selected?: nu
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
-function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: AssetWithHistory; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+  const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
   const [statusId, setStatusId] = useState(a.statusId)
   const [note, setNote] = useState('')
@@ -171,7 +182,7 @@ function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
-    await props.onCheckin(a.id, { statusId: statusId ?? undefined, note })
+    await props.onCheckin(a.id, { statusId: statusId ?? undefined, locationId, note })
     setBusy(false)
   }
 
@@ -188,6 +199,11 @@ function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel
           <option key={l.id} value={l.id}>{l.name}</option>
         ))}
       </select>
+      <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
+        <option value="">Keep current Location</option>
+        {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
+        {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
       <input value={note} onChange={(e) => setNote(e.target.value)} disabled={off} placeholder="Note (optional)" aria-label="Checkin note" />
       <button disabled={off} title={a.assignee ? undefined : 'Not checked out'}>
         {busy ? 'Checking in…' : 'Checkin'}
@@ -196,7 +212,7 @@ function CheckinForm(props: { asset: AssetWithHistory; statusLabels: StatusLabel
   )
 }
 
-function CheckoutForm(props: { asset: AssetWithHistory; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
+function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset: AssetWithHistory; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
@@ -236,7 +252,7 @@ function CheckoutForm(props: { asset: AssetWithHistory; onCheckout: (id: number,
         <select
           value={targetType}
           // Drop the other kind's results so a User id is never sent as a Location (or vice versa).
-          onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setTarget(null), setFound([]))}
+          onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setTarget(e.target.value === 'location' && props.defaultLocation ? { ...props.defaultLocation, detail: '' } : null), setText(e.target.value === 'location' ? props.defaultLocation?.name ?? '' : ''), setFound([]))}
           aria-label="Check out to"
         >
           <option value="user">User</option>
@@ -271,7 +287,9 @@ function CheckoutForm(props: { asset: AssetWithHistory; onCheckout: (id: number,
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout }: {
+function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations }: {
+  defaultLocation: StatusLabel | null
+  locations: StatusLabel[]
   asset: AssetWithHistory
   statusLabels: StatusLabel[]
   onCheckin: (id: number, o: CheckinOptions) => Promise<void>
@@ -312,9 +330,9 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout }: {
             {checkingOut ? 'Cancel' : 'Checkout…'}
           </button>
         </div>
-        <CheckinForm asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
+        <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
-      {checkingOut && a.checkoutAllowed && <CheckoutForm asset={a} onCheckout={onCheckout} />}
+      {checkingOut && a.checkoutAllowed && <CheckoutForm defaultLocation={defaultLocation} asset={a} onCheckout={onCheckout} />}
       <div className="grid">
         {facts.map(([k, v, mono]) => (
           <div className="cell" key={k}>

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createSnipeIt, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -505,4 +505,25 @@ describe('dashboard (today is 2026-09-24)', () => {
     const { fetch } = fakeFetch({ '/hardware': { body: denied } })
     await expect(createSnipeIt(config, fetch).dashboard()).rejects.toThrow('You do not have permission.')
   })
+})
+
+it('tests authentication before reporting connection success and detects the version', async () => {
+  const { fetch } = fakeFetch({ '/users/me': { body: { id: 1 } }, '/version': { body: { version: 'v8.3.0' } } })
+  expect(await createSnipeIt(config, fetch).testConnection()).toEqual({ version: 'v8.3.0' })
+  const denied = fakeFetch({ '/users/me': { status: 401, body: {} } })
+  await expect(createSnipeIt(config, denied.fetch).testConnection()).rejects.toThrow('rejected your API key')
+  const older = fakeFetch({ '/users/me': { body: { id: 1 } } })
+  expect(await createSnipeIt(config, older.fetch).testConnection()).toEqual({ version: 'Unavailable' })
+})
+
+it('sends the selected Checkin Location to Snipe-IT', async () => {
+  const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: chromebook }, '/hardware/4812/checkin': { body: { status: 'success' } } })
+  await createSnipeIt(config, fetch).checkin(4812, { locationId: 9 })
+  expect(requests.at(-1)?.body).toEqual({ status_id: 2, location_id: 9 })
+})
+
+it('loads every page of Locations for the default dropdown', async () => {
+  const fetch = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ total: 2, rows: String(url).includes('offset=0') ? [{ id: 1, name: 'Library' }] : [{ id: 2, name: 'Office' }] })))
+  expect(await createSnipeIt(config, fetch).locations()).toEqual([{ id: 1, name: 'Library' }, { id: 2, name: 'Office' }])
+  expect(fetch).toHaveBeenCalledTimes(2)
 })
