@@ -135,3 +135,23 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(-
 .settings-page .clear-token { color: var(--red); background: transparent; }
 .settings-page .settings-success { color: #67cb7b; }
 .head { flex-wrap: wrap; }
+
+/* Lists: a filter bar, a sortable table, Quick Actions per Asset row, a pager. */
+.nav.sub { padding-left: 24px; font-weight: 500; }
+.filters { flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+.filters input { flex: 1; min-width: 180px; }
+.actions button.quiet, .quick button { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 500; }
+.list-table td, .list-table th { vertical-align: middle; white-space: nowrap; padding: 5px 12px; }
+.list-table tr.sel td { background: var(--panel2); }
+.list-table .sort { all: unset; cursor: pointer; }
+.list-table .sort:hover, .list-table .sort:focus-visible { color: var(--text); }
+/* Pinned to the right so the Quick Actions stay in reach when a wide List scrolls sideways. */
+.list-table .quick { position: sticky; right: 0; background: var(--bg); box-shadow: -1px 0 0 var(--line); }
+.list-table tr.sel .quick { background: var(--panel2); }
+.quick button { font: 11px var(--mono); padding: 2px 6px; border: 1px solid var(--line); border-radius: 3px; cursor: pointer; margin-right: 4px; }
+.quick button.on { border-color: var(--accent); color: var(--accent); }
+.quick button:disabled { opacity: .35; cursor: default; }
+.quick-form td { background: var(--panel2); padding: 8px 18px; }
+.quick-form .checkout { padding: 0; border: 0; background: none; }
+.list-message { margin: 10px 18px 0; color: var(--green); }
+.pager { justify-content: flex-end; align-items: center; padding: 10px 18px; }

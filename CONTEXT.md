@@ -48,7 +48,23 @@ _Avoid_: admin, user (User is the Assignee kind)
 The Snipe-IT activity log for one Asset: every Checkout, Checkin, and edit, with who did it and when.
 
 **Lookup**:
-Finding an Asset by typing or scanning into the single search box. A barcode scan is just fast typing.
+Finding things by typing or scanning into the single search box. An exact Asset Tag opens that Asset; anything else finds matching Assets, Users, Locations, and Asset Models. A barcode scan is just fast typing.
+_Avoid_: full-text search (Snipe-IT matches fields, it doesn't index text)
+
+**Asset Model**:
+The make and model an Asset is an instance of (e.g. "HP Chromebook 14 G7"). Many Assets share one Asset Model.
+_Avoid_: model (alone), product, type
+
+**Activity Report**:
+The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, and edit of anything, with who did it and when. History is the same log for one Asset.
+_Avoid_: report (alone), audit log
+
+**List**:
+A page listing one kind (Assets, Users, Locations, Asset Models, or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide.
+_Avoid_: tab, grid, table
+
+**Quick Action**:
+A Checkout, Checkin, or status change done from an Asset's row in a List, without opening the Asset.
 
 **License**:
 A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise.
@@ -73,6 +89,7 @@ _Avoid_: stats, widgets
 
 - An **Asset** has at most one **Assignee** at a time
 - An **Asset** has exactly one **Asset Tag** and zero or one **Serial**
+- An **Asset** belongs to exactly one **Asset Model**
 - Every **Checkout** and **Checkin** adds an entry to the Asset's **History**, credited to the **Operator**
 - An Asset can only be **Overdue** if it was given an **Expected Checkin**
 - Only Assets have a status; the other kinds are counted by quantity

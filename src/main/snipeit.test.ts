@@ -47,19 +47,22 @@ const snipeItWith = (hardware: object, history: { status?: number; body: unknown
 const notFound = { status: 'error', messages: 'Asset does not exist.', payload: null }
 
 // A fake fetch that answers from a path → JSON map and records the paths it was asked for,
-// plus every request as Snipe-IT would receive it (method, path, parsed JSON body).
+// plus every request as Snipe-IT would receive it (method, path, parsed JSON body), and each query string's parameters.
 type FakeRequest = { method: string; path: string; body: unknown }
 function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
   const calls: string[] = []
   const requests: FakeRequest[] = []
+  const queries: Record<string, string>[] = []
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
-    const path = new URL(String(input)).pathname.replace('/api/v1', '')
+    const url = new URL(String(input))
+    const path = url.pathname.replace('/api/v1', '')
     calls.push(path)
+    queries.push(Object.fromEntries(url.searchParams))
     requests.push({ method: init?.method ?? 'GET', path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
     const route = routes[path] ?? { status: 404, body: notFound }
     return new Response(JSON.stringify(route.body), { status: route.status ?? 200 })
   }
-  return { fetch: fetch as typeof globalThis.fetch, calls, requests }
+  return { fetch: fetch as typeof globalThis.fetch, calls, requests, queries }
 }
 
 describe('lookup', () => {
@@ -104,7 +107,7 @@ describe('lookup', () => {
   it('nothing matching the tag or the text search finds no Assets', async () => {
     const { fetch } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
     const result = await createSnipeIt(config, fetch).lookup('NOPE-1')
-    expect(result).toEqual({ exact: false, assets: [] })
+    expect(result.assets).toEqual([])
   })
 
   it("a text search Snipe-IT rejects is thrown as Snipe-IT's message", async () => {
@@ -113,10 +116,38 @@ describe('lookup', () => {
     await expect(createSnipeIt(config, fetch).lookup('cb-lib')).rejects.toThrow('You do not have permission.')
   })
 
+  it('a text search also finds Users, Locations, and Asset Models, each told apart by its detail', async () => {
+    const { fetch } = fakeFetch({
+      '/hardware': { body: { total: 0, rows: [] } },
+      '/users': { body: { total: 1, rows: [{ id: 311, name: 'Jordan Reyes', username: 'jreyes' }] } },
+      '/locations': { body: { total: 1, rows: [{ id: 12, name: 'Room 204' }] } },
+      '/models': { body: { total: 1, rows: [{ id: 7, name: 'HP Chromebook 14 G7', model_number: '14-G7' }] } },
+    })
+    const result = await createSnipeIt(config, fetch).lookup('re')
+    expect(!result.exact && result.others).toEqual([
+      { kind: 'users', rows: [{ id: 311, name: 'Jordan Reyes', detail: 'jreyes' }] },
+      { kind: 'locations', rows: [{ id: 12, name: 'Room 204', detail: '' }] },
+      { kind: 'models', rows: [{ id: 7, name: 'HP Chromebook 14 G7', detail: '14-G7' }] },
+    ])
+  })
+
+  it("a kind the key can't search says why, without hiding the Assets or the other kinds", async () => {
+    const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
+    const { fetch } = fakeFetch({
+      '/hardware': { body: { total: 1, rows: [chromebook] } },
+      '/users': { body: denied },
+      '/locations': { body: { total: 0, rows: [] } },
+      '/models': { body: { total: 0, rows: [] } },
+    })
+    const result = await createSnipeIt(config, fetch).lookup('cb')
+    expect(result.assets).toHaveLength(1)
+    expect(!result.exact && result.others[0]).toEqual({ kind: 'users', error: 'You do not have permission.' })
+  })
+
   it('a blank query finds nothing without asking Snipe-IT', async () => {
     const { fetch, calls } = fakeFetch({})
     const result = await createSnipeIt(config, fetch).lookup('   ')
-    expect(result).toEqual({ exact: false, assets: [] })
+    expect(result).toEqual({ exact: false, assets: [], others: [] })
     expect(calls).toEqual([])
   })
 })
@@ -700,4 +731,83 @@ it('loads every page of Locations for the default dropdown', async () => {
   const fetch = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ total: 2, rows: String(url).includes('offset=0') ? [{ id: 1, name: 'Library' }] : [{ id: 2, name: 'Office' }] })))
   expect(await createSnipeIt(config, fetch).locations()).toEqual([{ id: 1, name: 'Library' }, { id: 2, name: 'Office' }])
   expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+describe('list', () => {
+  it('asks for one page of 50 from the offset, with the search, and returns the total and rows in app vocabulary', async () => {
+    const raw = { id: 311, name: 'Jordan Reyes', username: 'jreyes', email: null, department: { id: 2, name: 'Science' }, location: null, assets_count: 2 }
+    const { fetch, calls, queries } = fakeFetch({ '/users': { body: { total: 120, rows: [raw] } } })
+    const page = await createSnipeIt(config, fetch).list('users', { search: ' rey ', offset: 50 })
+    expect(calls).toEqual(['/users'])
+    expect(queries[0]).toEqual({ limit: '50', offset: '50', search: 'rey' })
+    expect(page).toEqual({ total: 120, rows: [{ id: 311, name: 'Jordan Reyes', username: 'jreyes', email: '', department: 'Science', location: '', assets: 2 }] })
+  })
+
+  it('Assets rows are full Assets, so Quick Actions know what is allowed', async () => {
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 1, rows: [chromebook] } } })
+    const page = await createSnipeIt(config, fetch, today).list('assets')
+    expect(page.rows[0]).toMatchObject({ assetTag: 'NOMMA-004812', checkoutAllowed: false, assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+  })
+
+  it('filters are sent as Snipe-IT filters; "checked out to this User" becomes assigned_to and assigned_type', async () => {
+    const { fetch, queries } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('assets', { filters: { status: 'RTD', location_id: '12', model_id: '', user_id: '311' } })
+    expect(queries[0]).toEqual({ limit: '50', offset: '0', status: 'RTD', location_id: '12', assigned_to: '311', assigned_type: 'App\\Models\\User' })
+  })
+
+  it.each([
+    ['a filter the List does not have', { department_id: '2' }],
+    ['an id that is not a positive whole number', { location_id: '12&admin=1' }],
+    ['a value outside the known ones', { status: 'Deleted' }],
+    ['a value that is not text', { location_id: 12 as unknown as string }],
+  ])('%s is refused without asking Snipe-IT', async (_name, filters) => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).list('assets', { filters })).rejects.toThrow('Invalid filter')
+    expect(calls).toEqual([])
+  })
+
+  it("sorts by a row field under Snipe-IT's name for it; a field it can't sort by is left out", async () => {
+    const { fetch, queries } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.list('assets', { sort: 'assignee', order: 'asc' })
+    await snipeIt.list('assets', { sort: 'warrantyEnd', order: 'asc' })
+    expect(queries[0]).toMatchObject({ sort: 'assigned_to', order: 'asc' })
+    expect(queries[1]).not.toHaveProperty('sort')
+  })
+
+  it('an unknown List is refused without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).list('constructor' as 'assets')).rejects.toThrow('Unknown list')
+    expect(calls).toEqual([])
+  })
+
+  it('Activity Report rows are History entries plus the item acted on', async () => {
+    const { fetch, queries } = fakeFetch({ '/reports/activity': { body: activity } })
+    const page = await createSnipeIt(config, fetch).list('activity', { filters: { action_type: 'checkin from' } })
+    expect(queries[0]).toMatchObject({ action_type: 'checkin from' })
+    expect(page.rows[1]).toEqual({
+      id: 7, when: '2026-08-17 15:40', action: 'Checkin', operator: 'E. Caldwell', detail: 'from Sam Whitaker', note: '"keyboard sticky"',
+      item: { type: 'asset', id: 4812, name: 'CB-LIB-012' },
+    })
+  })
+
+  it("a List Snipe-IT refuses is thrown as Snipe-IT's reason", async () => {
+    const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
+    const { fetch } = fakeFetch({ '/models': { body: denied } })
+    await expect(createSnipeIt(config, fetch).list('models')).rejects.toThrow('You do not have permission.')
+  })
+})
+
+describe('updateStatus', () => {
+  it('PATCHes only the new status onto the Asset', async () => {
+    const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: { status: 'success', messages: 'Asset updated.' } } })
+    await createSnipeIt(config, fetch).updateStatus(4812, 3)
+    expect(requests).toEqual([{ method: 'PATCH', path: '/hardware/4812', body: { status_id: 3 } }])
+  })
+
+  it("a status Snipe-IT refuses is thrown as Snipe-IT's reason", async () => {
+    const refused = { status: 'error', messages: { status_id: ['That status is not deployable.'] }, payload: null }
+    const { fetch } = fakeFetch({ '/hardware/4812': { body: refused } })
+    await expect(createSnipeIt(config, fetch).updateStatus(4812, 3)).rejects.toThrow('That status is not deployable.')
+  })
 })

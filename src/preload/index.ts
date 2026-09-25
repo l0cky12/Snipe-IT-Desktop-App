@@ -20,6 +20,9 @@ const snipeIt: SnipeIt = {
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
   dashboard: call('snipeit:dashboard'),
+  list: call('snipeit:list'),
+  names: call('snipeit:names'),
+  updateStatus: call('snipeit:updateStatus'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)
