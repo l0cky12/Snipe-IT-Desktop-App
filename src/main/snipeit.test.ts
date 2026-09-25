@@ -759,6 +759,7 @@ describe('list', () => {
     ['a filter the List does not have', { department_id: '2' }],
     ['an id that is not a positive whole number', { location_id: '12&admin=1' }],
     ['a value outside the known ones', { status: 'Deleted' }],
+    ['a value that is not text', { location_id: 12 as unknown as string }],
   ])('%s is refused without asking Snipe-IT', async (_name, filters) => {
     const { fetch, calls } = fakeFetch({})
     await expect(createSnipeIt(config, fetch).list('assets', { filters })).rejects.toThrow('Invalid filter')

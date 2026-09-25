@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEMS, LIST_PAGE, LIST_SORTS, type Asset, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, type Asset, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
 import { CheckinForm, CheckoutForm, StatusChip, statusChoices } from './App'
 
-export const listName: Record<ListKind, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Reports' }
+export const listName: Record<ListKind, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report' }
 
 // A List's columns: the first is always shown and opens the row; the rest the Operator can hide. hidden = hidden until shown.
 type Column<K extends ListKind> = { key: keyof ListRows[K] & string; label: string; hidden?: true; cell?: (row: ListRows[K]) => ReactNode }
@@ -77,7 +77,7 @@ const namesNeeded: Record<ListKind, (keyof Names)[]> = { assets: ['models', 'cat
 function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], locations: StatusLabel[]): Filter[] {
   switch (kind) {
     case 'assets': return [
-      { key: 'status', label: 'Any state', options: [{ value: 'Deployed', label: 'Checked out' }, { value: 'RTD', label: 'Available' }] },
+      { key: 'status', label: 'Checked out or available', options: [{ value: 'Deployed', label: 'Checked out' }, { value: 'RTD', label: 'Available' }] },
       { key: 'status_id', label: 'Any status', options: toOptions(statusLabels) },
       { key: 'location_id', label: 'Any Location', options: toOptions(locations) },
       { key: 'model_id', label: 'Any Asset Model', options: toOptions(names.models) },
@@ -90,7 +90,6 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
     case 'models': return [{ key: 'category_id', label: 'Any category', options: toOptions(names.categories) }]
     case 'activity': return [
       { key: 'action_type', label: 'Any action', options: ACTIVITY_ACTIONS.map((a) => ({ value: a, label: a === 'checkin from' ? 'Checkin' : capital(a) })) },
-      { key: 'item_type', label: 'Any item', options: ACTIVITY_ITEMS.map((i) => ({ value: i, label: capital(i) })) },
     ]
     default: return []
   }
@@ -98,6 +97,8 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
 
 /** What opening a row does: an Asset opens its sheet; a User, Location or Asset Model opens the Assets List filtered to it. */
 export type Drill = { filters: Record<string, string>; label?: string }
+export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: string }): Drill =>
+  kind === 'users' ? { filters: { user_id: String(id) }, label: `Checked out to ${name}` } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
 
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 
@@ -127,6 +128,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
 
   // Search after a short pause in typing, from the first page.
   useEffect(() => {
+    if (text === search) return
     const timer = setTimeout(() => (setSearch(text), setOffset(0)), 300)
     return () => clearTimeout(timer)
   }, [text])
@@ -134,7 +136,13 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
     let stale = false
     setLoading(true)
     window.snipeIt.list(kind, { search, filters, sort: sort?.key, order: sort?.order, offset }).then(
-      (p) => !stale && (setPage(p), setMessage((m) => (m.error ? { text: '' } : m))),
+      (p) => {
+        if (stale) return
+        // A Quick Action can shrink the List under the current page; step back to the last page that has rows.
+        if (offset > 0 && offset >= p.total) return setOffset(Math.max(0, Math.ceil(p.total / LIST_PAGE) - 1) * LIST_PAGE)
+        setPage(p)
+        setMessage((m) => (m.error ? { text: '' } : m))
+      },
       (e: Error) => !stale && (setPage(null), setMessage({ text: e.message, error: true })),
     ).finally(() => !stale && setLoading(false))
     return () => { stale = true }
@@ -169,9 +177,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
 
   function open(row: ListRows[ListKind]): (() => void) | undefined {
     if (kind === 'assets') return () => onOpenAsset(row.id)
-    if (kind === 'users') return () => onDrill({ filters: { user_id: String(row.id) }, label: `Checked out to ${(row as ListRows['users']).name}` })
-    if (kind === 'locations') return () => onDrill({ filters: { location_id: String(row.id) } })
-    if (kind === 'models') return () => onDrill({ filters: { model_id: String(row.id) } })
+    if (kind !== 'activity') return () => onDrill(drillTo(kind, row as ListRows[OtherKind]))
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
   }
@@ -190,7 +196,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   return (
     <>
       <header className="head">
-        <h1>{kind === 'activity' ? 'Activity Report' : listName[kind]}</h1>
+        <h1>{listName[kind]}</h1>
         <span className="dim mono">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
@@ -239,7 +245,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                   : c.label}
               </th>
             ))}
-            {kind === 'assets' && <th>Quick Actions</th>}
+            {kind === 'assets' && <th className="quick">Quick Actions</th>}
           </tr>
         </thead>
         <tbody>

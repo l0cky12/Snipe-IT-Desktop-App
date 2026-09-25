@@ -45,8 +45,10 @@ export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: numbe
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
 
+/** The kinds Lookup searches besides Assets. */
+export type OtherKind = 'users' | 'locations' | 'models'
 /** Lookup's matches of one other kind, or why that kind couldn't be searched (e.g. the key can't read Users). */
-export type Matches = { kind: 'users' | 'locations' | 'models'; rows: CheckoutTarget[] } | { kind: 'users' | 'locations' | 'models'; error: string }
+export type Matches = { kind: OtherKind; rows: CheckoutTarget[] } | { kind: OtherKind; error: string }
 
 /** An exact Asset Tag hit carries the full Asset; a text search carries Asset summaries and the other kinds' matches. */
 export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[]; others: Matches[] }
@@ -215,9 +217,9 @@ export const LIST_SORTS = {
   activity: { when: 'created_at', action: 'action_type', operator: 'created_by' },
 } satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
 
-// Snipe-IT action_type and item_type values the Activity Report can be filtered by.
+// Snipe-IT action_type values the Activity Report can be filtered by.
+// Not item_type: Snipe-IT only applies it together with one item_id.
 export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
-export const ACTIVITY_ITEMS = ['asset', 'accessory', 'license', 'consumable', 'component'] as const
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
 // user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type).
@@ -236,7 +238,7 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
     row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: r.manufacturer?.name ?? '', category: r.category?.name ?? '', assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
   },
   activity: {
-    path: '/reports/activity', filters: { action_type: ACTIVITY_ACTIONS, item_type: ACTIVITY_ITEMS },
+    path: '/reports/activity', filters: { action_type: ACTIVITY_ACTIONS },
     row: (r: RawActivity) => ({ id: r.id, ...toHistoryEntry(r), item: r.item ? { type: r.item.type, id: r.item.id, name: r.item.name } : null }),
   },
 }
@@ -304,7 +306,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
   // detail tells namesakes apart: a User's username, an Asset Model's model number.
-  async function searchTargets(kind: 'users' | 'locations' | 'models', text: string): Promise<CheckoutTarget[]> {
+  async function searchTargets(kind: OtherKind, text: string): Promise<CheckoutTarget[]> {
     const q = text.trim()
     if (!q) return []
     const body = await request<{ rows: { id: number; name: string; username?: string; model_number?: string | null }[] }>(`/${kind}?search=${encodeURIComponent(q)}&limit=20`)
@@ -387,11 +389,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // One page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
     async list<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery = {}): Promise<ListPage<K>> {
       if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
+      if ((search !== undefined && typeof search !== 'string') || typeof filters !== 'object' || filters === null) throw new Error('Invalid search or filters')
       const spec = LISTS[kind]
       const params = new URLSearchParams({ limit: String(LIST_PAGE), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
       if (search?.trim()) params.set('search', search.trim())
       for (const [key, value] of Object.entries(filters)) {
-        if (value === '') continue
+        if (value === '' || value === undefined) continue
+        if (typeof value !== 'string') throw new Error(`Invalid filter: ${key}`)
         const allowed = Object.hasOwn(spec.filters, key) ? spec.filters[key] : undefined
         if (!allowed || !(allowed === 'id' ? /^[1-9]\d*$/.test(value) : allowed.includes(value))) throw new Error(`Invalid filter: ${key}`)
         if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')

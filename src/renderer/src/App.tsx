@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
-import { ListView, listName, type Drill } from './ListView'
+import { ListView, drillTo, listName, type Drill } from './ListView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -133,8 +133,6 @@ export function App() {
   const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   // Bumping `latest` discards an open still loading, so it can't pull the Operator off the page they chose.
   const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: ++latest.current }))
-  const drillFrom = (m: Matches, t: CheckoutTarget) =>
-    go('assets', m.kind === 'users' ? { filters: { user_id: String(t.id) }, label: `Checked out to ${t.name}` } : { filters: { [m.kind === 'locations' ? 'location_id' : 'model_id']: String(t.id) } })
   const page = !showSettings && view?.page
 
   return (
@@ -170,7 +168,7 @@ export function App() {
               <div key={m.kind}>
                 <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
                 {m.rows.map((t) => (
-                  <button key={t.id} className="row" onClick={() => drillFrom(m, t)}>
+                  <button key={t.id} className="row" onClick={() => go('assets', drillTo(m.kind, t))}>
                     <span className="t">{t.name}</span>
                     {t.detail && <span className="n mono">{t.detail}</span>}
                   </button>
