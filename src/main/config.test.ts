@@ -34,19 +34,23 @@ it('saves only encrypted credentials, reloads preferences, keeps a blank token, 
   expect(readFileSync(path, 'utf8')).not.toContain('encryptedToken')
 })
 
-it('refuses unavailable secure storage without overwriting saved settings', () => {
+it('without secure storage keeps the token in memory only, so the app is still usable', () => {
   const { path, storage, store } = setup()
-  store.save(input)
-  const previous = readFileSync(path, 'utf8')
   storage.isEncryptionAvailable.mockReturnValue(false)
-  expect(() => store.save(input)).toThrow('OS secure storage is unavailable')
-  expect(readFileSync(path, 'utf8')).toBe(previous)
+  expect(store.save(input)).toMatchObject({ hasToken: true, sessionOnly: true, defaultLocation: input.defaultLocation })
+  expect(storage.encryptString).not.toHaveBeenCalled()
+  expect(readFileSync(path, 'utf8')).not.toContain('secret-token')
+  expect(store.credentials().apiKey).toBe('secret-token')
+  // A fresh launch reads only the file: the token is gone.
+  expect(createSettingsStore(path, storage, '0.1.0').get().hasToken).toBe(false)
+  expect(store.clearToken().hasToken).toBe(false)
 })
 
-it.skipIf(process.platform !== 'linux')('rejects the Linux basic_text fallback', () => {
+it.skipIf(process.platform !== 'linux')('treats the Linux basic_text fallback as unavailable', () => {
   const { storage, store } = setup()
   storage.getSelectedStorageBackend.mockReturnValue('basic_text')
-  expect(() => store.save(input)).toThrow('OS secure storage is unavailable')
+  expect(store.save(input).sessionOnly).toBe(true)
+  expect(storage.encryptString).not.toHaveBeenCalled()
 })
 
 it('never sends the saved token to a changed server and validates URL and Location', () => {

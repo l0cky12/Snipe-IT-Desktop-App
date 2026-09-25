@@ -35,7 +35,7 @@ Open the gear at the bottom left. Enter your server URL and personal API token, 
 
 The default Location pre-fills Checkin and Checkout to a Location; each action can override it. Asset creation is not currently supported. Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
 
-Credentials use Electron safeStorage: macOS Keychain, Windows DPAPI, or the Linux system password store. Only encrypted token bytes are written to `settings.json` in Electron's per-user app data directory. Linux's `basic_text` fallback is rejected; an unlocked supported password store is required. The saved token is never returned to the renderer. Log out / clear token removes the encrypted token.
+Credentials use Electron safeStorage: macOS Keychain, Windows DPAPI, or the Linux system password store. Only encrypted token bytes are written to `settings.json` in Electron's per-user app data directory. With no usable password store (including Linux's `basic_text` fallback), the token is kept in memory for the session only and must be re-entered after restarting. The saved token is never returned to the renderer. Log out / clear token removes the encrypted token.
 
 Legacy `config.json` is no longer read. Enter those credentials in Settings, then remove your old plaintext config file. Settings changes take effect without restarting and clear previous server data from the screen.
 
