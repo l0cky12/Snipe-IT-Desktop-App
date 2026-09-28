@@ -2,5 +2,5 @@ node_modules/
 dist/
 # Operator's Snipe-IT URL + personal API key — never commit
 config.json
-.scratch/*/logs/
+.scratch/
 out/
