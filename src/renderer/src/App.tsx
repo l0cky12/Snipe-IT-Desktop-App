@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
 import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -23,6 +24,7 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
+const listIcon: Record<ListKind, LucideIcon> = { assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity }
 const otherName = { users: 'Users', locations: 'Locations', models: 'Asset Models' } as const
 
 // What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
@@ -138,46 +140,53 @@ export function App() {
   return (
     <div className="layout">
       <aside className="rail">
-        <form onSubmit={onSubmit}>
-          <input
-            disabled={!settings?.hasToken || showSettings}
-            ref={search}
-            className="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Scan / search…"
-            aria-label="Scan or type an Asset Tag"
-          />
-        </form>
-        <button disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setView({ page: 'dashboard' }))}>
-          Dashboard
-        </button>
-        {LISTS.map((k) => (
-          <button key={k} disabled={!settings?.hasToken} className={`nav sub${page === k ? ' sel' : ''}`} onClick={() => go(k)}>{listName[k]}</button>
-        ))}
-        {message.text && (
-          <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
-            {message.text}
-          </p>
-        )}
-        <div className="list">
-          {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={pick} />}
-          {others.map((m) => 'error' in m
-            ? <p key={m.kind} className="message">{otherName[m.kind]}: {m.error}</p>
-            : m.rows.length > 0 && (
-              <div key={m.kind}>
-                <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
-                {m.rows.map((t) => (
-                  <button key={t.id} className="row" onClick={() => go('assets', drillTo(m.kind, t))}>
-                    <span className="t">{t.name}</span>
-                    {t.detail && <span className="n mono">{t.detail}</span>}
-                  </button>
-                ))}
-              </div>
-            ))}
-          {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
+        <nav className="strip" aria-label="Pages">
+          <span className="logo" aria-hidden="true">S</span>
+          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setView({ page: 'dashboard' }))}>
+            <LayoutGrid size={20} />
+          </button>
+          {LISTS.map((k) => {
+            const Icon = listIcon[k]
+            return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
+          })}
+          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><SettingsIcon size={20} /></button>
+        </nav>
+        <div className="panel">
+          <form onSubmit={onSubmit}>
+            <ScanBarcode size={16} />
+            <input
+              disabled={!settings?.hasToken || showSettings}
+              ref={search}
+              className="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Scan / search…"
+              aria-label="Scan or type an Asset Tag"
+            />
+          </form>
+          {message.text && (
+            <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
+              {message.text}
+            </p>
+          )}
+          <div className="list">
+            {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={pick} />}
+            {others.map((m) => 'error' in m
+              ? <p key={m.kind} className="message">{otherName[m.kind]}: {m.error}</p>
+              : m.rows.length > 0 && (
+                <div key={m.kind}>
+                  <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
+                  {m.rows.map((t) => (
+                    <button key={t.id} className="row" onClick={() => go('assets', drillTo(m.kind, t))}>
+                      <span className="t">{t.name}</span>
+                      {t.detail && <span className="n mono">{t.detail}</span>}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
+          </div>
         </div>
-        <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><span aria-hidden="true">⚙</span> Settings</button>
       </aside>
       <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
