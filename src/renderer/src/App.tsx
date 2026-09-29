@@ -202,7 +202,8 @@ function AssetList(props: { label: string; assets: AssetSummary[]; selected?: nu
           <span className="mono t">{a.assetTag}</span>
           <StatusChip asset={a} />
           <span className="n">
-            {a.name || '—'} · {a.assignee?.name ?? 'Unassigned'}
+            <span>{a.name || '—'}</span>
+            <span>{a.assignee?.name ?? 'Unassigned'}</span>
           </span>
         </button>
       ))}
@@ -351,9 +352,10 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
   return (
     <>
       <header className="head">
-        <span className="mono dim">{a.assetTag}</span>
+        <span className="tag">{a.assetTag}</span>
         <h1>
-          {a.name} <span className="dim">— {a.model}</span>
+          {a.name || 'Unnamed Asset'}
+          <span className="sub">{a.model}</span>
         </h1>
         <StatusChip asset={a} />
         {a.overdueDays !== null && <span className="chip c-red">Overdue {a.overdueDays}d</span>}
@@ -401,7 +403,7 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
               <td>{h.operator}</td>
               <td>
                 {h.detail}
-                {h.note && <span className="note">{h.detail && ' · '}{h.note}</span>}
+                {h.note && <>{h.detail && ' '}<span className="note">{h.note}</span></>}
               </td>
             </tr>
           ))}

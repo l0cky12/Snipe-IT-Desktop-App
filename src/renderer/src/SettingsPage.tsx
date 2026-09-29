@@ -25,7 +25,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   }
 
   return <div className="settings-page">
-    <header><span className="eyebrow">WORKSPACE</span><h1>Settings</h1><p className="dim">Connect to Snipe-IT with your API token.</p></header>
+    <header><h1>Settings</h1><p className="dim">Connect to Snipe-IT with your API token.</p></header>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
       setApiKey(''); onSaved(saved); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
@@ -36,7 +36,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
           <label htmlFor="server-url">Snipe-IT server URL</label>
           <input id="server-url" type="url" required placeholder="https://snipeit.example.org" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setApiKey(''); setVersion('Not connected'); setMessage('') }} />
           <label htmlFor="api-token">API token</label>
-          <div className="connection-row"><input id="api-token" type="password" autoComplete="new-password" value={apiKey} placeholder={settings.hasToken && baseUrl === settings.baseUrl ? (settings.plaintext ? 'Saved (unencrypted)' : 'Saved securely') + ' · leave blank to keep' : 'Paste your API token'} onChange={(e) => { setApiKey(e.target.value); setMessage(''); setVersion('Not connected') }} />
+          <div className="connection-row"><input id="api-token" type="password" autoComplete="new-password" value={apiKey} placeholder={settings.hasToken && baseUrl === settings.baseUrl ? (settings.plaintext ? 'Saved (unencrypted)' : 'Saved securely') + '. Leave blank to keep it.' : 'Paste your API token'} onChange={(e) => { setApiKey(e.target.value); setMessage(''); setVersion('Not connected') }} />
             <button type="button" onClick={() => run(async () => {
               const result = await window.settings.test(input)
               setVersion(result.version); setMessage('Connected successfully. Credentials have not been saved yet.')
