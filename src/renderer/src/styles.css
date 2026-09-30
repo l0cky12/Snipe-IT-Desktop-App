@@ -244,3 +244,13 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .actions button.quiet.danger { color: var(--coral); }
 .choices { display: flex; flex-wrap: wrap; gap: 6px 16px; min-height: 40px; align-items: center; }
 .choices label { display: flex; align-items: center; gap: 6px; font: 500 14px var(--sans); color: var(--text); }
+.access-body { padding: 4px 28px 20px; display: grid; gap: 10px; }
+.access .message { margin: 6px 28px; }
+.chip-x { all: unset; cursor: pointer; margin-left: 6px; font-weight: 700; }
+.permissions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.permission-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 0 28px 28px; }
+.permission-areas fieldset { border: 1.5px solid var(--line); border-radius: var(--r-ctl); padding: 10px 14px; display: grid; gap: 6px; }
+.permission-areas legend { font: 600 14px var(--display); color: var(--heading); padding: 0 6px; }
+.permission-areas label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+/* Something the Operator can't do here and why: not an error, not a success. */
+.notice { margin: 14px 28px 0; padding: 12px 16px; border: 1.5px solid var(--tangerine); border-radius: var(--r-ctl); background: var(--panel); line-height: 1.5; }

@@ -962,7 +962,7 @@ describe('the other record kinds', () => {
     }
     const { fetch } = fakeFetch({ '/locations/12': { body: location } })
     expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
-      kind: 'locations', id: 12, name: 'Room 204',
+      kind: 'locations', id: 12, name: 'Room 204', can: { checkout: true, checkin: true, update: true, delete: true },
       fields: [
         { label: 'Parent', value: 'Main Campus', link: { kind: 'locations', id: 1 } },
         { label: 'Manager', value: 'Morgan Lee', link: { kind: 'users', id: 7 } },
@@ -1096,6 +1096,57 @@ describe('create, edit and delete', () => {
     expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/locations/12' })
     await expect(snipeIt.remove('assets', 4812)).rejects.toThrow('currently checked out')
     await expect(snipeIt.remove('categories' as 'assets', 1)).rejects.toThrow('Unknown record')
+  })
+})
+
+describe('permissions', () => {
+  it("what an Asset's key may do comes from Snipe-IT's available_actions; an older Snipe-IT that doesn't say allows it", async () => {
+    const limited = { ...chromebook, available_actions: { checkout: true, checkin: false, update: false, delete: false } }
+    expect((await snipeItWith(limited).getAsset(4812)).can).toEqual({ checkout: true, checkin: false, update: false, delete: false })
+    expect((await snipeItWith(chromebook).getAsset(4812)).can).toEqual({ checkout: true, checkin: true, update: true, delete: true })
+  })
+
+  it('only an account Snipe-IT lets read groups (a superuser) can manage permissions; other failures still say what went wrong', async () => {
+    const superuser = fakeFetch({ '/groups': { body: { total: 2, rows: [{ id: 1, name: 'IT Staff' }] } } })
+    expect(await createSnipeIt(config, superuser.fetch).canManagePermissions()).toBe(true)
+    const operator = fakeFetch({ '/groups': { status: 403, body: { status: 'error', messages: 'You do not have permission to access this area.' } } })
+    expect(await createSnipeIt(config, operator.fetch).canManagePermissions()).toBe(false)
+    const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, offline).canManagePermissions()).rejects.toThrow("Can't reach Snipe-IT")
+  })
+
+  it("a User's own permissions (granted or denied, not inherited) and their groups", async () => {
+    const user = { id: 311, name: 'Jordan Reyes', permissions: { 'reports.view': '1', 'assets.delete': '-1', 'users.view': '0' }, groups: { total: 1, rows: [{ id: 2, name: 'Library Aides' }] } }
+    const { fetch } = fakeFetch({ '/users/311': { body: user } })
+    expect(await createSnipeIt(config, fetch).userAccess(311)).toEqual({ permissions: { 'reports.view': '1', 'assets.delete': '-1' }, groups: [{ id: 2, name: 'Library Aides' }] })
+    const none = fakeFetch({ '/users/5': { body: { id: 5, name: 'New', permissions: null, groups: null } } })
+    expect(await createSnipeIt(config, none.fetch).userAccess(5)).toEqual({ permissions: {}, groups: [] })
+  })
+
+  it("a User's groups are set all at once; a group id that isn't a whole number is refused", async () => {
+    const { fetch, requests, calls } = fakeFetch({ '/users/311': { body: { status: 'success' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.setUserGroups(311, [1, 2])
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [1, 2] } })
+    await expect(snipeIt.setUserGroups(311, ['1; drop' as unknown as number])).rejects.toThrow('Invalid group id')
+    expect(calls).toHaveLength(1)
+  })
+
+  it("a group's permissions are read as granted or not, and saved as Snipe-IT's JSON; only permission keys are sent", async () => {
+    const { fetch, requests } = fakeFetch({
+      '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': 1, 'assets.delete': '0' } } },
+    })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
+    await snipeIt.saveGroup(2, 'Library Aides', { 'assets.view': '1', 'assets.checkin': '1' })
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/groups/2', body: { name: 'Library Aides', permissions: '{"assets.view":"1","assets.checkin":"1"}' } })
+    await expect(snipeIt.saveGroup(2, 'x', { 'assets.view"}': '1' })).rejects.toThrow('Invalid permission')
+    await expect(snipeIt.saveGroup(2, 'x', { superuser: 'yes' })).rejects.toThrow('Invalid permission')
+  })
+
+  it("a group Snipe-IT refuses to save says why, beside the field", async () => {
+    const { fetch } = fakeFetch({ '/groups/2': { body: { status: 'error', messages: { name: ['The name field is required.'] } } } })
+    expect(await createSnipeIt(config, fetch).saveGroup(2, '', {})).toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { name: 'The name field is required.' } })
   })
 })
 

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind } from '../../main/snipeit'
 import { drillLabel, singular, type Drill } from './ListView'
 import { DeleteButton } from './RecordForm'
+import { UserAccessSection } from './AccessView'
+import { NOT_ALLOWED } from './App'
 
 export const editable = (kind: ListKind): kind is EditKind => (EDIT_KINDS as readonly string[]).includes(kind)
 
@@ -26,7 +28,8 @@ const CATEGORY_LISTS: Record<string, [label: string, list: ListKind, filter: str
 }
 
 // Every field of one record. A related record links to its own page; what belongs to it is a List away.
-export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdit, onDeleted }: {
+export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdit, onDeleted, canManage }: {
+  canManage: boolean | null
   onEdit: (kind: EditKind, id: number) => void
   onDeleted: (kind: EditKind, id: number, name: string) => void
   kind: RecordKind
@@ -63,14 +66,15 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
           ))}
           {editable(kind) && (
             <>
-              <button className="quiet" onClick={() => onEdit(kind, id)}>Edit</button>
-              <DeleteButton kind={kind} id={id} name={record.name} onDeleted={() => onDeleted(kind, id, record.name)} />
+              <button className="quiet" onClick={() => onEdit(kind, id)} disabled={!record.can.update} title={record.can.update ? undefined : NOT_ALLOWED}>Edit</button>
+              <DeleteButton kind={kind} id={id} name={record.name} onDeleted={() => onDeleted(kind, id, record.name)} allowed={record.can.delete} />
             </>
           )}
         </div>
       </header>
       <FieldGrid fields={record.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
       {record.fields.length === 0 && <p className="empty">No fields</p>}
+      {kind === 'users' && <UserAccessSection userId={id} canManage={canManage} />}
     </>
   )
 }
