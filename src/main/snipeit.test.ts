@@ -249,8 +249,8 @@ describe('connection errors', () => {
     const slow = (async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
     }) as typeof globalThis.fetch
-    const error = createSnipeIt(config, slow).dashboard(['assets'])
-    await expect(error).resolves.toEqual({ assets: { error: expect.stringMatching(/took longer than 60 seconds to answer/) } })
+    const result = createSnipeIt(config, slow).dashboard(['assets'])
+    await expect(result).resolves.toEqual({ assets: { error: expect.stringMatching(/took longer than 60 seconds to answer/) } })
     await expect(createSnipeIt(config, slow).getAsset(4812)).rejects.toThrow(/took longer than 15 seconds/)
   })
 

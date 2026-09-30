@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
@@ -429,8 +429,6 @@ const splitNames = {
   components: ['In use', 'Available'], users: ['Holding', 'Holding nothing'],
 } as const
 const isBar = (p: DashboardPiece) => p !== 'overdue' && p !== 'expiring'
-// The pieces built from the one Asset list.
-const ASSET_PIECES: DashboardPiece[] = ['assets', 'overdue', 'expiring']
 
 // Stored per computer: which pieces show, in what order (bars first, then tables).
 type Layout = { piece: DashboardPiece; show: boolean }[]
@@ -499,8 +497,10 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
     const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
     const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
     // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
-    Promise.all(groups.map((group) => window.snipeIt.dashboard(group).then(merge, (e: Error) => merge(Object.fromEntries(group.map((p) => [p, { error: e.message }]))))))
-      .finally(() => mine === latest.current && (setLoading(false), setLoadedAt(new Date().toLocaleTimeString())))
+    // "Loaded" means something arrived: a total failure leaves the last load time alone.
+    let loaded = false
+    Promise.all(groups.map((group) => window.snipeIt.dashboard(group).then((d) => (loaded = true, merge(d)), (e: Error) => merge(Object.fromEntries(group.map((p) => [p, { error: e.message }]))))))
+      .finally(() => mine === latest.current && (setLoading(false), loaded && setLoadedAt(new Date().toLocaleTimeString())))
   }
   // Reordering doesn't refetch; showing or hiding does.
   useEffect(load, [[...shown].sort().join()])

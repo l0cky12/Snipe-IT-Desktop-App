@@ -68,6 +68,8 @@ export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] 
 /** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
+/** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
+export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'overdue', 'expiring']
 
 /** One Asset status segment of the Inventory Chart. color is Snipe-IT's status label color, or null when it has none. */
 export type AssetSegment = { status: string; statusMeta: string; color: string | null; count: number; assets: AssetSummary[] }
@@ -471,7 +473,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const now = today()
       const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
       // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
-      const assets = wants('assets', 'overdue', 'expiring') ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      const assets = wants(...ASSET_PIECES) ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
       // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
       // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
       const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined
