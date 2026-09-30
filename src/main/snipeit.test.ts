@@ -489,7 +489,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     }) as typeof globalThis.fetch
     const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}` && !u.searchParams.has('status')).map((u) => Number(u.searchParams.get('offset')))
     const listsAsked = () => [...new Set(urls.map((u) => u.pathname.replace('/api/v1/', '')))].sort()
-    return { snipeIt: createSnipeIt(config, fetch, today), offsets, listsAsked }
+    return { snipeIt: createSnipeIt(config, fetch, today), fetch, offsets, listsAsked }
   }
   const asset = (id: number, fields: object = {}) => ({
     ...chromebook, id, asset_tag: `NOMMA-${id}`, expected_checkin: null, warranty_expires: null, ...fields,
@@ -510,6 +510,19 @@ describe('dashboard (today is 2026-09-24)', () => {
     const { assets } = await snipeIt.dashboard(['assets'])
     expect(offsets('hardware')).toEqual([0, 500, 1000])
     expect(assets).toMatchObject([{ status: 'Deployed', count: 1234 }])
+  })
+
+  it('after the first page, asks for the rest four at a time instead of one after another', async () => {
+    const { fetch, offsets } = fleet({ hardware: Array.from({ length: 2600 }, (_, i) => asset(i + 1)) })
+    let open = 0, most = 0
+    const counting = (async (...args: Parameters<typeof fetch>) => {
+      most = Math.max(most, ++open)
+      await new Promise((r) => setTimeout(r, 5))
+      try { return await fetch(...args) } finally { open-- }
+    }) as typeof globalThis.fetch
+    await createSnipeIt(config, counting, today).dashboard(['overdue'])
+    expect(offsets('hardware')).toEqual([0, 500, 1000, 1500, 2000, 2500])
+    expect(most).toBe(4)
   })
 
   it('still gets every Asset when the server caps pages below 500', async () => {

@@ -138,6 +138,9 @@ const PAGE_LIMIT = 500
 // How long one request may take. A full page of PAGE_LIMIT rows can take a busy Snipe-IT well past the usual budget.
 const TIMEOUT = 15000
 const PAGE_TIMEOUT = 60000
+// Pages of one list asked for at once. ponytail: caps one list only; the Dashboard still pages several lists concurrently,
+// so a load can have more than this many requests open. A shared semaphore in createSnipeIt would cap them all.
+const PAGE_BATCH = 4
 
 // Whole days from today to a Snipe-IT date ("YYYY-MM-DD"); negative when the date is past.
 function daysFrom(today: Date, date: string): number {
@@ -300,17 +303,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // ponytail: pages through a whole list and counts in the app; fine under ~5k rows (~10 requests). Users may be the largest list.
   // Past that, ask Snipe-IT for counts instead (e.g. limit=1 and read `total` per status or filter).
-  // Until `total` rows are in (a server may cap pages below PAGE_LIMIT); an empty page ends it early.
-  // Sorted by id so a row added mid-load doesn't shift later pages.
+  // The first page gives the total and the page size (a server may cap pages below PAGE_LIMIT); the rest are fetched
+  // PAGE_BATCH at a time rather than one after another. Sorted by id so a row added mid-load doesn't shift later pages;
+  // `total` is read once, so rows added during the load wait for the next refresh.
   async function allRows<T>(path: string): Promise<T[]> {
-    const rows: T[] = []
-    for (let total = Infinity; rows.length < total; ) {
-      const page = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`, undefined, undefined, PAGE_TIMEOUT)
-      if (isError(page)) throw new Error(reason(page.messages))
-      if (!page.rows.length) break
-      total = page.total
-      rows.push(...page.rows)
+    const page = async (offset: number) => {
+      const body = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${offset}&sort=id&order=asc`, undefined, undefined, PAGE_TIMEOUT)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body
     }
+    const first = await page(0)
+    const rows = [...first.rows]
+    const offsets: number[] = []
+    for (let offset = first.rows.length; first.rows.length && offset < first.total; offset += first.rows.length) offsets.push(offset)
+    for (let i = 0; i < offsets.length; i += PAGE_BATCH)
+      for (const p of await Promise.all(offsets.slice(i, i + PAGE_BATCH).map(page))) rows.push(...p.rows)
     return rows
   }
 
