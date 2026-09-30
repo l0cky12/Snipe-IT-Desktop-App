@@ -8,7 +8,7 @@ import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome }
 import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
-import { GroupsView } from './AccessView'
+import { GroupsView, type CanManage } from './AccessView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -67,8 +67,8 @@ export function App() {
   // One run at a time: a second would act on the same Assets and overwrite the first's results.
   const batchBusy = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
-  // Whether the Operator's own account may manage permissions (null until Snipe-IT says).
-  const [canManage, setCanManage] = useState<boolean | null>(null)
+  // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
+  const [canManage, setCanManage] = useState<CanManage>(null)
   // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
   const [opened, setOpened] = useState(0)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
@@ -91,7 +91,7 @@ export function App() {
       // Keep the Asset's current status available if loading labels fails.
       window.snipeIt.statusLabels().then((v) => !stale && setStatusLabels(v), () => {})
       window.snipeIt.locations().then((v) => !stale && setLocations(v), () => {})
-      window.snipeIt.canManagePermissions().then((v) => !stale && setCanManage(v), () => !stale && setCanManage(false))
+      window.snipeIt.canManagePermissions().then((v) => !stale && setCanManage(v), (e: Error) => !stale && setCanManage({ error: e.message }))
     }
     return () => { stale = true }
   }, [settings])

@@ -1121,6 +1121,9 @@ describe('permissions', () => {
     expect(await createSnipeIt(config, fetch).userAccess(311)).toEqual({ permissions: { 'reports.view': '1', 'assets.delete': '-1' }, groups: [{ id: 2, name: 'Library Aides' }] })
     const none = fakeFetch({ '/users/5': { body: { id: 5, name: 'New', permissions: null, groups: null } } })
     expect(await createSnipeIt(config, none.fetch).userAccess(5)).toEqual({ permissions: {}, groups: [] })
+    const text = fakeFetch({ '/users/6': { body: { id: 6, name: 'Old', permissions: '{"admin":"1"}', groups: null } }, '/groups/3': { body: { id: 3, name: 'G', permissions: '{"assets.view":"1"}' } } })
+    expect((await createSnipeIt(config, text.fetch).userAccess(6)).permissions).toEqual({ admin: '1' })
+    expect((await createSnipeIt(config, text.fetch).group(3)).permissions).toEqual({ 'assets.view': '1' })
   })
 
   it("a User's groups are set all at once; a group id that isn't a whole number is refused", async () => {

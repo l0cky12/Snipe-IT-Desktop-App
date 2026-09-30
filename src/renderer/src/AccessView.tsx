@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { PERMISSIONS, type Group, type StatusLabel, type UserAccess } from '../../main/snipeit'
 
+/** Whether the Operator's account may manage permissions: null until Snipe-IT says; error when it couldn't be asked. */
+export type CanManage = boolean | null | { error: string }
+// What the check's answer means on screen: nothing yet, the superuser notice, or why it couldn't be checked.
+function AccessNotice({ canManage }: { canManage: CanManage }) {
+  if (canManage === false) return <p className="notice" role="status">{CANT_MANAGE}</p>
+  if (canManage && typeof canManage === 'object') return <p className="message error" role="alert">Couldn't check whether your account can manage permissions: {canManage.error}</p>
+  return null
+}
+
 // Said wherever permissions could be managed but the Operator's account can't.
 export const CANT_MANAGE = "Managing permissions needs a Snipe-IT superuser account. Yours isn't one, so groups and their permissions can't be changed from here; ask a Snipe-IT superuser."
 
@@ -13,7 +22,8 @@ const permissionLabel = (key: string, keys: string[]) => {
 }
 
 // A User's groups and permissions of their own; a superuser can add and remove groups here.
-export function UserAccessSection({ userId, canManage }: { userId: number; canManage: boolean | null }) {
+export function UserAccessSection({ userId, canManage: check }: { userId: number; canManage: CanManage }) {
+  const canManage = check === true
   const [access, setAccess] = useState<UserAccess | null>(null)
   const [all, setAll] = useState<StatusLabel[]>([])
   const [error, setError] = useState('')
@@ -44,7 +54,7 @@ export function UserAccessSection({ userId, canManage }: { userId: number; canMa
     <section className="access">
       <div className="section">Permissions and groups</div>
       {error && <p className="message error" role="alert">{error}</p>}
-      {canManage === false && <p className="notice" role="status">{CANT_MANAGE}</p>}
+      <AccessNotice canManage={check} />
       {access && (
         <div className="access-body">
           <div className="k">Groups</div>
@@ -75,7 +85,8 @@ export function UserAccessSection({ userId, canManage }: { userId: number; canMa
 }
 
 // Every permission group, and one group's permissions to edit (Snipe-IT lets only a superuser do either).
-export function GroupsView({ canManage }: { canManage: boolean | null }) {
+export function GroupsView({ canManage: check }: { canManage: CanManage }) {
+  const canManage = check === true
   const [groups, setGroups] = useState<StatusLabel[] | null>(null)
   const [open, setOpen] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -90,8 +101,8 @@ export function GroupsView({ canManage }: { canManage: boolean | null }) {
   return (
     <>
       <header className="head"><h1>Permission groups</h1></header>
-      {canManage === null && <p className="empty">Checking your account…</p>}
-      {canManage === false && <p className="notice" role="status">{CANT_MANAGE}</p>}
+      {check === null && <p className="empty">Checking your account…</p>}
+      <AccessNotice canManage={check} />
       {error && <p className="message error" role="alert">{error}</p>}
       {groups && (
         <div className="records">

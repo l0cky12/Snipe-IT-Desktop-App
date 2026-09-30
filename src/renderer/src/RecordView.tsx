@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind } from '../../main/snipeit'
 import { drillLabel, singular, type Drill } from './ListView'
 import { DeleteButton } from './RecordForm'
-import { UserAccessSection } from './AccessView'
+import { UserAccessSection, type CanManage } from './AccessView'
 import { NOT_ALLOWED } from './App'
 
 export const editable = (kind: ListKind): kind is EditKind => (EDIT_KINDS as readonly string[]).includes(kind)
@@ -29,7 +29,7 @@ const CATEGORY_LISTS: Record<string, [label: string, list: ListKind, filter: str
 
 // Every field of one record. A related record links to its own page; what belongs to it is a List away.
 export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdit, onDeleted, canManage }: {
-  canManage: boolean | null
+  canManage: CanManage
   onEdit: (kind: EditKind, id: number) => void
   onDeleted: (kind: EditKind, id: number, name: string) => void
   kind: RecordKind

@@ -31,6 +31,11 @@ export type Asset = {
 
 /** What the Operator's key may do to one record, as Snipe-IT's available_actions says. */
 export type Can = { checkout: boolean; checkin: boolean; update: boolean; delete: boolean }
+// Snipe-IT sends permissions decoded (key → value); an older one, or a field saved by hand, may send the JSON text.
+const permissionsOf = (raw: unknown): Record<string, unknown> => {
+  if (typeof raw === 'string') try { raw = JSON.parse(raw) } catch { return {} }
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+}
 const canFrom = (raw: unknown): Can => {
   const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof Can, unknown>>
   return { checkout: a.checkout !== false, checkin: a.checkin !== false, update: a.update !== false, delete: a.delete !== false }
@@ -852,9 +857,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A User's own permissions and groups; anyone who may view the User may see them.
     async userAccess(id: number): Promise<UserAccess> {
       checkId(id, 'User')
-      const user = await request<{ permissions?: Record<string, unknown> | null; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
+      const user = await request<{ permissions?: unknown; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
       if (isError(user)) throw new Error(reason(user.messages))
-      const permissions = Object.fromEntries(Object.entries(user.permissions ?? {}).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
+      const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
       return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
     },
 
@@ -865,9 +870,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     async group(id: number): Promise<Group> {
       checkId(id, 'group')
-      const g = await request<{ id: number; name: string; permissions?: Record<string, unknown> | null }>(`/groups/${id}`)
+      const g = await request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`)
       if (isError(g)) throw new Error(reason(g.messages))
-      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(g.permissions ?? {}).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
+      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
     },
 
     // A User's groups, all at once: the ones listed are kept or added, the rest removed.
