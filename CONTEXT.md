@@ -64,7 +64,11 @@ A page listing one kind (Assets, Users, Locations, Asset Models, or the Activity
 _Avoid_: tab, grid, table
 
 **Quick Action**:
-A Checkout, Checkin, or status change done from an Asset's row in a List, without opening the Asset.
+A Checkout, Checkin, status change, or add-to-Batch done from an Asset's row in a List, without opening the Asset.
+
+**Batch**:
+Assets gathered on the Batch page for one Checkout or Checkin of all of them. It lives only for the session; each Asset still goes through the single Checkout or Checkin, so History credits the Operator as usual.
+_Avoid_: bulk, selection, cart
 
 **License**:
 A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise.

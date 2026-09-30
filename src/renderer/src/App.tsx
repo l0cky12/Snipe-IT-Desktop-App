@@ -115,6 +115,7 @@ export function App() {
   // While the batch is open, a scanned or picked Asset joins it instead of opening.
   const batching = !showSettings && view?.page === 'batch'
   function addToBatch(a: AssetSummary) {
+    // Membership is read from the render-time batch for the message; the updater re-checks so a stale closure can never add a duplicate.
     const known = batch.some((b) => b.id === a.id)
     setBatch((b) => (b.some((x) => x.id === a.id) ? b : [...b, a]))
     setMessage({ text: known ? `${a.assetTag} is already in the batch` : `Added ${a.assetTag} to the batch` })
@@ -188,7 +189,7 @@ export function App() {
             const Icon = listIcon[k]
             return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
           })}
-          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} Assets`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
+          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
             <ListChecks size={20} />
             {batch.length > 0 && <span className="badge">{batch.length}</span>}
           </button>

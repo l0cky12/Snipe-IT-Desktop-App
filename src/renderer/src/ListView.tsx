@@ -248,6 +248,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             const a = row as Asset
             const q = kind === 'assets' && quick?.id === row.id ? quick : null
             const toggle = (action: Quick['action']) => (setQuick(q?.action === action ? null : { id: row.id, action }), setMessage({ text: '' }))
+            const inBatch = batch.some((b) => b.id === a.id)
             return [
               <tr key={row.id} className={q ? 'sel' : undefined}>
                 {columns.map((c, i) => cell(c, row, i === 0))}
@@ -257,7 +258,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                     <button disabled={!a.checkoutAllowed} onClick={() => toggle('checkout')} className={q?.action === 'checkout' ? 'on' : undefined}
                       title={a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}>Checkout</button>
                     <button onClick={() => toggle('status')} className={q?.action === 'status' ? 'on' : undefined}>Status</button>
-                    <button disabled={batch.some((b) => b.id === a.id)} onClick={() => onBatch(toSummary(a))}>{batch.some((b) => b.id === a.id) ? 'In batch' : 'Batch'}</button>
+                    <button disabled={inBatch} onClick={() => onBatch(toSummary(a))}>{inBatch ? 'In batch' : 'Batch'}</button>
                   </td>
                 )}
               </tr>,
