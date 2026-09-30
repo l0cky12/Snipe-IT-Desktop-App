@@ -9,9 +9,11 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [initial, setInitial] = useState<Record<string, string>>({})
-  // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped. Save waits for them.
+  // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped. Save waits for them,
+  // and stays off if they couldn't load, so an Asset isn't saved without the custom fields its model asks for.
   const model = useRef(0)
   const [fieldsLoading, setFieldsLoading] = useState(false)
+  const [fieldsFailed, setFieldsFailed] = useState(false)
   const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
@@ -42,15 +44,18 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     const mine = ++model.current
     // The old Asset Model's custom fields go at once, so they can't be saved with the new one.
     setFields((all) => all.filter(own))
+    setFieldsFailed(false)
     if (!value) return setFieldsLoading(false)
     setFieldsLoading(true)
     window.snipeIt.customFields(Number(value)).then(
       (custom) => mine === model.current && (setFields((all) => [...all.filter(own), ...custom]), setFieldsLoading(false)),
-      (e: Error) => mine === model.current && (setMessage(e.message), setFieldsLoading(false)))
+      (e: Error) => mine === model.current && (setMessage(`Couldn't load this Asset Model's custom fields: ${e.message}`), setFieldsLoading(false), setFieldsFailed(true)))
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    // Enter in a field submits too; not while the Asset Model's custom fields are missing.
+    if (fieldsLoading || fieldsFailed) return
     setBusy(true)
     setMessage('')
     try {
@@ -100,7 +105,9 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
         <h1>{id === null ? `New ${singular(kind)}` : `Edit ${singular(kind)}`}</h1>
         <div className="actions">
           <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
-          <button disabled={busy || !loaded || fieldsLoading}>{busy ? 'Saving…' : fieldsLoading ? 'Loading fields…' : 'Save'}</button>
+          {fieldsFailed
+            ? <button type="button" onClick={() => set('model_id', values.model_id ?? '')}>Retry custom fields</button>
+            : <button disabled={busy || !loaded || fieldsLoading}>{busy ? 'Saving…' : fieldsLoading ? 'Loading fields…' : 'Save'}</button>}
         </div>
       </header>
       {message && <p className="message error" role="alert">{message}</p>}

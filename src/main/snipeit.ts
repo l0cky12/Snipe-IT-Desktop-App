@@ -370,6 +370,14 @@ export const FORMS: Record<EditKind, FormField[]> = {
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
 }
 
+// Snipe-IT keeps notes as Markdown but sends them rendered to inline HTML; this turns what it renders back into
+// Markdown, so editing a note keeps its links and emphasis. ponytail: the inline subset Snipe-IT renders, not all of HTML.
+export const markdownOf = (html: string) => html
+  .replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>\s*<p>/gi, '\n\n')
+  .replace(/<a [^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)')
+  .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
+  .replace(/<[^>]*>/g, '')
+
 // A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
@@ -377,7 +385,7 @@ function formValue(raw: RawRow, f: FormField): string {
   if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
   if (f.type === 'checkbox') return v ? '1' : ''
   // ponytail: Snipe-IT formats costs with thousands separators ("1,200.50"); assumes "," is the thousands one.
-  return f.type === 'number' ? String(v).replace(/,/g, '') : String(v).replace(/<[^>]*>/g, '')
+  return f.type === 'number' ? String(v).replace(/,/g, '') : markdownOf(String(v))
 }
 
 // Every field of a record as the Operator reads it, in Snipe-IT's order, then an Asset's custom fields.
