@@ -429,6 +429,8 @@ const splitNames = {
   components: ['In use', 'Available'], users: ['Holding', 'Holding nothing'],
 } as const
 const isBar = (p: DashboardPiece) => p !== 'overdue' && p !== 'expiring'
+// The pieces built from the one Asset list.
+const ASSET_PIECES: DashboardPiece[] = ['assets', 'overdue', 'expiring']
 
 // Stored per computer: which pieces show, in what order (bars first, then tables).
 type Layout = { piece: DashboardPiece; show: boolean }[]
@@ -492,11 +494,13 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
   function load() {
     const mine = ++latest.current
     setLoading(true)
-    // Per-piece failures come back as entries; this only catches what reached no piece at all.
-    window.snipeIt.dashboard(shown)
-      .then((d) => mine === latest.current && (setData(d), setLoadedAt(new Date().toLocaleTimeString())),
-        (e: Error) => mine === latest.current && setData(Object.fromEntries(shown.map((p) => [p, { error: e.message }]))))
-      .finally(() => mine === latest.current && setLoading(false))
+    // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
+    const shared = shown.filter((p) => ASSET_PIECES.includes(p))
+    const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
+    const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
+    // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
+    Promise.all(groups.map((group) => window.snipeIt.dashboard(group).then(merge, (e: Error) => merge(Object.fromEntries(group.map((p) => [p, { error: e.message }]))))))
+      .finally(() => mine === latest.current && (setLoading(false), setLoadedAt(new Date().toLocaleTimeString())))
   }
   // Reordering doesn't refetch; showing or hiding does.
   useEffect(load, [[...shown].sort().join()])

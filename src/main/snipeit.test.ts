@@ -245,6 +245,15 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, offline).getAsset(4812)).rejects.toThrow(/Can't reach Snipe-IT/)
   })
 
+  it('a Snipe-IT too slow to answer says so, rather than blaming the network', async () => {
+    const slow = (async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    }) as typeof globalThis.fetch
+    const error = createSnipeIt(config, slow).dashboard(['assets'])
+    await expect(error).resolves.toEqual({ assets: { error: expect.stringMatching(/took longer than 60 seconds to answer/) } })
+    await expect(createSnipeIt(config, slow).getAsset(4812)).rejects.toThrow(/took longer than 15 seconds/)
+  })
+
   it("an HTTP error carries Snipe-IT's own reason", async () => {
     const { fetch } = fakeFetch({ '/hardware/bytag/X': { status: 500, body: { status: 'error', messages: 'Server Error' } } })
     await expect(createSnipeIt(config, fetch).lookup('X')).rejects.toThrow('Snipe-IT returned HTTP 500: Server Error')
