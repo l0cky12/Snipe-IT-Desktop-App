@@ -1039,6 +1039,14 @@ describe('create, edit and delete', () => {
       purchase_cost: '1200.50', notes: 'Spare', _snipeit_mac_1: '00:1A:2B:3C:4D:5E', _snipeit_cart_2: '' })
   })
 
+  it("an Accessory's minimum is read from min_qty, as Snipe-IT sends it, and saved as min_amt", async () => {
+    const { fetch, requests } = fakeFetch({ '/accessories/5': { body: { id: 5, name: 'Charger', qty: 60, min_qty: 10, category: { id: 2, name: 'Chargers' } } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.form('accessories', 5)).values).toMatchObject({ min_amt: '10', category_id: '2', qty: '60' })
+    await snipeIt.save('accessories', 5, { min_amt: '12' })
+    expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { min_amt: '12' } })
+  })
+
   it('a new User asks for a password; editing one does not', async () => {
     const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes' } } }).fetch)
     expect((await snipeIt.form('users')).fields.map((f) => f.key)).toContain('password_confirmation')

@@ -9,8 +9,9 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [initial, setInitial] = useState<Record<string, string>>({})
-  // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped.
+  // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped. Save waits for them.
   const model = useRef(0)
+  const [fieldsLoading, setFieldsLoading] = useState(false)
   const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
@@ -39,9 +40,13 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     if (kind !== 'assets' || key !== 'model_id') return
     const own = (f: FormField) => !f.key.startsWith('_snipeit_')
     const mine = ++model.current
-    if (!value) return setFields((all) => all.filter(own))
-    window.snipeIt.customFields(Number(value)).then((custom) => mine === model.current && setFields((all) => [...all.filter(own), ...custom]),
-      (e: Error) => mine === model.current && setMessage(e.message))
+    // The old Asset Model's custom fields go at once, so they can't be saved with the new one.
+    setFields((all) => all.filter(own))
+    if (!value) return setFieldsLoading(false)
+    setFieldsLoading(true)
+    window.snipeIt.customFields(Number(value)).then(
+      (custom) => mine === model.current && (setFields((all) => [...all.filter(own), ...custom]), setFieldsLoading(false)),
+      (e: Error) => mine === model.current && (setMessage(e.message), setFieldsLoading(false)))
   }
 
   async function submit(e: React.FormEvent) {
@@ -95,7 +100,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
         <h1>{id === null ? `New ${singular(kind)}` : `Edit ${singular(kind)}`}</h1>
         <div className="actions">
           <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
-          <button disabled={busy || !loaded}>{busy ? 'Saving…' : 'Save'}</button>
+          <button disabled={busy || !loaded || fieldsLoading}>{busy ? 'Saving…' : fieldsLoading ? 'Loading fields…' : 'Save'}</button>
         </div>
       </header>
       {message && <p className="message error" role="alert">{message}</p>}
