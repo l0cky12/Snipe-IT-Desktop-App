@@ -131,6 +131,11 @@ describe('lookup', () => {
     expect((await createSnipeIt(config, fetch).lookup('it office')).assets.map((a) => 'matched' in a && a.matched)).toEqual(['Rtd location'])
     const again = await createSnipeIt(config, fetch).lookup('36 month')
     expect(again.assets.map((a) => 'matched' in a && a.matched)).toEqual(['Warranty months'])
+    // Not from dates, counts or quantities, which Snipe-IT doesn't search: a hit there would mislabel the match.
+    const noisy = { ...chromebook, created_at: { datetime: '2024-01-05 09:00:00', formatted: '2024-01-05 9:00 AM' }, qty: 7777 }
+    const noise = createSnipeIt(config, fakeFetch({ '/hardware': { body: { total: 1, rows: [noisy] } } }).fetch)
+    expect((await noise.lookup('2024')).assets.map((a) => 'matched' in a && a.matched)).toEqual([''])
+    expect((await noise.lookup('7777')).assets.map((a) => 'matched' in a && a.matched)).toEqual([''])
   })
 
   it('nothing matching the tag or the text search finds no Assets', async () => {

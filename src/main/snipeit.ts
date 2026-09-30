@@ -51,11 +51,15 @@ export type OtherKind = 'users' | 'locations' | 'models'
 export type SearchKind = OtherKind | 'licenses' | 'accessories' | 'consumables' | 'components'
 /** matched names the field the text was found in, or is '' when Snipe-IT matched on a field the app doesn't check. */
 export type Match = CheckoutTarget & { matched: string }
+/** An Asset found by a text search, with the field it matched (as on Match). */
+export type AssetMatch = AssetSummary & { matched: string }
+/** Everything Lookup searches. */
+type Searchable = SearchKind | 'assets'
 /** Lookup's matches of one other kind, or why that kind couldn't be searched (e.g. the key can't read Users). */
 export type Matches = { kind: SearchKind; rows: Match[] } | { kind: SearchKind; error: string }
 
 /** An exact Asset Tag hit carries the full Asset; a text search carries Asset summaries and the other kinds' matches. */
-export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: (AssetSummary & { matched: string })[]; others: Matches[] }
+export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetMatch[]; others: Matches[] }
 
 export type UserRow = { id: number; name: string; username: string; email: string; department: string; location: string; assets: number }
 export type LocationRow = { id: number; name: string; parent: string; city: string; assets: number; checkedOut: number; users: number }
@@ -167,7 +171,7 @@ const reason = (messages: unknown): string =>
 
 // Snipe-IT says a row matched a search, not on which field. Lookup checks these, in order, for the text;
 // a field holding an object (a Location, an Asset Model…) is checked by its name. An Asset's custom fields come after.
-const MATCH_FIELDS: Record<SearchKind | 'assets', [label: string, field: string][]> = {
+const MATCH_FIELDS: Record<Searchable, [label: string, field: string][]> = {
   assets: [['Asset Tag', 'asset_tag'], ['Name', 'name'], ['Serial', 'serial'], ['Asset Model', 'model'], ['Model No.', 'model_number'], ['Assignee', 'assigned_to'],
     ['Location', 'location'], ['Status', 'status_label'], ['Category', 'category'], ['Manufacturer', 'manufacturer'], ['Supplier', 'supplier'], ['Order number', 'order_number'], ['Notes', 'notes']],
   users: [['Name', 'name'], ['Username', 'username'], ['Email', 'email'], ['Employee No.', 'employee_num'], ['Job title', 'jobtitle'], ['Department', 'department'], ['Location', 'location'], ['Notes', 'notes']],
@@ -179,7 +183,7 @@ const MATCH_FIELDS: Record<SearchKind | 'assets', [label: string, field: string]
   components: [['Name', 'name'], ['Serial', 'serial'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Order number', 'order_number'], ['Notes', 'notes']],
 }
 
-function matchedField(kind: SearchKind | 'assets', raw: Record<string, unknown>, text: string): string {
+function matchedField(kind: Searchable, raw: Record<string, unknown>, text: string): string {
   const q = text.toLowerCase()
   const holds = (v: unknown) => {
     const value = v && typeof v === 'object' ? (v as { name?: unknown }).name : v
@@ -192,9 +196,11 @@ function matchedField(kind: SearchKind | 'assets', raw: Record<string, unknown>,
   const custom = kind === 'assets' && raw.custom_fields && typeof raw.custom_fields === 'object'
     ? Object.entries(raw.custom_fields as Record<string, { value?: unknown } | null>).map(([label, f]): [string, unknown] => [label, f?.value])
     : []
-  // Last, everything else Snipe-IT sent (and the text inside its objects, not their ids): it may have matched on a field the list doesn't name.
-  const rest = Object.entries(raw).filter(([k]) => k !== 'custom_fields' && k !== 'id').flatMap(([k, v]): [string, unknown][] =>
-    v && typeof v === 'object' ? Object.values(v).filter((x) => typeof x === 'string').map((x): [string, unknown] => [label(k), x]) : [[label(k), v]])
+  // Last, the other text Snipe-IT sent (inside its objects too, not their ids): it may have matched on a field the list doesn't name.
+  // Ids, dates, counts, quantities and the like are skipped: Snipe-IT doesn't search them, so a hit there would be noise ('Found in Qty').
+  const noise = /^(id|custom_fields|image|available_actions|.*_at|.*_date|.*_count(er)?|.*qty|remaining|min_amt)$/
+  const rest = Object.entries(raw).filter(([k]) => !noise.test(k)).flatMap(([k, v]): [string, unknown][] =>
+    v && typeof v === 'object' ? Object.values(v).filter((x) => typeof x === 'string').map((x): [string, unknown] => [label(k), x]) : typeof v === 'string' ? [[label(k), v]] : [])
   return [...named.map(([l, field]): [string, unknown] => [l, raw[field]]), ...custom, ...rest].find(([, v]) => holds(v))?.[0] ?? ''
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type OtherKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
@@ -25,9 +25,9 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 const RECENT_MAX = 20
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = { assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity }
-const otherName: Record<SearchKind, string> = { users: 'Users', locations: 'Locations', models: 'Asset Models', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components' }
+const kindName: Record<SearchKind, string> = { users: 'Users', locations: 'Locations', models: 'Asset Models', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components' }
 // The kinds a match opens (the Assets List filtered to it); the stocked kinds are only listed.
-const opens = (kind: SearchKind): kind is 'users' | 'locations' | 'models' => kind === 'users' || kind === 'locations' || kind === 'models'
+const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind === 'locations' || kind === 'models'
 
 // What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
 type View = { page: 'dashboard' } | { page: ListKind; drill?: Drill; n: number }
@@ -41,8 +41,8 @@ export function App() {
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [view, setView] = useState<View | null>(null)
   // Search Matches, or the Assets of a clicked Inventory Chart segment; both list the same way.
-  const [matches, setMatches] = useState<{ label: string; assets: (AssetSummary & { matched?: string })[] }>({ label: '', assets: [] })
-  // Lookup's Users, Locations and Asset Models; opening one opens the Assets List filtered to it.
+  const [matches, setMatches] = useState<{ label: string; assets: (AssetSummary | AssetMatch)[] }>({ label: '', assets: [] })
+  // Lookup's matches of the other kinds; Users, Locations and Asset Models open the Assets List filtered to them, the stocked kinds are listed only (until #1).
   const [others, setOthers] = useState<Matches[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
@@ -180,10 +180,10 @@ export function App() {
           <div className="list">
             {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={pick} />}
             {others.map((m) => 'error' in m
-              ? <p key={m.kind} className="message">{otherName[m.kind]}: {m.error}</p>
+              ? <p key={m.kind} className="message">{kindName[m.kind]}: {m.error}</p>
               : m.rows.length > 0 && (
                 <div key={m.kind}>
-                  <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
+                  <div className="section">{kindName[m.kind]} ({m.rows.length})</div>
                   {m.rows.map((t) => {
                     const text = <>
                       <span className="t">{t.name}</span>
@@ -206,7 +206,7 @@ export function App() {
   )
 }
 
-function AssetList(props: { label: string; assets: (AssetSummary & { matched?: string })[]; selected?: number; onPick: (id: number) => void }) {
+function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]; selected?: number; onPick: (id: number) => void }) {
   return (
     <>
       <div className="section">{props.label}</div>
@@ -218,7 +218,7 @@ function AssetList(props: { label: string; assets: (AssetSummary & { matched?: s
             <span>{a.name || '—'}</span>
             <span>{a.assignee?.name ?? 'Unassigned'}</span>
           </span>
-          {a.matched && <span className="n">Found in {a.matched}</span>}
+          {'matched' in a && a.matched && <span className="n">Found in {a.matched}</span>}
         </button>
       ))}
     </>
