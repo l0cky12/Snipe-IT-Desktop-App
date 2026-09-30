@@ -231,3 +231,5 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .actions button.danger:not(.quiet) { background: var(--coral); border-color: var(--coral); color: var(--on-deep); }
 .actions button.quiet.danger { color: var(--coral); }
+.choices { display: flex; flex-wrap: wrap; gap: 6px 16px; min-height: 40px; align-items: center; }
+.choices label { display: flex; align-items: center; gap: 6px; font: 500 14px var(--sans); color: var(--text); }
