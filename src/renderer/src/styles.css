@@ -222,3 +222,6 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .batch td { white-space: nowrap; }
 .batch td[role=status] { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
+.range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
+.ferpa { margin: 14px 28px 0; padding: 14px 18px; border: 1.5px solid var(--tangerine); border-radius: var(--r-ctl); background: var(--panel); }
+.ferpa p { margin: 0 0 10px; line-height: 1.5; }
