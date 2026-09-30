@@ -23,11 +23,21 @@ Then in Settings use `http://127.0.0.1:8765` and any API token. The mock holds f
 npm run dist
 ```
 
-Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, and a `.deb`. Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
+Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, a `.deb` for Debian/Ubuntu, and a `.pacman` package for Arch (install it with `sudo pacman -U snipe-it-desktop-*.pacman`). The Arch package needs `bsdtar` on the build machine (`sudo apt-get install libarchive-tools` on Debian/Ubuntu). Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
 
 ```sh
 docker run --rm -v "$PWD":/project -w /project electronuserland/builder:wine npx electron-builder --win
 ```
+
+### Releases
+
+Pushing a version tag builds all of them in GitHub Actions (`.github/workflows/release.yml`: Linux packages on Ubuntu, the Windows installer on Windows) and attaches them to a GitHub Release for that tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The tag sets the version in the file names, so `package.json` doesn't need bumping first. Running the workflow by hand (Actions → Release → Run workflow), or opening a pull request that changes the packaging, builds the same packages as a downloadable artifact without making a Release; the Windows build also installs and uninstalls the app to check the installer.
 
 ## Settings
 
