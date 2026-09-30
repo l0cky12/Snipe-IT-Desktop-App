@@ -1,5 +1,5 @@
 # Builds the installers and, for a version tag (v1.2.3), attaches them to that tag's GitHub Release.
-# A pull request that changes the packaging builds them too (and checks the Windows install), without a Release.
+# A pull request that changes the packaging builds them too (and installs the .deb and the Windows installer), without a Release.
 # Run by hand (workflow_dispatch) to get the same files as an artifact without a Release.
 name: Release
 
@@ -9,9 +9,6 @@ on:
   pull_request:
     paths: ['.github/workflows/release.yml', 'package.json', 'package-lock.json']
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -41,6 +38,9 @@ jobs:
         run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
       - run: npm run build
       - run: npx electron-builder ${{ matrix.targets }} --publish never
+      # The .deb must install too, not just build.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y ./dist/*.deb && test -x '/opt/Snipe-IT Desktop/snipe-it-desktop'
       # The installer must install, not just build: a silent per-user install puts the app in
       # %LOCALAPPDATA%\Programs\snipe-it-desktop, and its uninstaller takes it away again.
       - if: runner.os == 'Windows'
@@ -53,6 +53,7 @@ jobs:
           if (-not (Test-Path (Join-Path $dir 'Snipe-IT Desktop.exe'))) { throw "The installer didn't install the app in $dir" }
           $run = Start-Process (Join-Path $dir 'Uninstall Snipe-IT Desktop.exe') -ArgumentList '/S' -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "The uninstaller exited with $($run.ExitCode)" }
+          # The NSIS uninstaller copies itself to %TEMP% and exits, so the copy is still deleting files when -Wait returns.
           Start-Sleep -Seconds 5
           if (Test-Path (Join-Path $dir 'Snipe-IT Desktop.exe')) { throw "The uninstaller left the app in $dir" }
       - uses: actions/upload-artifact@v4
@@ -70,6 +71,8 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
