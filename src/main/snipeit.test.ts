@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSnipeIt, type CheckoutOptions } from './snipeit'
+import { createSnipeIt, markdownOf, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -1037,6 +1037,11 @@ describe('create, edit and delete', () => {
     ])
     expect(values).toMatchObject({ asset_tag: 'NOMMA-004812', model_id: '7', status_id: '2', rtd_location_id: '4', supplier_id: '', purchase_date: '2023-08-01',
       purchase_cost: '1200.50', notes: 'Spare', _snipeit_mac_1: '00:1A:2B:3C:4D:5E', _snipeit_cart_2: '' })
+  })
+
+  it("a note Snipe-IT sends rendered comes back as Markdown, so editing it keeps its links and emphasis", () => {
+    expect(markdownOf('<p>Screen <strong>cracked</strong>, see <a href="https://help.example.org/t/12" rel="nofollow">ticket 12</a><br />Use <em>only</em> the <code>USB-C</code> charger</p>'))
+      .toBe('Screen **cracked**, see [ticket 12](https://help.example.org/t/12)\nUse *only* the `USB-C` charger')
   })
 
   it("an Accessory's minimum is read from min_qty, as Snipe-IT sends it, and saved as min_amt", async () => {
