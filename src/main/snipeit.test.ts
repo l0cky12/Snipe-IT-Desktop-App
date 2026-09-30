@@ -957,7 +957,7 @@ describe('the other record kinds', () => {
       id: 12, name: 'Room 204', parent: { id: 1, name: 'Main Campus' }, manager: { id: 7, name: 'Morgan Lee' }, city: 'Springfield', assets_count: 34,
       ldap_ou: null, currency: '', created_at: { datetime: '2023-08-01 09:00:00', formatted: 'Aug 1, 2023 9:00AM' }, notes: '<p>Back <em>door</em> sticks</p>',
       children: [{ id: 30, name: 'Closet' }], available_actions: { update: true }, image: 'https://snipe.example.org/img.png', active: true,
-      opened: { date: '2020-08-17' }, tags: ['north', 'ground floor'], empty: [],
+      opened: { date: '2020-08-17' }, tags: ['north', 'ground floor'], empty: [], budget: { amount: 100, currency: 'USD', note: null },
     }
     const { fetch } = fakeFetch({ '/locations/12': { body: location } })
     expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
@@ -973,6 +973,7 @@ describe('the other record kinds', () => {
         { label: 'Active', value: 'Yes' },
         { label: 'Opened', value: '2020-08-17' },
         { label: 'Tags', value: 'north, ground floor' },
+        { label: 'Budget', value: 'amount: 100, currency: USD' },
       ],
     })
   })
@@ -985,6 +986,14 @@ describe('the other record kinds', () => {
     expect(fields).toContainEqual({ label: 'Supplier', value: 'EduDevices Inc.', link: { kind: 'suppliers', id: 2 } })
     expect(fields.at(-1)).toEqual({ label: 'MAC Address', value: '00:1A:2B:3C:4D:5E' })
     expect(fields.some((f) => f.label === 'Empty')).toBe(false)
+  })
+
+  it("a Category says what it holds, so its page links to that List; those Lists filter by Category", async () => {
+    const { fetch, queries } = fakeFetch({ '/categories/8': { body: { id: 8, name: 'Toner', category_type: 'consumable' } }, '/consumables': { body: { total: 0, rows: [] } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.record('categories', 8)).toMatchObject({ name: 'Toner', categoryType: 'consumable' })
+    await snipeIt.list('consumables', { filters: { category_id: '8' } })
+    expect(queries.at(-1)).toMatchObject({ category_id: '8' })
   })
 
   it.each(['activity', 'assets', 'hardware'])('a record of kind %s is refused without asking Snipe-IT', async (kind) => {

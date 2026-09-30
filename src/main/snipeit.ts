@@ -86,7 +86,8 @@ export type ListKind = keyof ListRows
 export type RecordKind = Exclude<ListKind, 'activity'>
 /** One field of a record as the Operator reads it; link is the related record it names, when the app can open it. */
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[] }
+/** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string }
 /** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
 export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] }
@@ -360,12 +361,12 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
     row: (r: RawActivity) => ({ id: r.id, ...toHistoryEntry(r), item: r.item ? { type: r.item.type, id: r.item.id, name: r.item.name } : null }),
   },
   licenses: {
-    path: '/licenses', filters: {},
+    path: '/licenses', filters: { category_id: 'id' },
     row: (r: RawRow) => ({ id: r.id, name: r.name, manufacturer: nameOf(r.manufacturer), category: nameOf(r.category), seats: count(r.seats), free: count(r.free_seats_count), expires: (r.expiration_date as { date?: string } | null)?.date ?? '' }),
   },
-  accessories: { path: '/accessories', filters: {}, row: (r: RawRow) => stockRow(r, r.remaining_qty ?? r.remaining) },
-  consumables: { path: '/consumables', filters: {}, row: (r: RawRow) => stockRow(r, r.remaining) },
-  components: { path: '/components', filters: {}, row: (r: RawRow) => stockRow(r, r.remaining) },
+  accessories: { path: '/accessories', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining_qty ?? r.remaining) },
+  consumables: { path: '/consumables', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
+  components: { path: '/components', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
   categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r.assets_count) }) },
   manufacturers: { path: '/manufacturers', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, assets: count(r.assets_count) }) },
   suppliers: {
@@ -393,7 +394,11 @@ function fieldsOf(raw: RawRow): Field[] {
       // A date: as Snipe-IT formats it, or as sent.
       const when = [o.formatted, o.date, o.datetime].find((d) => typeof d === 'string')
       if (when) return { label, value: when as string }
-      if (typeof o.name !== 'string') return null
+      // Something else structured (an amount and its currency…): its plain values, so no field goes missing.
+      if (typeof o.name !== 'string') {
+        const plain = Object.entries(o).filter(([, p]) => p !== null && p !== '' && typeof p !== 'object').map(([k, p]) => `${k}: ${p}`)
+        return plain.length ? { label, value: plain.join(', ') } : null
+      }
       // An Asset's Assignee says what kind it is.
       const kind = key === 'assigned_to' ? ({ user: 'users', location: 'locations', asset: 'assets' } as const)[o.type as Assignee['type']] : RELATED_KINDS[key]
       return { label, value: o.name, ...(kind && typeof o.id === 'number' && { link: { kind, id: o.id } }) }
@@ -639,7 +644,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(id, 'record')
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
-      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body) }
+      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.
