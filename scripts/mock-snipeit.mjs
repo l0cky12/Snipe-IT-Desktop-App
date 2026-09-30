@@ -95,6 +95,26 @@ function listPage(spec, q) {
   return { total: rows.length, rows: rows.slice(offset, offset + Number(q.get('limit') ?? 50)) }
 }
 
+// The record kinds beyond Assets that the app browses, each with a few fields for its record page.
+const suppliers = named(['Campus Tech Supply', 'EduDevices Inc.'])
+const companies = named(['NOMMA'])
+for (const a of assets) {
+  Object.assign(a, { supplier: pick(suppliers, a.id), company: companies[0], order_number: `PO-${2024000 + (a.id % 12)}` })
+  a.custom_fields ??= { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:00:${(a.id >> 8).toString(16).padStart(2, '0')}:${(a.id & 255).toString(16).padStart(2, '0')}`.toUpperCase() } }
+}
+const tally = (list, test) => list.filter(test).length
+const makerOf = (a) => a.manufacturer ?? a.model.manufacturer
+Object.assign(lists, {
+  manufacturers: { rows: () => manufacturers.map((m) => ({ ...m, assets_count: tally(assets, (a) => makerOf(a).id === m.id) })), search: (m) => text(m.name), sorts: { name: (m) => m.name } },
+  suppliers: { rows: () => suppliers.map((s) => ({ ...s, contact: 'Pat Vendor', phone: '555-0100', email: 'orders@example.org', assets_count: tally(assets, (a) => a.supplier.id === s.id) })), search: (s) => text(s.name), sorts: { name: (s) => s.name } },
+  companies: { rows: () => companies.map((c) => ({ ...c, assets_count: assets.length, users_count: users.length })), search: (c) => text(c.name) },
+})
+lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
+lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department.id === d.id) }))
+lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
+Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
+lists.users.filters.company_id = () => true
+
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
@@ -127,6 +147,11 @@ createServer(async (req, res) => {
       act('update', a, null, `Status changed to ${status.name}`)
     }
     return send(req.method === 'GET' ? a : { status: 'success', messages: 'Done.', payload: a })
+  }
+  // One record of any other kind by id.
+  if ((m = path.match(/^([a-z]+)\/(\d+)$/)) && lists[m[1]]) {
+    const row = lists[m[1]].rows().find((r) => r.id === +m[2])
+    return row ? send(row) : send({ status: 'error', messages: 'Not found' }, 404)
   }
   const spec = lists[path]
   if (spec) return send(listPage(spec, url.searchParams))

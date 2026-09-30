@@ -936,6 +936,70 @@ describe('report', () => {
   })
 })
 
+describe('the other record kinds', () => {
+  it('Lists of Licenses, stocked kinds and Departments come back in app vocabulary', async () => {
+    const { fetch, calls } = fakeFetch({
+      '/licenses': { body: { total: 1, rows: [{ id: 3, name: 'Office Suite', manufacturer: { id: 1, name: 'Contoso' }, category: null, seats: 300, free_seats_count: 42, expiration_date: { date: '2027-06-30', formatted: 'Jun 30, 2027' } }] } },
+      '/accessories': { body: { total: 1, rows: [{ id: 5, name: 'USB-C Charger', category: { id: 2, name: 'Chargers' }, manufacturer: null, location: { id: 9, name: 'Library' }, qty: 80, remaining_qty: 23 }] } },
+      '/components': { body: { total: 1, rows: [{ id: 6, name: 'SSD', category: null, location: null, qty: null, remaining: 0 }] } },
+      '/departments': { body: { total: 1, rows: [{ id: 2, name: 'Science', company: null, manager: { id: 7, name: 'Morgan Lee' }, location: { id: 9, name: 'Library' }, users_count: 13 }] } },
+    })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.list('licenses')).rows).toEqual([{ id: 3, name: 'Office Suite', manufacturer: 'Contoso', category: '', seats: 300, free: 42, expires: '2027-06-30' }])
+    expect((await snipeIt.list('accessories')).rows).toEqual([{ id: 5, name: 'USB-C Charger', category: 'Chargers', manufacturer: '', location: 'Library', qty: 80, remaining: 23 }])
+    expect((await snipeIt.list('components')).rows).toEqual([{ id: 6, name: 'SSD', category: '', manufacturer: '', location: '', qty: 0, remaining: 0 }])
+    expect((await snipeIt.list('departments')).rows).toEqual([{ id: 2, name: 'Science', company: '', manager: 'Morgan Lee', location: 'Library', users: 13 }])
+    expect(calls).toEqual(['/licenses', '/accessories', '/components', '/departments'])
+  })
+
+  it("a record's page has every field it sent: related records link to theirs, dates as Snipe-IT formats them, notes as text", async () => {
+    const location = {
+      id: 12, name: 'Room 204', parent: { id: 1, name: 'Main Campus' }, manager: { id: 7, name: 'Morgan Lee' }, city: 'Springfield', assets_count: 34,
+      ldap_ou: null, currency: '', created_at: { datetime: '2023-08-01 09:00:00', formatted: 'Aug 1, 2023 9:00AM' }, notes: '<p>Back <em>door</em> sticks</p>',
+      children: [{ id: 30, name: 'Closet' }], available_actions: { update: true }, image: 'https://snipe.example.org/img.png', active: true,
+      opened: { date: '2020-08-17' }, tags: ['north', 'ground floor'], empty: [],
+    }
+    const { fetch } = fakeFetch({ '/locations/12': { body: location } })
+    expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
+      kind: 'locations', id: 12, name: 'Room 204',
+      fields: [
+        { label: 'Parent', value: 'Main Campus', link: { kind: 'locations', id: 1 } },
+        { label: 'Manager', value: 'Morgan Lee', link: { kind: 'users', id: 7 } },
+        { label: 'City', value: 'Springfield' },
+        { label: 'Assets', value: '34' },
+        { label: 'Created at', value: 'Aug 1, 2023 9:00AM' },
+        { label: 'Notes', value: 'Back door sticks' },
+        { label: 'Children', value: 'Closet', link: { kind: 'locations', id: 30 } },
+        { label: 'Active', value: 'Yes' },
+        { label: 'Opened', value: '2020-08-17' },
+        { label: 'Tags', value: 'north, ground floor' },
+      ],
+    })
+  })
+
+  it("an Asset's fields include its custom fields and link its Assignee by kind", async () => {
+    const withCustom = { ...chromebook, supplier: { id: 2, name: 'EduDevices Inc.' }, custom_fields: { 'MAC Address': { field: '_snipeit_mac_1', value: '00:1A:2B:3C:4D:5E' }, 'Empty': { field: '_snipeit_e_2', value: null } } }
+    const { fields } = await snipeItWith(withCustom).getAsset(4812)
+    expect(fields).toContainEqual({ label: 'Assignee', value: 'Jordan Reyes', link: { kind: 'users', id: 311 } })
+    expect(fields).toContainEqual({ label: 'Asset Model', value: 'HP Chromebook 14 G7', link: { kind: 'models', id: 7 } })
+    expect(fields).toContainEqual({ label: 'Supplier', value: 'EduDevices Inc.', link: { kind: 'suppliers', id: 2 } })
+    expect(fields.at(-1)).toEqual({ label: 'MAC Address', value: '00:1A:2B:3C:4D:5E' })
+    expect(fields.some((f) => f.label === 'Empty')).toBe(false)
+  })
+
+  it.each(['activity', 'assets', 'hardware'])('a record of kind %s is refused without asking Snipe-IT', async (kind) => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).record(kind as 'users', 1)).rejects.toThrow('Unknown record')
+    expect(calls).toEqual([])
+  })
+
+  it("a Manufacturer's, Supplier's or Company's Assets are asked for with Snipe-IT's filter", async () => {
+    const { fetch, queries } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('assets', { filters: { manufacturer_id: '4', supplier_id: '2', company_id: '1' } })
+    expect(queries[0]).toEqual({ limit: '50', offset: '0', manufacturer_id: '4', supplier_id: '2', company_id: '1' })
+  })
+})
+
 describe('updateStatus', () => {
   it('PATCHes only the new status onto the Asset', async () => {
     const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: { status: 'success', messages: 'Asset updated.' } } })

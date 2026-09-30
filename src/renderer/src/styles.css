@@ -225,3 +225,8 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
 .ferpa { margin: 14px 28px 0; padding: 14px 18px; border: 1.5px solid var(--tangerine); border-radius: var(--r-ctl); background: var(--panel); }
 .ferpa p { margin: 0 0 10px; line-height: 1.5; }
+.records { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 20px 28px; }
+.record-kind { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 16px; background: var(--panel); border: 1.5px solid var(--line); border-radius: 14px;
+               color: var(--text); font: 600 15px var(--sans); cursor: pointer; transition: border-color var(--fast); }
+.record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
+.all-fields summary { cursor: pointer; }
