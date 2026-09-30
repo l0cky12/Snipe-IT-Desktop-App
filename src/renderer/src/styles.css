@@ -68,6 +68,8 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .row { all: unset; box-sizing: border-box; margin: 2px 14px; width: calc(100% - 28px); padding: 10px 12px; border-radius: 12px; cursor: pointer;
        display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: center; transition: background var(--fast); }
 .row:hover, .row:focus-visible { background: var(--panel2); }
+.row.static { cursor: default; }
+.row.static:hover { background: none; }
 .row.sel { background: var(--gold); color: var(--navy); }
 .row.sel .n { color: var(--navy); }
 .row .t { font-weight: 700; font-size: 13.5px; }

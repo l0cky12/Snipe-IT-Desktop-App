@@ -45,13 +45,21 @@ export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: numbe
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
 
-/** The kinds Lookup searches besides Assets. */
+/** The kinds that open the Assets List filtered to them. */
 export type OtherKind = 'users' | 'locations' | 'models'
+/** The kinds Lookup searches besides Assets. */
+export type SearchKind = OtherKind | 'licenses' | 'accessories' | 'consumables' | 'components'
+/** matched names the field the text was found in, or is '' when Snipe-IT matched on a field the app doesn't check. */
+export type Match = CheckoutTarget & { matched: string }
+/** An Asset found by a text search, with the field it matched (as on Match). */
+export type AssetMatch = AssetSummary & { matched: string }
+/** Everything Lookup searches. */
+type Searchable = SearchKind | 'assets'
 /** Lookup's matches of one other kind, or why that kind couldn't be searched (e.g. the key can't read Users). */
-export type Matches = { kind: OtherKind; rows: CheckoutTarget[] } | { kind: OtherKind; error: string }
+export type Matches = { kind: SearchKind; rows: Match[] } | { kind: SearchKind; error: string }
 
 /** An exact Asset Tag hit carries the full Asset; a text search carries Asset summaries and the other kinds' matches. */
-export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetSummary[]; others: Matches[] }
+export type LookupResult = { exact: true; assets: [Asset] } | { exact: false; assets: AssetMatch[]; others: Matches[] }
 
 export type UserRow = { id: number; name: string; username: string; email: string; department: string; location: string; assets: number }
 export type LocationRow = { id: number; name: string; parent: string; city: string; assets: number; checkedOut: number; users: number }
@@ -160,6 +168,41 @@ const reason = (messages: unknown): string =>
   messages == null ? ''
   : typeof messages === 'object' ? Object.values(messages).flat().map(reason).join(' ')
   : String(messages)
+
+// Snipe-IT says a row matched a search, not on which field. Lookup checks these, in order, for the text;
+// a field holding an object (a Location, an Asset Model…) is checked by its name. An Asset's custom fields come after.
+const MATCH_FIELDS: Record<Searchable, [label: string, field: string][]> = {
+  assets: [['Asset Tag', 'asset_tag'], ['Name', 'name'], ['Serial', 'serial'], ['Asset Model', 'model'], ['Model No.', 'model_number'], ['Assignee', 'assigned_to'],
+    ['Location', 'location'], ['Status', 'status_label'], ['Category', 'category'], ['Manufacturer', 'manufacturer'], ['Supplier', 'supplier'], ['Order number', 'order_number'], ['Notes', 'notes']],
+  users: [['Name', 'name'], ['Username', 'username'], ['Email', 'email'], ['Employee No.', 'employee_num'], ['Job title', 'jobtitle'], ['Department', 'department'], ['Location', 'location'], ['Notes', 'notes']],
+  locations: [['Name', 'name'], ['Address', 'address'], ['City', 'city'], ['State', 'state'], ['Zip', 'zip'], ['Parent', 'parent'], ['Notes', 'notes']],
+  models: [['Name', 'name'], ['Model No.', 'model_number'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Notes', 'notes']],
+  licenses: [['Name', 'name'], ['Product key', 'product_key'], ['Licensed to', 'license_name'], ['Licensed to email', 'license_email'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Order number', 'order_number'], ['Notes', 'notes']],
+  accessories: [['Name', 'name'], ['Model No.', 'model_number'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Order number', 'order_number'], ['Notes', 'notes']],
+  consumables: [['Name', 'name'], ['Item No.', 'item_no'], ['Model No.', 'model_number'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Order number', 'order_number'], ['Notes', 'notes']],
+  components: [['Name', 'name'], ['Serial', 'serial'], ['Manufacturer', 'manufacturer'], ['Category', 'category'], ['Order number', 'order_number'], ['Notes', 'notes']],
+}
+
+function matchedField(kind: Searchable, raw: Record<string, unknown>, text: string): string {
+  const q = text.toLowerCase()
+  const holds = (v: unknown) => {
+    const value = v && typeof v === 'object' ? (v as { name?: unknown }).name : v
+    // Notes arrive as inline HTML rendered from Markdown; match the text, not the markup.
+    return (typeof value === 'string' || typeof value === 'number') && String(value).replace(/<[^>]*>/g, '').toLowerCase().includes(q)
+  }
+  const named = MATCH_FIELDS[kind]
+  const label = (key: string) => named.find(([, f]) => f === key)?.[0] ?? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ')
+  // Snipe-IT sends custom fields as label → { value }, or [] when the Asset has none.
+  const custom = kind === 'assets' && raw.custom_fields && typeof raw.custom_fields === 'object'
+    ? Object.entries(raw.custom_fields as Record<string, { value?: unknown } | null>).map(([label, f]): [string, unknown] => [label, f?.value])
+    : []
+  // Last, the other text Snipe-IT sent (inside its objects too, not their ids): it may have matched on a field the list doesn't name.
+  // Ids, dates, counts, quantities and the like are skipped: Snipe-IT doesn't search them, so a hit there would be noise ('Found in Qty').
+  const noise = /^(id|custom_fields|image|available_actions|.*_at|.*_date|.*_count(er)?|.*qty|remaining|min_amt)$/
+  const rest = Object.entries(raw).filter(([k]) => !noise.test(k)).flatMap(([k, v]): [string, unknown][] =>
+    v && typeof v === 'object' ? Object.values(v).filter((x) => typeof x === 'string').map((x): [string, unknown] => [label(k), x]) : typeof v === 'string' ? [[label(k), v]] : [])
+  return [...named.map(([l, field]): [string, unknown] => [l, raw[field]]), ...custom, ...rest].find(([, v]) => holds(v))?.[0] ?? ''
+}
 
 // ponytail: matches Snipe-IT's English action_type values; other actions show as-is, capitalized.
 const actions: Record<string, { label: string; prep: string }> = {
@@ -328,12 +371,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
   // detail tells namesakes apart: a User's username, an Asset Model's model number.
-  async function searchTargets(kind: OtherKind, text: string): Promise<CheckoutTarget[]> {
+  async function searchTargets(kind: SearchKind, text: string): Promise<Match[]> {
     const q = text.trim()
     if (!q) return []
     const body = await request<{ rows: { id: number; name: string; username?: string; model_number?: string | null }[] }>(`/${kind}?search=${encodeURIComponent(q)}&limit=20`)
     if (isError(body)) throw new Error(reason(body.messages))
-    return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? r.model_number ?? '' }))
+    return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? r.model_number ?? '', matched: matchedField(kind, r, q) }))
   }
 
   // Re-reads the Asset so Checkout/Checkin rules and the default status come from Snipe-IT, not from a possibly stale screen.
@@ -362,15 +405,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
       // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
       if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
-      // Snipe-IT's search covers name, Asset Tag, and Serial (and more). The other kinds are searched alongside;
-      // one the key can't read says so without hiding the rest.
+      // Snipe-IT's search covers an Asset's fields, related names (Asset Model, Assignee, Location…), notes and
+      // unencrypted custom fields. The other kinds are searched alongside; one the key can't read says so without hiding the rest.
       const [found, ...others] = await Promise.all([
         request<{ rows: RawAsset[] }>(`/hardware?search=${encodeURIComponent(tag)}&limit=${SEARCH_LIMIT}`),
-        ...(['users', 'locations', 'models'] as const).map((kind) =>
+        ...(['users', 'locations', 'models', 'licenses', 'accessories', 'consumables', 'components'] as const).map((kind) =>
           searchTargets(kind, tag).then((rows): Matches => ({ kind, rows }), (e: Error): Matches => ({ kind, error: e.message }))),
       ])
       if (isError(found)) throw new Error(reason(found.messages))
-      return { exact: false, assets: found.rows.map((r) => toSummary(toAsset(r, today()))), others }
+      return { exact: false, assets: found.rows.map((r) => ({ ...toSummary(toAsset(r, today())), matched: matchedField('assets', r, tag) })), others }
     },
 
     async getAsset(id: number): Promise<AssetWithHistory> {

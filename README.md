@@ -53,4 +53,4 @@ Legacy `config.json` is no longer read. Enter those credentials in Settings, the
 
 Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Opening a User, Location, or Asset Model shows the Assets checked out to it or in it. Asset rows have Quick Actions: Checkin, Checkout, and Status.
 
-The scan/search box still opens an exact Asset Tag straight away; anything else lists matching Assets, Users, Locations, and Asset Models in the rail.
+The scan/search box still opens an exact Asset Tag straight away; anything else lists matching Assets, Users, Locations, Asset Models, Licenses, Accessories, Consumables, and Components in the rail, grouped by kind, with the field each matched on (custom fields and notes included).

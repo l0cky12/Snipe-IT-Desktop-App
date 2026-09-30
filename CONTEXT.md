@@ -48,7 +48,7 @@ _Avoid_: admin, user (User is the Assignee kind)
 The Snipe-IT activity log for one Asset: every Checkout, Checkin, and edit, with who did it and when.
 
 **Lookup**:
-Finding things by typing or scanning into the single search box. An exact Asset Tag opens that Asset; anything else finds matching Assets, Users, Locations, and Asset Models. A barcode scan is just fast typing.
+Finding things by typing or scanning into the single search box. An exact Asset Tag opens that Asset; anything else finds matching Assets, Users, Locations, Asset Models, Licenses, Accessories, Consumables, and Components, grouped by kind, each saying which field held the text (a custom field, the notes, the Serial…). A barcode scan is just fast typing.
 _Avoid_: full-text search (Snipe-IT matches fields, it doesn't index text)
 
 **Asset Model**:
