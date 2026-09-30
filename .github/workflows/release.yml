@@ -1,0 +1,86 @@
+# Builds the installers and, for a version tag (v1.2.3), attaches them to that tag's GitHub Release.
+# A pull request that changes the packaging builds them too (and installs the .deb and the Windows installer), without a Release.
+# Run by hand (workflow_dispatch) to get the same files as an artifact without a Release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml', 'package.json', 'package-lock.json']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: --linux AppImage deb pacman
+          - os: windows-latest
+            targets: --win nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The Arch (pacman) package is built with bsdtar.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libarchive-tools
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The tag names the version, so the files are called snipe-it-desktop-1.2.3.* without bumping package.json first.
+      - if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.targets }} --publish never
+      # The .deb must install too, not just build.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y ./dist/*.deb && test -x '/opt/Snipe-IT Desktop/snipe-it-desktop'
+      # The installer must install, not just build: a silent per-user install puts the app in
+      # %LOCALAPPDATA%\Programs\snipe-it-desktop, and its uninstaller takes it away again.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter '*Setup*.exe' | Select-Object -First 1
+          $run = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "The installer exited with $($run.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\snipe-it-desktop'
+          if (-not (Test-Path (Join-Path $dir 'Snipe-IT Desktop.exe'))) { throw "The installer didn't install the app in $dir" }
+          $run = Start-Process (Join-Path $dir 'Uninstall Snipe-IT Desktop.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "The uninstaller exited with $($run.ExitCode)" }
+          # The NSIS uninstaller copies itself to %TEMP% and exits, so the copy is still deleting files when -Wait returns.
+          Start-Sleep -Seconds 5
+          if (Test-Path (Join-Path $dir 'Snipe-IT Desktop.exe')) { throw "The uninstaller left the app in $dir" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.pacman
+          if-no-files-found: error
+
+  release:
+    # Only a pushed tag makes a Release; a manual run on a tag still just builds.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          gh release upload "$GITHUB_REF_NAME" installers/* --clobber
