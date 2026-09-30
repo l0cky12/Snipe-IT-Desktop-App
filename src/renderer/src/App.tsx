@@ -51,6 +51,10 @@ export function App() {
   const search = useRef<HTMLInputElement>(null)
   // Bumped by every lookup or open; a result that returns after a newer one started is discarded.
   const latest = useRef(0)
+  // The lookup or open still loading, if any; the rail says so until it's done or discarded.
+  const [busy, setBusy] = useState(0)
+  // Discards any lookup or open still loading, so it can't pull the Operator off the page they chose.
+  const cancel = () => (setBusy(0), ++latest.current)
 
   useEffect(() => search.current?.focus(), [])
   useEffect(() => {
@@ -67,19 +71,21 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    latest.current++; setSettings(value); setAsset(null); setRecent([]); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
+    cancel(); setSettings(value); setAsset(null); setRecent([]); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
   async function run(work: (isStale: () => boolean) => Promise<void>) {
     const mine = ++latest.current
     const isStale = () => mine !== latest.current
+    setBusy(mine)
     try {
       await work(isStale)
     } catch (err) {
       // The current Asset and rail stay as they were; only the message changes.
       if (!isStale()) setMessage({ text: (err as Error).message, error: true })
     } finally {
+      setBusy((b) => (b === mine ? 0 : b))
       search.current?.focus()
     }
   }
@@ -133,8 +139,7 @@ export function App() {
   const selected = view ? undefined : asset?.id
   // The dashboard stays in the main area, so the Operator can click through several segments in turn.
   const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
-  // Bumping `latest` discards an open still loading, so it can't pull the Operator off the page they chose.
-  const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: ++latest.current }))
+  const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: cancel() }))
   const page = !showSettings && view?.page
 
   return (
@@ -142,14 +147,14 @@ export function App() {
       <aside className="rail">
         <nav className="strip" aria-label="Pages">
           <span className="logo" aria-hidden="true">S</span>
-          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setView({ page: 'dashboard' }))}>
+          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
             <LayoutGrid size={20} />
           </button>
           {LISTS.map((k) => {
             const Icon = listIcon[k]
             return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
           })}
-          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><SettingsIcon size={20} /></button>
+          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
         </nav>
         <div className="panel">
           <form onSubmit={onSubmit}>
@@ -164,6 +169,7 @@ export function App() {
               aria-label="Scan or type an Asset Tag"
             />
           </form>
+          {busy > 0 && <p className="message" role="status">Loading…</p>}
           {message.text && (
             <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
               {message.text}

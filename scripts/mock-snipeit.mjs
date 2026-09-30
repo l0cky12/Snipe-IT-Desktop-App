@@ -1,9 +1,13 @@
 // A pretend Snipe-IT with made-up data, for developing and screenshotting without real student records.
 // Run: node scripts/mock-snipeit.mjs [port]   then use http://127.0.0.1:<port> and any API token in Settings.
+// For timing, make it bigger and slower like a real server: MOCK_SCALE=20 (240 Assets and 64 Users each),
+// MOCK_LATENCY_MS=150 (every request) and MOCK_ROW_MS=5 (each row a list returns).
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
+// It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
 
 const port = Number(process.argv[2] ?? 8765)
+const [scale, latency, rowCost] = ['MOCK_SCALE', 'MOCK_LATENCY_MS', 'MOCK_ROW_MS'].map((k, i) => Number(process.env[k] ?? (i ? 0 : 1)))
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
@@ -22,12 +26,12 @@ const models = [
 ].map(([name, model_number, m, c], i) => ({ id: i + 1, name, model_number, manufacturer: manufacturers[m], category: categories[c] }))
 const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 'Jordan', 'Kai', 'Logan', 'Morgan', 'Parker', 'Quinn', 'Riley', 'Sage', 'Taylor']
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
-const users = Array.from({ length: 64 }, (_, i) => {
+const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
-const assets = Array.from({ length: 240 }, (_, i) => {
+const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
@@ -80,7 +84,8 @@ createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
   const body = req.method === 'GET' ? {} : JSON.parse(await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s || '{}')) }))
-  const send = (value, status = 200) => (res.writeHead(status, { 'Content-Type': 'application/json' }), res.end(JSON.stringify(value)))
+  const send = (value, status = 200) => setTimeout(() => (res.writeHead(status, { 'Content-Type': 'application/json' }), res.end(JSON.stringify(value))),
+    latency + rowCost * (value?.rows?.length ?? 1))
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (path === 'users/me') return send({ id: 900, name: 'Demo Operator' })
