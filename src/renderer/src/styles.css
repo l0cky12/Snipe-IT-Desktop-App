@@ -214,3 +214,8 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--leaf); color: var(--on-bright); font-weight: 600; display: inline-block; }
 .pager { justify-content: flex-end; padding: 14px 28px; }
+.records { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 20px 28px; }
+.record-kind { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 16px; background: var(--panel); border: 1.5px solid var(--line); border-radius: 14px;
+               color: var(--text); font: 600 15px var(--sans); cursor: pointer; transition: border-color var(--fast); }
+.record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
+.all-fields summary { cursor: pointer; }

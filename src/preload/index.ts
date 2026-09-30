@@ -23,6 +23,7 @@ const snipeIt: SnipeIt = {
   list: call('snipeit:list'),
   names: call('snipeit:names'),
   updateStatus: call('snipeit:updateStatus'),
+  record: call('snipeit:record'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)

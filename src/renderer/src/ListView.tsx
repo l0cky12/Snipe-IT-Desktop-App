@@ -1,8 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, type Asset, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, type Asset, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type StatusLabel } from '../../main/snipeit'
 import { CheckinForm, CheckoutForm, StatusChip, statusChoices } from './App'
 
-export const listName: Record<ListKind, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report' }
+export const listName: Record<ListKind, string> = {
+  assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
+  licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', categories: 'Categories',
+  manufacturers: 'Manufacturers', suppliers: 'Suppliers', departments: 'Departments', companies: 'Companies', statuslabels: 'Status Labels',
+}
+// The stocked kinds share their columns: what it is, where it is, and how many are left
+// (Available for Accessories and Components, Remaining for Consumables, as CONTEXT.md names them).
+const stockColumns = <K extends 'accessories' | 'consumables' | 'components'>(left: string): Column<K>[] => [
+  { key: 'name', label: 'Name' },
+  { key: 'category', label: 'Category' },
+  { key: 'manufacturer', label: 'Manufacturer', hidden: true },
+  { key: 'location', label: 'Location' },
+  { key: 'qty', label: 'Quantity' },
+  { key: 'remaining', label: left },
+]
 
 // A List's columns: the first is always shown and opens the row; the rest the Operator can hide. hidden = hidden until shown.
 type Column<K extends ListKind> = { key: keyof ListRows[K] & string; label: string; hidden?: true; cell?: (row: ListRows[K]) => ReactNode }
@@ -54,6 +68,35 @@ const COLUMNS: { [K in ListKind]: Column<K>[] } = {
     { key: 'detail', label: 'Detail' },
     { key: 'note', label: 'Note', cell: (r) => r.note && <span className="note">{r.note}</span> },
   ],
+  licenses: [
+    { key: 'name', label: 'Name' },
+    { key: 'manufacturer', label: 'Manufacturer' },
+    { key: 'category', label: 'Category', hidden: true },
+    { key: 'seats', label: 'Seats' },
+    { key: 'free', label: 'Free' },
+    { key: 'expires', label: 'Expires' },
+  ],
+  accessories: stockColumns('Available'),
+  consumables: stockColumns('Remaining'),
+  components: stockColumns('Available'),
+  categories: [{ key: 'name', label: 'Name' }, { key: 'type', label: 'Type', cell: (r) => capital(r.type) }, { key: 'items', label: 'Items' }],
+  manufacturers: [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }],
+  suppliers: [
+    { key: 'name', label: 'Name' },
+    { key: 'contact', label: 'Contact' },
+    { key: 'phone', label: 'Phone', hidden: true },
+    { key: 'email', label: 'Email', hidden: true },
+    { key: 'assets', label: 'Assets' },
+  ],
+  departments: [
+    { key: 'name', label: 'Name' },
+    { key: 'company', label: 'Company', hidden: true },
+    { key: 'manager', label: 'Manager' },
+    { key: 'location', label: 'Location' },
+    { key: 'users', label: 'Users' },
+  ],
+  companies: [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }, { key: 'users', label: 'Users' }],
+  statuslabels: [{ key: 'name', label: 'Name' }, { key: 'type', label: 'Type', cell: (r) => capital(r.type) }, { key: 'assets', label: 'Assets' }],
 }
 
 // Stored per computer and per List: which columns show.
@@ -72,7 +115,7 @@ type Filter = { key: string; label: string; options: Option[] }
 type Names = Partial<Record<'models' | 'categories' | 'departments', StatusLabel[]>>
 const toOptions = (list: StatusLabel[] = []): Option[] => list.map((l) => ({ value: String(l.id), label: l.name }))
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
-const namesNeeded: Record<ListKind, (keyof Names)[]> = { assets: ['models', 'categories'], users: ['departments'], locations: [], models: ['categories'], activity: [] }
+const namesNeeded: Partial<Record<ListKind, (keyof Names)[]>> = { assets: ['models', 'categories'], users: ['departments'], models: ['categories'] }
 
 function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], locations: StatusLabel[]): Filter[] {
   switch (kind) {
@@ -95,7 +138,7 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
   }
 }
 
-/** What opening a row does: an Asset opens its sheet; a User, Location or Asset Model opens the Assets List filtered to it. */
+/** A List opened already filtered to one record, e.g. a Location's Assets; label names a filter that has no filter box. */
 export type Drill = { filters: Record<string, string>; label?: string }
 export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: string }): Drill =>
   kind === 'users' ? { filters: { user_id: String(id) }, label: `Checked out to ${name}` } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
@@ -103,14 +146,15 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onDrill }: {
+// Opening a row: an Asset opens its sheet, any other record its page of fields.
+export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord }: {
   kind: ListKind
   drill?: Drill
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
   defaultLocation: StatusLabel | null
   onOpenAsset: (id: number) => void
-  onDrill: (drill: Drill) => void
+  onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
   const [text, setText] = useState('')
   const [search, setSearch] = useState('')
@@ -150,7 +194,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   // A filter whose names don't load just has fewer choices.
   useEffect(() => {
     let stale = false
-    for (const n of namesNeeded[kind]) window.snipeIt.names(n).then((v) => !stale && setNames((names) => ({ ...names, [n]: v })), () => {})
+    for (const n of namesNeeded[kind] ?? []) window.snipeIt.names(n).then((v) => !stale && setNames((names) => ({ ...names, [n]: v })), () => {})
     return () => { stale = true }
   }, [kind])
   useEffect(() => localStorage.setItem(columnsKey(kind), JSON.stringify(shown)), [kind, shown])
@@ -177,7 +221,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
 
   function open(row: ListRows[ListKind]): (() => void) | undefined {
     if (kind === 'assets') return () => onOpenAsset(row.id)
-    if (kind !== 'activity') return () => onDrill(drillTo(kind, row as ListRows[OtherKind]))
+    if (kind !== 'activity') return () => onOpenRecord(kind, row.id)
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
   }
@@ -228,11 +272,12 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ))}
-        {filters.user_id && (
-          <button className="quiet" onClick={() => setFilter('user_id', '')} aria-label={`Remove filter: ${drill?.label ?? 'User'}`}>
-            {drill?.label ?? 'Checked out to a User'} ×
+        {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
+        {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
+          <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
+            {drill?.label ?? 'Filtered'} ×
           </button>
-        )}
+        ))}
       </div>
       {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
       <table className="history list-table">

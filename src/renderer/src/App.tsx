@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type RecordKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
+import { FieldGrid, RecordView } from './RecordView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -23,12 +24,17 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
+// The Lists in the left strip; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
-const listIcon: Record<ListKind, LucideIcon> = { assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity }
+const listIcon: Record<ListKind, LucideIcon> = {
+  assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
+  components: Cpu, categories: Tags, manufacturers: Factory, suppliers: Truck, departments: Briefcase, companies: Building2, statuslabels: Tag,
+}
 const otherName = { users: 'Users', locations: 'Locations', models: 'Asset Models' } as const
 
-// What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
-type View = { page: 'dashboard' } | { page: ListKind; drill?: Drill; n: number }
+// What the main area shows besides an Asset: the dashboard, the All records page, a List, or one record's fields.
+// n is bumped on every visit so a List or record starts fresh.
+type View = { page: 'dashboard' } | { page: 'records' } | { page: ListKind; drill?: Drill; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -135,7 +141,10 @@ export function App() {
   const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   // Bumping `latest` discards an open still loading, so it can't pull the Operator off the page they chose.
   const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: ++latest.current }))
+  const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: ++latest.current }))
   const page = !showSettings && view?.page
+  // The All records button stands for every page not in the strip.
+  const elsewhere = page === 'records' || page === 'record' || (!!page && page !== 'dashboard' && !LISTS.includes(page))
 
   return (
     <div className="layout">
@@ -149,6 +158,9 @@ export function App() {
             const Icon = listIcon[k]
             return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
           })}
+          <button title="All records" aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (latest.current++, setShowSettings(false), setView({ page: 'records' }))}>
+            <Boxes size={20} />
+          </button>
           <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { latest.current++; setShowSettings(true) }}><SettingsIcon size={20} /></button>
         </nav>
         <div className="panel">
@@ -188,8 +200,27 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} />
+        : view?.page === 'records' ? <RecordsIndex onGo={go} />
+        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} />
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} />
+        : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
+  )
+}
+
+// Every List, the ones in the strip and the rest.
+function RecordsIndex({ onGo }: { onGo: (page: ListKind) => void }) {
+  return (
+    <>
+      <header className="head"><h1>All records</h1></header>
+      <div className="records">
+        {(Object.keys(listName) as ListKind[]).map((k) => {
+          const Icon = listIcon[k]
+          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
+        })}
+      </div>
+    </>
   )
 }
 
@@ -330,7 +361,9 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations }: {
+function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset }: {
+  onOpenRecord: (kind: RecordKind, id: number) => void
+  onOpenAsset: (id: number) => void
   defaultLocation: StatusLabel | null
   locations: StatusLabel[]
   asset: AssetWithHistory
@@ -385,6 +418,11 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           </div>
         ))}
       </div>
+      {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
+      <details className="all-fields">
+        <summary className="section">All fields ({a.fields.length})</summary>
+        <FieldGrid fields={a.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
+      </details>
       <div className="section">History</div>
       <table className="history">
         <thead>
