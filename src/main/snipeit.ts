@@ -68,6 +68,8 @@ export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] 
 /** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
+/** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
+export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'overdue', 'expiring']
 
 /** One Asset status segment of the Inventory Chart. color is Snipe-IT's status label color, or null when it has none. */
 export type AssetSegment = { status: string; statusMeta: string; color: string | null; count: number; assets: AssetSummary[] }
@@ -133,6 +135,9 @@ const QUANTITIES = {
 const SEARCH_LIMIT = 50
 // The usual server maximum per page; a server that caps lower still gets paged through.
 const PAGE_LIMIT = 500
+// How long one request may take. A full page of PAGE_LIMIT rows can take a busy Snipe-IT well past the usual budget.
+const TIMEOUT = 15000
+const PAGE_TIMEOUT = 60000
 
 // Whole days from today to a Snipe-IT date ("YYYY-MM-DD"); negative when the date is past.
 function daysFrom(today: Date, date: string): number {
@@ -250,24 +255,34 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it as JSON with `method` (POST unless told otherwise) instead of GETting.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
-  async function request<T>(path: string, post?: object, method = 'POST'): Promise<T | SnipeItError> {
-    let res: Response
+  async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+    // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
+    const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
+      ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
+      : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+    let res: Response, text: string
     try {
       res = await fetch(api + path, {
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(timeout),
         redirect: 'error',
         headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && { 'Content-Type': 'application/json' }) },
         ...(post && { method, body: JSON.stringify(post) }),
       })
-    } catch {
-      throw new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+    } catch (e) {
+      throw failed(e)
     }
     if (res.status === 401)
       throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
+    // The timeout covers the body too: a slow server can stall after the headers.
+    try {
+      text = await res.text()
+    } catch (e) {
+      throw failed(e)
+    }
     let body: unknown
     try {
-      body = JSON.parse(await res.text(), (_k, v) => (typeof v === 'string' ? decodeHtml(v) : v))
+      body = JSON.parse(text, (_k, v) => (typeof v === 'string' ? decodeHtml(v) : v))
     } catch {
       body = undefined
     }
@@ -290,7 +305,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   async function allRows<T>(path: string): Promise<T[]> {
     const rows: T[] = []
     for (let total = Infinity; rows.length < total; ) {
-      const page = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
+      const page = await request<{ total: number; rows: T[] }>(`${path}${path.includes('?') ? '&' : '?'}limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`, undefined, undefined, PAGE_TIMEOUT)
       if (isError(page)) throw new Error(reason(page.messages))
       if (!page.rows.length) break
       total = page.total
@@ -332,15 +347,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return { version: version && !isError(version) && typeof version.version === 'string' ? version.version : 'Unavailable' }
     },
     async locations(): Promise<StatusLabel[]> {
-      const rows: StatusLabel[] = []
-      for (let total = Infinity; rows.length < total;) {
-        const page = await request<{ total: number; rows: StatusLabel[] }>(`/locations?limit=${PAGE_LIMIT}&offset=${rows.length}&sort=id&order=asc`)
-        if (isError(page)) throw new Error(reason(page.messages))
-        if (!page.rows.length) break
-        total = page.total
-        rows.push(...page.rows.map(({ id, name }) => ({ id, name })))
-      }
-      return rows
+      return (await allRows<StatusLabel>('/locations')).map(({ id, name }) => ({ id, name }))
     },
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
@@ -466,7 +473,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const now = today()
       const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
       // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
-      const assets = wants('assets', 'overdue', 'expiring') ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      const assets = wants(...ASSET_PIECES) ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
       // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
       // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
       const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined

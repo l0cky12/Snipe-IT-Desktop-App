@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
@@ -492,11 +492,15 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
   function load() {
     const mine = ++latest.current
     setLoading(true)
-    // Per-piece failures come back as entries; this only catches what reached no piece at all.
-    window.snipeIt.dashboard(shown)
-      .then((d) => mine === latest.current && (setData(d), setLoadedAt(new Date().toLocaleTimeString())),
-        (e: Error) => mine === latest.current && setData(Object.fromEntries(shown.map((p) => [p, { error: e.message }]))))
-      .finally(() => mine === latest.current && setLoading(false))
+    // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
+    const shared = shown.filter((p) => ASSET_PIECES.includes(p))
+    const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
+    const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
+    // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
+    // "Loaded" means something arrived: a total failure leaves the last load time alone.
+    let loaded = false
+    Promise.all(groups.map((group) => window.snipeIt.dashboard(group).then((d) => (loaded = true, merge(d)), (e: Error) => merge(Object.fromEntries(group.map((p) => [p, { error: e.message }]))))))
+      .finally(() => mine === latest.current && (setLoading(false), loaded && setLoadedAt(new Date().toLocaleTimeString())))
   }
   // Reordering doesn't refetch; showing or hiding does.
   useEffect(load, [[...shown].sort().join()])
