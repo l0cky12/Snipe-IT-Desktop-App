@@ -10,12 +10,19 @@ const RELATED: Partial<Record<RecordKind, [label: string, list: ListKind, filter
   users: [['Assets checked out', 'assets', 'user_id']],
   locations: [['Assets', 'assets', 'location_id'], ['Users', 'users', 'location_id']],
   models: [['Assets', 'assets', 'model_id']],
-  categories: [['Assets', 'assets', 'category_id'], ['Asset Models', 'models', 'category_id']],
+  // A Category's own kind of thing: see CATEGORY_LISTS.
   manufacturers: [['Assets', 'assets', 'manufacturer_id']],
   suppliers: [['Assets', 'assets', 'supplier_id']],
   companies: [['Assets', 'assets', 'company_id'], ['Users', 'users', 'company_id']],
   departments: [['Users', 'users', 'department_id']],
   statuslabels: [['Assets', 'assets', 'status_id']],
+}
+
+// What a Category holds, by its type.
+const CATEGORY_LISTS: Record<string, [label: string, list: ListKind, filter: string][]> = {
+  asset: [['Assets', 'assets', 'category_id'], ['Asset Models', 'models', 'category_id']],
+  license: [['Licenses', 'licenses', 'category_id']], accessory: [['Accessories', 'accessories', 'category_id']],
+  consumable: [['Consumables', 'consumables', 'category_id']], component: [['Components', 'components', 'category_id']],
 }
 
 // Every field of one record. A related record links to its own page; what belongs to it is a List away.
@@ -46,7 +53,7 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill }: {
           <span className="sub">{singular(kind)}</span>
         </h1>
         <div className="actions">
-          {(RELATED[kind] ?? []).map(([label, list, filter]) => (
+          {(kind === 'categories' ? CATEGORY_LISTS[record.categoryType ?? ''] ?? [] : RELATED[kind] ?? []).map(([label, list, filter]) => (
             <button key={label} className="quiet"
               onClick={() => onDrill(list, { filters: { [filter]: String(id) }, label: kind === 'users' ? `Checked out to ${record.name}` : `${singular(kind)}: ${record.name}` })}>
               {label}

@@ -95,6 +95,7 @@ lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus,
 lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
 Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
 lists.users.filters.company_id = () => true
+for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
