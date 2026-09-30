@@ -51,6 +51,8 @@ Legacy `config.json` is no longer read. Enter those credentials in Settings, the
 
 ## Lists
 
-Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Opening a User, Location, or Asset Model shows the Assets checked out to it or in it. Asset rows have Quick Actions: Checkin, Checkout, and Status.
+Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Opening a User, Location, or Asset Model shows the Assets checked out to it or in it. Asset rows have Quick Actions: Checkin, Checkout, Status, and Batch.
+
+The **Batch** page (in the rail, with a count badge) gathers Assets for one Checkout or Checkin of all of them. While it is open, scanning or picking an Asset adds it instead of opening it. The result of each Asset is shown in the row; failed ones can be retried and successful ones removed. The Batch is not saved between sessions.
 
 The scan/search box still opens an exact Asset Tag straight away; anything else lists matching Assets, Users, Locations, Asset Models, Licenses, Accessories, Consumables, and Components in the rail, grouped by kind, with the field each matched on (custom fields and notes included).

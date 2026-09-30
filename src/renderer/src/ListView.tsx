@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, type Asset, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
 import { CheckinForm, CheckoutForm, StatusChip, statusChoices } from './App'
 
 export const listName: Record<ListKind, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report' }
@@ -103,8 +103,10 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onDrill }: {
+export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onDrill, batch, onBatch }: {
   kind: ListKind
+  batch: AssetSummary[]
+  onBatch: (a: AssetSummary) => void
   drill?: Drill
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
@@ -173,7 +175,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
     }
   }
   const checkin = (a: Asset) => (id: number, o: CheckinOptions) => act(`Checked in ${a.assetTag}`, window.snipeIt.checkin(id, o))
-  const checkout = (a: Asset) => (id: number, o: CheckoutOptions) => act(`Checked out ${a.assetTag}`, window.snipeIt.checkout(id, o))
+  const checkout = (a: Asset) => (o: CheckoutOptions) => act(`Checked out ${a.assetTag}`, window.snipeIt.checkout(a.id, o))
 
   function open(row: ListRows[ListKind]): (() => void) | undefined {
     if (kind === 'assets') return () => onOpenAsset(row.id)
@@ -246,6 +248,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             const a = row as Asset
             const q = kind === 'assets' && quick?.id === row.id ? quick : null
             const toggle = (action: Quick['action']) => (setQuick(q?.action === action ? null : { id: row.id, action }), setMessage({ text: '' }))
+            const inBatch = batch.some((b) => b.id === a.id)
             return [
               <tr key={row.id} className={q ? 'sel' : undefined}>
                 {columns.map((c, i) => cell(c, row, i === 0))}
@@ -255,6 +258,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                     <button disabled={!a.checkoutAllowed} onClick={() => toggle('checkout')} className={q?.action === 'checkout' ? 'on' : undefined}
                       title={a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}>Checkout</button>
                     <button onClick={() => toggle('status')} className={q?.action === 'status' ? 'on' : undefined}>Status</button>
+                    <button disabled={inBatch} onClick={() => onBatch(toSummary(a))}>{inBatch ? 'In batch' : 'Batch'}</button>
                   </td>
                 )}
               </tr>,
@@ -262,7 +266,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                 <tr key={`${row.id}-quick`} className="quick-form">
                   <td colSpan={columns.length + 1}>
                     {q.action === 'checkin' && <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a)} />}
-                    {q.action === 'checkout' && <CheckoutForm asset={a} defaultLocation={defaultLocation} onCheckout={checkout(a)} />}
+                    {q.action === 'checkout' && <CheckoutForm defaultLocation={defaultLocation} onCheckout={checkout(a)} />}
                     {q.action === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => act(`Changed ${a.assetTag}'s status`, window.snipeIt.updateStatus(a.id, statusId))} />}
                   </td>
                 </tr>

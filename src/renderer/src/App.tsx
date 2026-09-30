@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type OtherKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
+import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -29,8 +30,8 @@ const kindName: Record<SearchKind, string> = { users: 'Users', locations: 'Locat
 // The kinds a match opens (the Assets List filtered to it); the stocked kinds are only listed.
 const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind === 'locations' || kind === 'models'
 
-// What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
-type View = { page: 'dashboard' } | { page: ListKind; drill?: Drill; n: number }
+// What the main area shows besides an Asset: the dashboard, the batch, or a List. n is bumped on every visit so a List starts fresh.
+type View = { page: 'dashboard' } | { page: 'batch' } | { page: ListKind; drill?: Drill; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -45,6 +46,13 @@ export function App() {
   // Lookup's matches of the other kinds; Users, Locations and Asset Models open the Assets List filtered to them, the stocked kinds are listed only (until #1).
   const [others, setOthers] = useState<Matches[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
+  // Assets gathered for one Checkout or Checkin (session only, like recent scans), and the last run over them.
+  const [batch, setBatch] = useState<BatchItem[]>([])
+  const [batchRun, setBatchRun] = useState<{ busy: boolean; last: BatchAction | null }>({ busy: false, last: null })
+  // Bumped when Settings are saved; a run still going stops, since the rest of its Assets belong to the old server.
+  const batchEpoch = useRef(0)
+  // One run at a time: a second would act on the same Assets and overwrite the first's results.
+  const batchBusy = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
   // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
   const [opened, setOpened] = useState(0)
@@ -73,7 +81,7 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setRecent([]); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
+    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -104,6 +112,30 @@ export function App() {
   }
 
   const pick = (id: number) => run((isStale) => open(id, isStale))
+  // While the batch is open, a scanned or picked Asset joins it instead of opening.
+  const batching = !showSettings && view?.page === 'batch'
+  function addToBatch(a: AssetSummary) {
+    // Membership is read from the render-time batch for the message; the updater re-checks so a stale closure can never add a duplicate.
+    const known = batch.some((b) => b.id === a.id)
+    setBatch((b) => (b.some((x) => x.id === a.id) ? b : [...b, a]))
+    setMessage({ text: known ? `${a.assetTag} is already in the batch` : `Added ${a.assetTag} to the batch` })
+  }
+  const choose = (a: AssetSummary) => (batching ? addToBatch(a) : pick(a.id))
+  async function runBatch(action: BatchAction, ids: number[]) {
+    if (batchBusy.current) return
+    batchBusy.current = true
+    const epoch = batchEpoch.current
+    const stale = () => epoch !== batchEpoch.current
+    const setOutcome = (id: number, outcome?: Outcome) => setBatch((b) => b.map((a) => (a.id === id ? { ...a, outcome } : a)))
+    // This run's rows start blank, so an earlier result can't pass for this one's.
+    ids.forEach((id) => setOutcome(id))
+    setBatchRun({ busy: true, last: action })
+    // A result that lands after Settings changed belongs to the old server; drop it.
+    await eachInTurn(ids, action.work, action.done, (id, outcome) => !stale() && setOutcome(id, outcome), stale)
+    if (stale()) return
+    batchBusy.current = false
+    setBatchRun((r) => ({ ...r, busy: false }))
+  }
 
   // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
   const act = (id: number, done: string, work: Promise<void>) =>
@@ -134,6 +166,7 @@ export function App() {
       setOthers([])
       // Leave the box alone if the next scan has already started typing into it.
       setQuery((current) => (current.trim() === q ? '' : current))
+      if (batching) return addToBatch(toSummary(result.assets[0]))
       await open(result.assets[0].id, isStale)
     })
   }
@@ -156,6 +189,10 @@ export function App() {
             const Icon = listIcon[k]
             return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
           })}
+          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
+            <ListChecks size={20} />
+            {batch.length > 0 && <span className="badge">{batch.length}</span>}
+          </button>
           <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
         </nav>
         <div className="panel">
@@ -178,7 +215,7 @@ export function App() {
             </p>
           )}
           <div className="list">
-            {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={pick} />}
+            {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={choose} />}
             {others.map((m) => 'error' in m
               ? <p key={m.kind} className="message">{kindName[m.kind]}: {m.error}</p>
               : m.rows.length > 0 && (
@@ -197,21 +234,21 @@ export function App() {
                   })}
                 </div>
               ))}
-            {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
+            {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={choose} />}
           </div>
         </div>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} batch={batch} onBatch={addToBatch} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
 
-function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]; selected?: number; onPick: (id: number) => void }) {
+function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]; selected?: number; onPick: (a: AssetSummary) => void }) {
   return (
     <>
       <div className="section">{props.label}</div>
       {props.assets.map((a) => (
-        <button key={a.id} className={`row${a.id === props.selected ? ' sel' : ''}`} onClick={() => props.onPick(a.id)}>
+        <button key={a.id} className={`row${a.id === props.selected ? ' sel' : ''}`} onClick={() => props.onPick(a)}>
           <span className="mono t">{a.assetTag}</span>
           <StatusChip asset={a} />
           <span className="n">
@@ -269,7 +306,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   )
 }
 
-export function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset: Asset; onCheckout: (id: number, o: CheckoutOptions) => Promise<void> }) {
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void> }) {
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
@@ -299,7 +336,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; asset
     e.preventDefault()
     if (!target) return
     setBusy(true)
-    await props.onCheckout(props.asset.id, { targetType, targetId: target.id, expectedCheckin: expectedCheckin || undefined, note })
+    await props.onCheckout({ targetType, targetId: target.id, expectedCheckin: expectedCheckin || undefined, note })
     setBusy(false)
   }
 
@@ -390,7 +427,7 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
         </div>
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
-      {checkingOut && a.checkoutAllowed && <CheckoutForm defaultLocation={defaultLocation} asset={a} onCheckout={onCheckout} />}
+      {checkingOut && a.checkoutAllowed && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
       <div className="grid">
         {facts.map(([k, v, mono]) => (
           <div className="cell" key={k}>
