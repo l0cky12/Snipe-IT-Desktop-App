@@ -367,7 +367,7 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
   accessories: { path: '/accessories', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining_qty ?? r.remaining) },
   consumables: { path: '/consumables', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
   components: { path: '/components', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
-  categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r.assets_count) }) },
+  categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r.assets_count ?? r.licenses_count ?? r.accessories_count ?? r.consumables_count ?? r.components_count) }) },
   manufacturers: { path: '/manufacturers', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, assets: count(r.assets_count) }) },
   suppliers: {
     path: '/suppliers', filters: {},
