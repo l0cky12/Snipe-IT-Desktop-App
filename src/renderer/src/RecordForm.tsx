@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { EditKind, FormField, NamesKind, StatusLabel } from '../../main/snipeit'
 import { singular } from './ListView'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
+// An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
+// costs with separators), and saving them unchanged would rewrite them.
 export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id: number | null; onSaved: (id: number) => void; onCancel: () => void }) {
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
+  const [initial, setInitial] = useState<Record<string, string>>({})
+  // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped.
+  const model = useRef(0)
   const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
@@ -18,6 +23,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
       if (stale) return
       setFields(f.fields)
       setValues(f.values)
+      setInitial(f.values)
       setLoaded(true)
       // A choice whose names don't load just offers what it has.
       for (const n of new Set(f.fields.flatMap((x) => (x.choices ? [x.choices] : []))))
@@ -32,8 +38,10 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     setErrors(({ [key]: _, ...rest }) => rest)
     if (kind !== 'assets' || key !== 'model_id') return
     const own = (f: FormField) => !f.key.startsWith('_snipeit_')
+    const mine = ++model.current
     if (!value) return setFields((all) => all.filter(own))
-    window.snipeIt.customFields(Number(value)).then((custom) => setFields((all) => [...all.filter(own), ...custom]), (e: Error) => setMessage(e.message))
+    window.snipeIt.customFields(Number(value)).then((custom) => mine === model.current && setFields((all) => [...all.filter(own), ...custom]),
+      (e: Error) => mine === model.current && setMessage(e.message))
   }
 
   async function submit(e: React.FormEvent) {
@@ -41,8 +49,9 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     setBusy(true)
     setMessage('')
     try {
-      // Only what the form shows now goes to Snipe-IT (not a previous Asset Model's custom fields).
-      const result = await window.snipeIt.save(kind, id, Object.fromEntries(fields.map((f) => [f.key, values[f.key] ?? ''])))
+      // Only what the form shows now goes to Snipe-IT (not a previous Asset Model's custom fields), and editing, only what changed.
+      const shown = fields.map((f): [string, string] => [f.key, values[f.key] ?? ''])
+      const result = await window.snipeIt.save(kind, id, Object.fromEntries(id === null ? shown : shown.filter(([k, v]) => v !== (initial[k] ?? ''))))
       if (result.ok) return onSaved(result.id)
       setErrors(result.errors)
       setMessage(result.message)
@@ -57,6 +66,15 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     const common = { id: `f-${f.key}`, value: values[f.key] ?? '', required: f.required, 'aria-invalid': !!errors[f.key] || undefined, 'aria-describedby': errors[f.key] ? `e-${f.key}` : undefined }
     if (f.type === 'textarea') return <textarea {...common} rows={3} onChange={(e) => set(f.key, e.target.value)} />
     if (f.type === 'checkbox') return <input id={common.id} type="checkbox" checked={values[f.key] === '1'} onChange={(e) => set(f.key, e.target.checked ? '1' : '')} />
+    if (f.type === 'choices') {
+      const picked = common.value.split(',').map((v) => v.trim()).filter(Boolean)
+      const toggle = (o: string) => set(f.key, (picked.includes(o) ? picked.filter((p) => p !== o) : [...picked, o]).join(', '))
+      return (
+        <div className="choices" id={common.id} role="group" aria-describedby={common['aria-describedby']}>
+          {f.options?.map((o) => <label key={o}><input type="checkbox" checked={picked.includes(o)} onChange={() => toggle(o)} /> {o}</label>)}
+        </div>
+      )
+    }
     if (f.type === 'choice') {
       const options = f.options?.map((o) => ({ id: o, name: o })) ?? names[f.choices!] ?? []
       return (
@@ -114,7 +132,7 @@ export function DeleteButton({ kind, id, name, onDeleted }: { kind: EditKind; id
   return (
     <span className="confirm" role="alertdialog" aria-label={`Delete ${name}?`}>
       <span>Delete {name}? It goes to Snipe-IT's deleted items and leaves every List.</span>
-      <button className="danger" disabled={busy} onClick={remove}>{busy ? 'Deleting…' : 'Delete'}</button>
+      <button className="danger" autoFocus disabled={busy} onClick={remove}>{busy ? 'Deleting…' : 'Delete'}</button>
       <button className="quiet" disabled={busy} onClick={() => (setAsking(false), setError(''))}>Cancel</button>
       {error && <span className="field-error" role="alert">{error}</span>}
     </span>

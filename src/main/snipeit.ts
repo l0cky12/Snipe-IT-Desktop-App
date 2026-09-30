@@ -138,11 +138,12 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
   | 'categories:license' | 'categories:accessory' | 'categories:consumable' | 'categories:component'
 /**
  * One input of a record's form. key is Snipe-IT's field name (a custom field's is its db column, _snipeit_…).
- * A choice's options come from `choices` (a List's names) or `options` (a custom field's fixed values). from: where an
+ * A choice's options come from `choices` (a List's names) or `options` (a custom field's fixed values); 'choices' is a
+ * custom checkbox field, any of its options, kept as Snipe-IT keeps them ("A, B"). from: where an
  * edited record keeps the value, when not under key (an id sits in its object: model_id in model.id). newOnly: creating only.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'checkbox' | 'choice'
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'checkbox' | 'choice' | 'choices'
   required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
@@ -594,7 +595,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (isError(set)) throw new Error(reason(set.messages))
     return set.rows.map((c) => ({
       key: c.db_column_name, label: c.name, required: !!c.required,
-      ...(c.field_values_array?.length && c.type !== 'checkbox' ? { type: 'choice' as const, options: c.field_values_array }
+      ...(c.field_values_array?.length ? { type: c.type === 'checkbox' ? 'choices' as const : 'choice' as const, options: c.field_values_array }
         : { type: c.type === 'textarea' ? 'textarea' as const : c.format === 'DATE' ? 'date' as const : c.format === 'NUMERIC' ? 'number' as const : 'text' as const }),
     }))
   }
