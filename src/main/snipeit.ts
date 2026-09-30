@@ -130,6 +130,26 @@ export type ReportQuery = { from?: string; to?: string; itemType?: string; actio
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
+/** The kinds the app can create, edit and delete. */
+export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components'] as const
+export type EditKind = (typeof EDIT_KINDS)[number]
+/** Where a choice's options come from (see names()). */
+export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels' | 'locations' | 'suppliers' | 'companies' | 'manufacturers'
+  | 'categories:license' | 'categories:accessory' | 'categories:consumable' | 'categories:component'
+/**
+ * One input of a record's form. key is Snipe-IT's field name (a custom field's is its db column, _snipeit_…).
+ * A choice's options come from `choices` (a List's names) or `options` (a custom field's fixed values). from: where an
+ * edited record keeps the value, when not under key (an id sits in its object: model_id in model.id). newOnly: creating only.
+ */
+export type FormField = {
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'checkbox' | 'choice'
+  required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean
+}
+/** A record's form and its current values ('' for none); a new record's values are all ''. */
+export type RecordForm = { fields: FormField[]; values: Record<string, string> }
+/** Saved (with the record's id), or Snipe-IT's reasons: per field where it gave them, and a line for the rest. */
+export type SaveResult = { ok: true; id: number } | { ok: false; message: string; errors: Record<string, string> }
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
 type SnipeItError = { status: 'error'; messages: unknown }
@@ -384,6 +404,52 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
   statuslabels: { path: '/statuslabels', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.type), assets: count(r.assets_count) }) },
 }
 
+const txt = (key: string, label: string, extra: Partial<FormField> = {}): FormField => ({ key, label, type: 'text', ...extra })
+const pick = (key: string, label: string, choices: NamesKind, extra: Partial<FormField> = {}): FormField => ({ key, label, type: 'choice', choices, ...extra })
+const stockForm = (category: NamesKind, own: FormField[]): FormField[] => [
+  txt('name', 'Name', { required: true }), { key: 'qty', label: 'Quantity', type: 'number', required: true }, pick('category_id', 'Category', category, { required: true }),
+  ...own, pick('manufacturer_id', 'Manufacturer', 'manufacturers'), pick('location_id', 'Location', 'locations'), { key: 'min_amt', label: 'Minimum quantity', type: 'number' },
+  txt('order_number', 'Order number'), { key: 'purchase_date', label: 'Purchase date', type: 'date' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+]
+// What each kind's form asks for, in Snipe-IT's field names; required as Snipe-IT requires. An Asset's custom fields come from its Asset Model.
+export const FORMS: Record<EditKind, FormField[]> = {
+  assets: [
+    txt('asset_tag', 'Asset Tag', { required: true }), pick('model_id', 'Asset Model', 'models', { required: true }), pick('status_id', 'Status', 'statuslabels', { required: true, from: 'status_label' }),
+    txt('name', 'Name'), txt('serial', 'Serial'), pick('rtd_location_id', 'Default Location', 'locations', { from: 'rtd_location' }), pick('supplier_id', 'Supplier', 'suppliers'),
+    pick('company_id', 'Company', 'companies'), txt('order_number', 'Order number'), { key: 'purchase_date', label: 'Purchase date', type: 'date' },
+    { key: 'purchase_cost', label: 'Purchase cost', type: 'number' }, { key: 'warranty_months', label: 'Warranty (months)', type: 'number' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
+  users: [
+    txt('first_name', 'First name', { required: true }), txt('last_name', 'Last name'), txt('username', 'Username', { required: true }),
+    { key: 'password', label: 'Password', type: 'password', required: true, newOnly: true }, { key: 'password_confirmation', label: 'Password again', type: 'password', required: true, newOnly: true },
+    { key: 'email', label: 'Email', type: 'email' }, txt('employee_num', 'Employee No.'), txt('jobtitle', 'Job title'), txt('phone', 'Phone'),
+    pick('department_id', 'Department', 'departments'), pick('location_id', 'Location', 'locations'), pick('company_id', 'Company', 'companies'), { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
+  locations: [
+    txt('name', 'Name', { required: true }), pick('parent_id', 'Parent', 'locations', { from: 'parent' }), txt('address', 'Address'), txt('address2', 'Address line 2'),
+    txt('city', 'City'), txt('state', 'State'), txt('zip', 'Zip'), txt('country', 'Country'),
+  ],
+  licenses: [
+    txt('name', 'Name', { required: true }), { key: 'seats', label: 'Seats', type: 'number', required: true }, pick('category_id', 'Category', 'categories:license', { required: true }),
+    txt('serial', 'Product key', { from: 'product_key' }), txt('license_name', 'Licensed to'), { key: 'license_email', label: 'Licensed to email', type: 'email' },
+    pick('manufacturer_id', 'Manufacturer', 'manufacturers'), { key: 'expiration_date', label: 'Expires', type: 'date' }, txt('order_number', 'Order number'),
+    { key: 'purchase_date', label: 'Purchase date', type: 'date' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
+  accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')]),
+  consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
+  components: stockForm('categories:component', [txt('serial', 'Serial')]),
+}
+
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+function formValue(raw: RawRow, f: FormField): string {
+  const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
+  if (f.type === 'checkbox') return v ? '1' : ''
+  // ponytail: Snipe-IT formats costs with thousands separators ("1,200.50"); assumes "," is the thousands one.
+  return f.type === 'number' ? String(v).replace(/,/g, '') : String(v).replace(/<[^>]*>/g, '')
+}
+
 // Every field of a record as the Operator reads it, in Snipe-IT's order, then an Asset's custom fields.
 // A related record (a Location, a Manager…) links to it; dates show as Snipe-IT formats them; Markdown notes as plain text.
 function fieldsOf(raw: RawRow): Field[] {
@@ -460,6 +526,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } catch {
       body = undefined
     }
+    // Some Snipe-IT versions answer a form they refuse with 422 and field → messages, like the usual 200-with-error.
+    if (res.status === 422 && body && typeof body === 'object' && ('messages' in body || 'errors' in body))
+      return { status: 'error', messages: (body as { messages?: unknown; errors?: unknown }).messages ?? (body as { errors?: unknown }).errors }
     if (!res.ok) {
       const failure = body as { messages?: unknown; message?: unknown } | undefined
       const snipeItReason = reason(failure?.messages ?? failure?.message)
@@ -513,6 +582,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const body = await request<RawAsset>(`/hardware/${id}`)
     if (isError(body)) throw new Error(reason(body.messages))
     return body
+  }
+
+  // The custom fields an Asset Model's Assets have (its fieldset's), as form fields; none when it has no fieldset.
+  async function customFields(modelId: number): Promise<FormField[]> {
+    checkId(modelId, 'Asset Model')
+    const model = await request<{ fieldset?: Named }>(`/models/${modelId}`)
+    if (isError(model)) throw new Error(reason(model.messages))
+    if (!model.fieldset?.id) return []
+    const set = await request<{ rows: { name: string; db_column_name: string; type: string; format: string; required: number | boolean; field_values_array: string[] | null }[] }>(`/fieldsets/${model.fieldset.id}/fields`)
+    if (isError(set)) throw new Error(reason(set.messages))
+    return set.rows.map((c) => ({
+      key: c.db_column_name, label: c.name, required: !!c.required,
+      ...(c.field_values_array?.length && c.type !== 'checkbox' ? { type: 'choice' as const, options: c.field_values_array }
+        : { type: c.type === 'textarea' ? 'textarea' as const : c.format === 'DATE' ? 'date' as const : c.format === 'NUMERIC' ? 'number' as const : 'text' as const }),
+    }))
   }
 
   return {
@@ -651,9 +735,66 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
     },
 
+    // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
+    async form(kind: EditKind, id?: number): Promise<RecordForm> {
+      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      if (id === undefined) return { fields: FORMS[kind], values: {} }
+      checkId(id, 'record')
+      const raw = await request<RawRow>(`${LISTS[kind].path}/${id}`)
+      if (isError(raw)) throw new Error(reason(raw.messages))
+      const custom = kind === 'assets' && (raw.model as Named)?.id ? await customFields((raw.model as { id: number }).id) : []
+      const fields = [...FORMS[kind].filter((f) => !f.newOnly), ...custom]
+      // Snipe-IT keeps custom field values under their label, each saying its db column.
+      const customValues = Object.values((raw.custom_fields ?? {}) as Record<string, { field?: string; value?: unknown } | null>)
+      const values = Object.fromEntries(fields.map((f) => [f.key, f.key.startsWith('_snipeit_')
+        ? String(customValues.find((c) => c?.field === f.key)?.value ?? '') : formValue(raw, f)]))
+      return { fields, values }
+    },
+
+    // Creates (id null) or edits a record. Only the form's fields (and custom fields) reach Snipe-IT; a blank choice, number
+    // or date is sent as none, and a blank password when editing is left out. Snipe-IT's refusal comes back per field.
+    async save(kind: EditKind, id: number | null, values: Record<string, string>): Promise<SaveResult> {
+      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      if (id !== null) checkId(id, 'record')
+      if (typeof values !== 'object' || values === null) throw new Error('Invalid form')
+      const byKey = new Map(FORMS[kind].map((f) => [f.key, f]))
+      const body: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(values)) {
+        const f = byKey.get(key)
+        if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
+        if (f?.newOnly && id !== null) continue
+        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
+        body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
+      }
+      const path = LISTS[kind].path
+      const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
+      if (!isError(result)) return { ok: true, id: id ?? result.payload?.id ?? 0 }
+      // Validation arrives as field → messages; anything else is one line.
+      const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
+      if (!fieldMessages) return { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
+      const errors = Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)]))
+      const known = new Set([...byKey.keys(), ...Object.keys(values)])
+      const other = Object.entries(errors).filter(([k]) => !known.has(k)).map(([, m]) => m).join(' ')
+      return { ok: false, message: other || "Snipe-IT didn't save it: see the fields marked below.", errors }
+    },
+
+    customFields,
+
+    // Deletes a record; Snipe-IT refuses (e.g. an Asset still checked out) with its reason.
+    async remove(kind: EditKind, id: number): Promise<void> {
+      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      checkId(id, 'record')
+      const result = await request(`${LISTS[kind].path}/${id}`, {}, 'DELETE')
+      if (isError(result)) throw new Error(reason(result.messages))
+    },
+
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.
-    async names(kind: 'models' | 'categories' | 'departments'): Promise<StatusLabel[]> {
-      const paths = { models: '/models', categories: '/categories?category_type=asset', departments: '/departments' }
+    async names(kind: NamesKind): Promise<StatusLabel[]> {
+      const paths: Record<NamesKind, string> = {
+        models: '/models', categories: '/categories?category_type=asset', departments: '/departments', statuslabels: '/statuslabels', locations: '/locations',
+        suppliers: '/suppliers', companies: '/companies', manufacturers: '/manufacturers', 'categories:license': '/categories?category_type=license',
+        'categories:accessory': '/categories?category_type=accessory', 'categories:consumable': '/categories?category_type=consumable', 'categories:component': '/categories?category_type=component',
+      }
       if (!Object.hasOwn(paths, kind)) throw new Error(`Unknown list: ${kind}`)
       return (await allRows<StatusLabel>(paths[kind])).map(({ id, name }) => ({ id, name }))
     },

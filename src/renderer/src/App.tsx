@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
+import { DeleteButton, RecordForm } from './RecordForm'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -39,6 +40,7 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
 type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'records' } | { page: ListKind; drill?: Drill; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+  | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -183,9 +185,20 @@ export function App() {
   const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
+  // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
+  const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
+  const shown = (kind: EditKind, id: number) => (kind === 'assets' ? pick(id) : openRecord(kind, id))
+  function deleted(kind: EditKind, id: number, name: string) {
+    if (kind === 'assets') {
+      setRecent((r) => r.filter((a) => a.id !== id))
+      setMatches((m) => ({ ...m, assets: m.assets.filter((a) => a.id !== id) }))
+    }
+    go(kind)
+    setMessage({ text: `Deleted ${name}` })
+  }
   const page = !showSettings && view?.page
   // The All records button stands for every page not in the strip.
-  const elsewhere = page === 'records' || page === 'record' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   return (
     <div className="layout">
@@ -256,8 +269,11 @@ export function App() {
       </aside>
       <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} />
-        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} />
+        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} onNew={(k) => editRecord(k, null)} />
+        : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
+            onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -415,7 +431,9 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset }: {
+function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+  onEdit: () => void
+  onDeleted: () => void
   onOpenRecord: (kind: RecordKind, id: number) => void
   onOpenAsset: (id: number) => void
   defaultLocation: StatusLabel | null
@@ -460,6 +478,8 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           >
             {checkingOut ? 'Cancel' : 'Checkout…'}
           </button>
+          <button className="quiet" onClick={onEdit}>Edit</button>
+          <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} />
         </div>
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>

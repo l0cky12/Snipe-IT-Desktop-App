@@ -230,3 +230,15 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
                color: var(--text); font: 600 15px var(--sans); cursor: pointer; transition: border-color var(--fast); }
 .record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
 .all-fields summary { cursor: pointer; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 20px; padding: 20px 28px; }
+.form-field { display: flex; flex-direction: column; gap: 6px; }
+.form-field.wide { grid-column: 1 / -1; }
+.form-field label { font: 600 13px var(--sans); color: var(--dim); }
+.form-field input:not([type=checkbox]), .form-field select, .form-field textarea { min-height: 40px; background: var(--panel); border: 1.5px solid var(--line); color: var(--text);
+  border-radius: var(--r-ctl); padding: 8px 12px; font: 500 14px var(--sans); }
+.form-field input[aria-invalid], .form-field select[aria-invalid], .form-field textarea[aria-invalid] { border-color: var(--coral); }
+.field-error { margin: 0; color: var(--coral); font-size: 13px; font-weight: 600; }
+.record-form .message.error { margin: 14px 28px 0; }
+.confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.actions button.danger:not(.quiet) { background: var(--coral); border-color: var(--coral); color: var(--on-deep); }
+.actions button.quiet.danger { color: var(--coral); }
