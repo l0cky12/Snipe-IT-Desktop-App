@@ -335,9 +335,10 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
 
 const txt = (key: string, label: string, extra: Partial<FormField> = {}): FormField => ({ key, label, type: 'text', ...extra })
 const pick = (key: string, label: string, choices: NamesKind, extra: Partial<FormField> = {}): FormField => ({ key, label, type: 'choice', choices, ...extra })
-const stockForm = (category: NamesKind, own: FormField[]): FormField[] => [
+// minFrom: where Snipe-IT sends the minimum back (an Accessory's as min_qty, though it's saved as min_amt).
+const stockForm = (category: NamesKind, own: FormField[], minFrom?: string): FormField[] => [
   txt('name', 'Name', { required: true }), { key: 'qty', label: 'Quantity', type: 'number', required: true }, pick('category_id', 'Category', category, { required: true }),
-  ...own, pick('manufacturer_id', 'Manufacturer', 'manufacturers'), pick('location_id', 'Location', 'locations'), { key: 'min_amt', label: 'Minimum quantity', type: 'number' },
+  ...own, pick('manufacturer_id', 'Manufacturer', 'manufacturers'), pick('location_id', 'Location', 'locations'), { key: 'min_amt', label: 'Minimum quantity', type: 'number', ...(minFrom && { from: minFrom }) },
   txt('order_number', 'Order number'), { key: 'purchase_date', label: 'Purchase date', type: 'date' }, { key: 'notes', label: 'Notes', type: 'textarea' },
 ]
 // What each kind's form asks for, in Snipe-IT's field names; required as Snipe-IT requires. An Asset's custom fields come from its Asset Model.
@@ -364,7 +365,7 @@ export const FORMS: Record<EditKind, FormField[]> = {
     pick('manufacturer_id', 'Manufacturer', 'manufacturers'), { key: 'expiration_date', label: 'Expires', type: 'date' }, txt('order_number', 'Order number'),
     { key: 'purchase_date', label: 'Purchase date', type: 'date' }, { key: 'notes', label: 'Notes', type: 'textarea' },
   ],
-  accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')]),
+  accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')], 'min_qty'),
   consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
 }
