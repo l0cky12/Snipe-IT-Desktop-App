@@ -100,8 +100,37 @@ describe('lookup', () => {
         status: 'Deployed',
         statusMeta: 'deployed',
         assignee: { type: 'user', id: 311, name: 'Jordan Reyes' },
+        matched: 'Assignee',
       },
     ])
+  })
+
+  it('each Asset match names the field the text was found in: a custom field, the notes, the Serial', async () => {
+    const withMac = { ...chromebook, id: 1, custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: '00:1A:2B:3C:4D:5E' } } }
+    const withNote = { ...chromebook, id: 2, notes: '<p>Cracked <strong>screen</strong></p>', custom_fields: [] }
+    const bySerial = { ...chromebook, id: 3 }
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 3, rows: [withMac, withNote, bySerial] } } })
+    const found = (await createSnipeIt(config, fetch).lookup('4d:5e')).assets
+    expect(found.map((a) => 'matched' in a && a.matched)).toEqual(['MAC Address', '', ''])
+    const notes = await createSnipeIt(config, fakeFetch({ '/hardware': { body: { total: 1, rows: [withNote] } } }).fetch).lookup('cracked screen')
+    expect(notes.assets.map((a) => 'matched' in a && a.matched)).toEqual(['Notes'])
+    const serial = await createSnipeIt(config, fakeFetch({ '/hardware': { body: { total: 1, rows: [bySerial] } } }).fetch).lookup('2381kq')
+    expect(serial.assets.map((a) => 'matched' in a && a.matched)).toEqual(['Serial'])
+  })
+
+  it("an Asset matched by its Asset Model's manufacturer or model number says so, as Snipe-IT sends them beside the model", async () => {
+    const ipad = { ...chromebook, model: { id: 5, name: 'iPad 10th Gen' }, model_number: 'A2696', manufacturer: { id: 4, name: 'Apple' } }
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 1, rows: [ipad] } } })
+    expect((await createSnipeIt(config, fetch).lookup('apple')).assets.map((a) => 'matched' in a && a.matched)).toEqual(['Manufacturer'])
+    expect((await createSnipeIt(config, fetch).lookup('a2696')).assets.map((a) => 'matched' in a && a.matched)).toEqual(['Model No.'])
+  })
+
+  it('a match on a field the app has no name for is still named, from the field Snipe-IT sent', async () => {
+    const withExtras = { ...chromebook, rtd_location: { id: 4, name: 'IT Office' }, warranty_months: '36 months' }
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: 1, rows: [withExtras] } } })
+    expect((await createSnipeIt(config, fetch).lookup('it office')).assets.map((a) => 'matched' in a && a.matched)).toEqual(['Rtd location'])
+    const again = await createSnipeIt(config, fetch).lookup('36 month')
+    expect(again.assets.map((a) => 'matched' in a && a.matched)).toEqual(['Warranty months'])
   })
 
   it('nothing matching the tag or the text search finds no Assets', async () => {
@@ -116,18 +145,27 @@ describe('lookup', () => {
     await expect(createSnipeIt(config, fetch).lookup('cb-lib')).rejects.toThrow('You do not have permission.')
   })
 
-  it('a text search also finds Users, Locations, and Asset Models, each told apart by its detail', async () => {
+  it('a text search also finds Users, Locations, Asset Models and the stocked kinds, grouped by kind, each with the field it matched', async () => {
+    const none = { body: { total: 0, rows: [] } }
     const { fetch } = fakeFetch({
-      '/hardware': { body: { total: 0, rows: [] } },
+      '/hardware': none,
       '/users': { body: { total: 1, rows: [{ id: 311, name: 'Jordan Reyes', username: 'jreyes' }] } },
-      '/locations': { body: { total: 1, rows: [{ id: 12, name: 'Room 204' }] } },
-      '/models': { body: { total: 1, rows: [{ id: 7, name: 'HP Chromebook 14 G7', model_number: '14-G7' }] } },
+      '/locations': { body: { total: 1, rows: [{ id: 12, name: 'Room 204', address: '12 Reynolds St' }] } },
+      '/models': { body: { total: 1, rows: [{ id: 7, name: 'HP Chromebook 14 G7', model_number: '14-G7', manufacturer: { id: 1, name: 'HP' }, notes: 'Replaces the G5' }] } },
+      '/licenses': none,
+      '/accessories': { body: { total: 1, rows: [{ id: 3, name: 'USB-C Charger', model_number: 'CHG-65', notes: 'Spare for the Reyes cart' }] } },
+      '/consumables': { body: { total: 1, rows: [{ id: 5, name: 'Toner', item_no: 'RE-206A' }] } },
+      '/components': none,
     })
     const result = await createSnipeIt(config, fetch).lookup('re')
     expect(!result.exact && result.others).toEqual([
-      { kind: 'users', rows: [{ id: 311, name: 'Jordan Reyes', detail: 'jreyes' }] },
-      { kind: 'locations', rows: [{ id: 12, name: 'Room 204', detail: '' }] },
-      { kind: 'models', rows: [{ id: 7, name: 'HP Chromebook 14 G7', detail: '14-G7' }] },
+      { kind: 'users', rows: [{ id: 311, name: 'Jordan Reyes', detail: 'jreyes', matched: 'Name' }] },
+      { kind: 'locations', rows: [{ id: 12, name: 'Room 204', detail: '', matched: 'Address' }] },
+      { kind: 'models', rows: [{ id: 7, name: 'HP Chromebook 14 G7', detail: '14-G7', matched: 'Notes' }] },
+      { kind: 'licenses', rows: [] },
+      { kind: 'accessories', rows: [{ id: 3, name: 'USB-C Charger', detail: 'CHG-65', matched: 'Notes' }] },
+      { kind: 'consumables', rows: [{ id: 5, name: 'Toner', detail: '', matched: 'Item No.' }] },
+      { kind: 'components', rows: [] },
     ])
   })
 
@@ -374,13 +412,13 @@ describe('Checkout targets', () => {
   it('searching Users returns each User by id and name, with their username to tell namesakes apart', async () => {
     const users = { total: 1, rows: [{ id: 311, name: 'Jordan Reyes', first_name: 'Jordan', last_name: 'Reyes', username: 'jreyes' }] }
     const { fetch } = fakeFetch({ '/users': { body: users } })
-    expect(await createSnipeIt(config, fetch).searchUsers('reyes')).toEqual([{ id: 311, name: 'Jordan Reyes', detail: 'jreyes' }])
+    expect(await createSnipeIt(config, fetch).searchUsers('reyes')).toEqual([{ id: 311, name: 'Jordan Reyes', detail: 'jreyes', matched: 'Name' }])
   })
 
   it('searching Locations returns each Location by id and name', async () => {
     const locations = { total: 1, rows: [{ id: 12, name: 'Room 204', address: null }] }
     const { fetch } = fakeFetch({ '/locations': { body: locations } })
-    expect(await createSnipeIt(config, fetch).searchLocations(' 204 ')).toEqual([{ id: 12, name: 'Room 204', detail: '' }])
+    expect(await createSnipeIt(config, fetch).searchLocations(' 204 ')).toEqual([{ id: 12, name: 'Room 204', detail: '', matched: 'Name' }])
   })
 
   it('a blank target search finds nothing without asking Snipe-IT', async () => {

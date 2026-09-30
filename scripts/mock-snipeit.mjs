@@ -40,11 +40,21 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
-    serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model, category: model.category, status_label: status,
+    // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
+    serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
+    category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
+    custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
 })
+// The stocked kinds, a few of each.
+const stock = (list) => list.map((r, i) => ({ id: i + 1, notes: null, manufacturer: null, category: null, ...r }))
+const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, notes: 'Renews each July' }])
+const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', qty: 80, remaining_qty: 23 }, { name: 'Wireless Mouse', model_number: 'M-220', qty: 40, remaining_qty: 31, notes: 'For the Library cart' }])
+const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
+const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date()) =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: when.toISOString().replace('T', ' ').slice(0, 19) }, created_by: { id: 900, name: 'Demo Operator' },
@@ -56,11 +66,13 @@ for (const a of assets.slice(0, 90).reverse()) {
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
 const lists = {
-  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.model.name, a.assigned_to?.name), filters: {
+  // Searches the fields and related names real Snipe-IT does (Asset::$searchableRelations), plus custom fields.
+  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
+    a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial } },
-  users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email),
+  users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location.id === l.id).length })),
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
@@ -68,7 +80,8 @@ const lists = {
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
   'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: () => true }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
   statuslabels: { rows: () => statuses }, categories: { rows: () => categories }, departments: { rows: () => departments },
-  licenses: { rows: () => [] }, accessories: { rows: () => [] }, consumables: { rows: () => [] }, components: { rows: () => [] },
+  licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes) }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
+  consumables: { rows: () => consumables, search: (r) => text(r.name, r.item_no, r.notes) }, components: { rows: () => components, search: (r) => text(r.name, r.notes) },
 }
 
 function listPage(spec, q) {

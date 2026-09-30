@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
@@ -25,7 +25,9 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 const RECENT_MAX = 20
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = { assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity }
-const otherName = { users: 'Users', locations: 'Locations', models: 'Asset Models' } as const
+const otherName: Record<SearchKind, string> = { users: 'Users', locations: 'Locations', models: 'Asset Models', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components' }
+// The kinds a match opens (the Assets List filtered to it); the stocked kinds are only listed.
+const opens = (kind: SearchKind): kind is 'users' | 'locations' | 'models' => kind === 'users' || kind === 'locations' || kind === 'models'
 
 // What the main area shows besides an Asset: the dashboard or a List. n is bumped on every visit so a List starts fresh.
 type View = { page: 'dashboard' } | { page: ListKind; drill?: Drill; n: number }
@@ -39,7 +41,7 @@ export function App() {
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [view, setView] = useState<View | null>(null)
   // Search Matches, or the Assets of a clicked Inventory Chart segment; both list the same way.
-  const [matches, setMatches] = useState<{ label: string; assets: AssetSummary[] }>({ label: '', assets: [] })
+  const [matches, setMatches] = useState<{ label: string; assets: (AssetSummary & { matched?: string })[] }>({ label: '', assets: [] })
   // Lookup's Users, Locations and Asset Models; opening one opens the Assets List filtered to it.
   const [others, setOthers] = useState<Matches[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
@@ -166,7 +168,7 @@ export function App() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Scan / search…"
-              aria-label="Scan or type an Asset Tag"
+              aria-label="Scan an Asset Tag, or search everything"
             />
           </form>
           {busy > 0 && <p className="message" role="status">Loading…</p>}
@@ -182,12 +184,17 @@ export function App() {
               : m.rows.length > 0 && (
                 <div key={m.kind}>
                   <div className="section">{otherName[m.kind]} ({m.rows.length})</div>
-                  {m.rows.map((t) => (
-                    <button key={t.id} className="row" onClick={() => go('assets', drillTo(m.kind, t))}>
+                  {m.rows.map((t) => {
+                    const text = <>
                       <span className="t">{t.name}</span>
                       {t.detail && <span className="n mono">{t.detail}</span>}
-                    </button>
-                  ))}
+                      {t.matched && <span className="n">Found in {t.matched}</span>}
+                    </>
+                    const kind = m.kind
+                    return opens(kind)
+                      ? <button key={t.id} className="row" onClick={() => go('assets', drillTo(kind, t))}>{text}</button>
+                      : <div key={t.id} className="row static">{text}</div>
+                  })}
                 </div>
               ))}
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={pick} />}
@@ -199,7 +206,7 @@ export function App() {
   )
 }
 
-function AssetList(props: { label: string; assets: AssetSummary[]; selected?: number; onPick: (id: number) => void }) {
+function AssetList(props: { label: string; assets: (AssetSummary & { matched?: string })[]; selected?: number; onPick: (id: number) => void }) {
   return (
     <>
       <div className="section">{props.label}</div>
@@ -211,6 +218,7 @@ function AssetList(props: { label: string; assets: AssetSummary[]; selected?: nu
             <span>{a.name || '—'}</span>
             <span>{a.assignee?.name ?? 'Unassigned'}</span>
           </span>
+          {a.matched && <span className="n">Found in {a.matched}</span>}
         </button>
       ))}
     </>
