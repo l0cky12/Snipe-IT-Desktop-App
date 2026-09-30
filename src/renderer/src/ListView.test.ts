@@ -26,6 +26,14 @@ describe('filter boxes', () => {
     expect(filterPick(odd, 'Any category')).toBe('')
   })
 
+  it('case does not matter, as in the datalist, unless two choices differ only by case', () => {
+    expect(filterPick(location, 'room 12')).toBe('9')
+    expect(filterPick(location, 'any location')).toBe('')
+    const cased = { label: 'Any category', options: [{ value: '1', label: 'Lab' }, { value: '2', label: 'LAB' }] }
+    expect(filterPick(cased, 'lab')).toBeNull()
+    expect(filterPick(cased, 'LAB')).toBe('2')
+  })
+
   it('"Any …" or an empty box clears the filter', () => {
     expect(filterPick(location, 'Any Location')).toBe('')
     expect(filterPick(location, '  ')).toBe('')

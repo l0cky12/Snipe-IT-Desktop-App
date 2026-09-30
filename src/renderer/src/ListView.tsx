@@ -291,9 +291,12 @@ export function choices(f: Pick<Filter, 'label' | 'options'>): Option[] {
 }
 
 // What typing `text` into a filter box picks: '' clears it, a choice's value picks that choice, null leaves it as it is.
-export function filterPick(f: Pick<Filter, 'label' | 'options'>, text: string): string | null {
-  if (!text.trim() || text === f.label) return ''
-  return choices(f).find((o) => o.label === text)?.value ?? null
+// Case doesn't matter, like the datalist's own narrowing, unless two choices differ only by case.
+export function filterPick(f: Pick<Filter, 'label' | 'options'>, text: string, opts = choices(f)): string | null {
+  const t = text.trim().toLowerCase()
+  if (!t || t === f.label.toLowerCase()) return ''
+  const hits = opts.filter((o) => o.label.toLowerCase() === t)
+  return (hits.length === 1 ? hits[0] : hits.find((o) => o.label === text))?.value ?? null
 }
 
 // Type to narrow the choices with the browser's own datalist: arrows move, Enter picks, Escape closes.
@@ -302,18 +305,18 @@ function FilterBox({ filter: f, value, onPick }: { filter: Filter; value: string
   const options = choices(f)
   // A drilled-into value shows even before its names load.
   const label = options.find((o) => o.value === value)?.label ?? (value ? '…' : '')
-  const [text, setText] = useState(label)
-  useEffect(() => setText(label), [label])
+  // Only text that names no choice yet is kept; a pick shows its label.
+  const [draft, setDraft] = useState<string | null>(null)
   function change(t: string) {
-    const picked = filterPick(f, t)
-    setText(picked === '' ? '' : t)
+    const picked = filterPick(f, t, options)
+    setDraft(picked === null ? t : null)
     if (picked !== null && picked !== value) onPick(picked)
   }
   return (
     <>
       {/* Focusing selects the text, so typing starts a fresh search instead of adding to the chosen name. */}
-      <input className="filter" list={`filter-${f.key}`} value={text} placeholder={f.label} onChange={(e) => change(e.target.value)}
-        onFocus={(e) => e.target.select()} onBlur={() => setText(label)} onKeyDown={(e) => e.key === 'Escape' && setText(label)} aria-label={f.label.replace(/^Any /, 'Filter by ')} />
+      <input className="filter" list={`filter-${f.key}`} value={draft ?? label} placeholder={f.label} onChange={(e) => change(e.target.value)}
+        onFocus={(e) => e.target.select()} onBlur={() => setDraft(null)} onKeyDown={(e) => e.key === 'Escape' && setDraft(null)} aria-label={f.label.replace(/^Any /, 'Filter by ')} />
       <datalist id={`filter-${f.key}`}>
         <option value={f.label} />
         {options.map((o) => <option key={o.value} value={o.label} />)}
