@@ -7,7 +7,9 @@
 import { createServer } from 'node:http'
 
 const port = Number(process.argv[2] ?? 8765)
-const [scale, latency, rowCost] = ['MOCK_SCALE', 'MOCK_LATENCY_MS', 'MOCK_ROW_MS'].map((k, i) => Number(process.env[k] ?? (i ? 0 : 1)))
+const scale = Number(process.env.MOCK_SCALE ?? 1)
+const latency = Number(process.env.MOCK_LATENCY_MS ?? 0)
+const rowCost = Number(process.env.MOCK_ROW_MS ?? 0)
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
