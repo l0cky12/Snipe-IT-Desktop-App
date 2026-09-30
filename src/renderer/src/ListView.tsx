@@ -220,14 +220,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
       )}
       <div className="filters actions">
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
-        {filterBar.map((f) => (
-          <select key={f.key} value={filters[f.key] ?? ''} onChange={(e) => setFilter(f.key, e.target.value)} aria-label={f.label.replace(/^Any /, 'Filter by ')}>
-            <option value="">{f.label}</option>
-            {/* A drilled-into value shows even before its names load. */}
-            {filters[f.key] && !f.options.some((o) => o.value === filters[f.key]) && <option value={filters[f.key]}>…</option>}
-            {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        ))}
+        {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
         {filters.user_id && (
           <button className="quiet" onClick={() => setFilter('user_id', '')} aria-label={`Remove filter: ${drill?.label ?? 'User'}`}>
             {drill?.label ?? 'Checked out to a User'} ×
@@ -286,6 +279,48 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
           <button className="quiet" disabled={offset + LIST_PAGE >= total || loading} onClick={() => setOffset((o) => o + LIST_PAGE)}>Next</button>
         </div>
       )}
+    </>
+  )
+}
+
+// A filter box's choices as typed: a name shared with another choice, or with the "Any …" prompt, gets its id so each can be picked.
+export function choices(f: Pick<Filter, 'label' | 'options'>): Option[] {
+  const seen = new Map<string, number>([[f.label, 1]])
+  for (const o of f.options) seen.set(o.label, (seen.get(o.label) ?? 0) + 1)
+  return f.options.map((o) => (seen.get(o.label)! > 1 ? { ...o, label: `${o.label} (id ${o.value})` } : o))
+}
+
+// What typing `text` into a filter box picks: '' clears it, a choice's value picks that choice, null leaves it as it is.
+// Case doesn't matter, like the datalist's own narrowing, unless two choices differ only by case.
+export function filterPick(f: Pick<Filter, 'label' | 'options'>, text: string, opts = choices(f)): string | null {
+  const t = text.trim().toLowerCase()
+  if (!t || t === f.label.toLowerCase()) return ''
+  const hits = opts.filter((o) => o.label.toLowerCase() === t)
+  return (hits.length === 1 ? hits[0] : hits.find((o) => o.label === text))?.value ?? null
+}
+
+// Type to narrow the choices with the browser's own datalist: arrows move, Enter picks, Escape closes.
+// Picking "Any …" or emptying the box clears the filter; text that names no choice is put back on leaving the box.
+function FilterBox({ filter: f, value, onPick }: { filter: Filter; value: string; onPick: (value: string) => void }) {
+  const options = choices(f)
+  // A drilled-into value shows even before its names load.
+  const label = options.find((o) => o.value === value)?.label ?? (value ? '…' : '')
+  // Only text that names no choice yet is kept; a pick shows its label.
+  const [draft, setDraft] = useState<string | null>(null)
+  function change(t: string) {
+    const picked = filterPick(f, t, options)
+    setDraft(picked === null ? t : null)
+    if (picked !== null && picked !== value) onPick(picked)
+  }
+  return (
+    <>
+      {/* Focusing selects the text, so typing starts a fresh search instead of adding to the chosen name. */}
+      <input className="filter" list={`filter-${f.key}`} value={draft ?? label} placeholder={f.label} onChange={(e) => change(e.target.value)}
+        onFocus={(e) => e.target.select()} onBlur={() => setDraft(null)} onKeyDown={(e) => e.key === 'Escape' && setDraft(null)} aria-label={f.label.replace(/^Any /, 'Filter by ')} />
+      <datalist id={`filter-${f.key}`}>
+        <option value={f.label} />
+        {options.map((o) => <option key={o.value} value={o.label} />)}
+      </datalist>
     </>
   )
 }
