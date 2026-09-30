@@ -200,6 +200,7 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 /* Lists: a filter bar, a sortable table, Quick Actions per Asset row, a pager. */
 .filters { padding: 14px 28px; border-bottom: 1px solid var(--line); }
 .filters input { flex: 1; min-width: 200px; }
+.filters .filter { flex: 0 1 220px; min-width: 150px; }
 .list-table td, .list-table th { vertical-align: middle; white-space: nowrap; padding: 8px 12px; }
 .list-table tr.sel td { background: var(--panel2); }
 .list-table .sort { all: unset; cursor: pointer; }
