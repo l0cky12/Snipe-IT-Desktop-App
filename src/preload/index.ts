@@ -24,6 +24,10 @@ const snipeIt: SnipeIt = {
   names: call('snipeit:names'),
   updateStatus: call('snipeit:updateStatus'),
   record: call('snipeit:record'),
+  form: call('snipeit:form'),
+  customFields: call('snipeit:customFields'),
+  save: call('snipeit:save'),
+  remove: call('snipeit:remove'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)
