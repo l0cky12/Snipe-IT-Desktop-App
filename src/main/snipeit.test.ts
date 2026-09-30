@@ -1113,6 +1113,10 @@ describe('permissions', () => {
     expect(await createSnipeIt(config, operator.fetch).canManagePermissions()).toBe(false)
     const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
     await expect(createSnipeIt(config, offline).canManagePermissions()).rejects.toThrow("Can't reach Snipe-IT")
+    const oldServer = fakeFetch({})
+    await expect(createSnipeIt(config, oldServer.fetch).canManagePermissions()).rejects.toThrow('Not found')
+    const refused = fakeFetch({ '/groups': { body: { status: 'error', messages: 'Something else went wrong.' } } })
+    await expect(createSnipeIt(config, refused.fetch).canManagePermissions()).rejects.toThrow('Something else went wrong.')
   })
 
   it("a User's own permissions (granted or denied, not inherited) and their groups", async () => {

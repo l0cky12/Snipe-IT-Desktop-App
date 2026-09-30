@@ -846,7 +846,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async canManagePermissions(): Promise<boolean> {
       try {
         const body = await request('/groups?limit=1')
-        return !isError(body)
+        // Only a refusal (HTTP 403, caught below) means "not a superuser"; any other error is a reason to show.
+        if (isError(body)) throw new Error(reason(body.messages))
+        return true
       } catch (e) {
         // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
         if (/HTTP 403\b/.test((e as Error).message)) return false
