@@ -140,8 +140,12 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
 
 /** A List opened already filtered to one record, e.g. a Location's Assets; label names a filter that has no filter box. */
 export type Drill = { filters: Record<string, string>; label?: string }
+// "Categories" → "Category", "Status Labels" → "Status Label".
+export const singular = (kind: ListKind) => listName[kind].replace(/ies$/, 'y').replace(/s$/, '')
+/** What a Drill from one record is called: a User's Assets are "Checked out to" them, anything else "Kind: name". */
+export const drillLabel = (kind: RecordKind, name: string) => (kind === 'users' ? `Checked out to ${name}` : `${singular(kind)}: ${name}`)
 export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: string }): Drill =>
-  kind === 'users' ? { filters: { user_id: String(id) }, label: `Checked out to ${name}` } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
+  kind === 'users' ? { filters: { user_id: String(id) }, label: drillLabel(kind, name) } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
 
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 

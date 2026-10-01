@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Field, ListKind, RecordDetail, RecordKind } from '../../main/snipeit'
-import { listName, type Drill } from './ListView'
-
-// "Categories" → "Category", "Status Labels" → "Status Label".
-export const singular = (kind: ListKind) => listName[kind].replace(/ies$/, 'y').replace(/s$/, '')
+import { drillLabel, singular, type Drill } from './ListView'
 
 // The Lists filtered to one record: a User's checked-out Assets, a Location's Assets and Users, and so on.
 const RELATED: Partial<Record<RecordKind, [label: string, list: ListKind, filter: string][]>> = {
@@ -55,7 +52,7 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill }: {
         <div className="actions">
           {(kind === 'categories' ? CATEGORY_LISTS[record.categoryType ?? ''] ?? [] : RELATED[kind] ?? []).map(([label, list, filter]) => (
             <button key={label} className="quiet"
-              onClick={() => onDrill(list, { filters: { [filter]: String(id) }, label: kind === 'users' ? `Checked out to ${record.name}` : `${singular(kind)}: ${record.name}` })}>
+              onClick={() => onDrill(list, { filters: { [filter]: String(id) }, label: drillLabel(kind, record.name) })}>
               {label}
             </button>
           ))}

@@ -246,6 +246,9 @@ const actions: Record<string, { label: string; prep: string }> = {
 /** Glossary label for a Snipe-IT action_type. */
 export const actionLabel = (a: string) => actions[a]?.label ?? a.charAt(0).toUpperCase() + a.slice(1)
 
+// Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
+const plainText = (s: string) => s.replace(/<[^>]*>/g, '')
+
 function toHistoryEntry(raw: RawActivity): HistoryEntry {
   const known = actions[raw.action_type]
   const target = raw.target?.name
@@ -254,8 +257,7 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
     action: actionLabel(raw.action_type),
     operator: (raw.created_by ?? raw.admin)?.name ?? '',
     detail: target ? (known?.prep ?? '') + target : '',
-    // Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
-    note: raw.note?.replace(/<[^>]*>/g, '') ?? '',
+    note: raw.note ? plainText(raw.note) : '',
   }
 }
 
@@ -346,15 +348,15 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
   assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'] }, row: toAsset },
   users: {
     path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id' },
-    row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: r.department?.name ?? '', location: r.location?.name ?? '', assets: r.assets_count ?? 0 }),
+    row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
     path: '/locations', filters: {},
-    row: (r: RawLocation) => ({ id: r.id, name: r.name, parent: r.parent?.name ?? '', city: r.city ?? '', assets: r.assets_count ?? 0, checkedOut: r.assigned_assets_count ?? 0, users: r.users_count ?? 0 }),
+    row: (r: RawLocation) => ({ id: r.id, name: r.name, parent: nameOf(r.parent), city: r.city ?? '', assets: r.assets_count ?? 0, checkedOut: r.assigned_assets_count ?? 0, users: r.users_count ?? 0 }),
   },
   models: {
     path: '/models', filters: { category_id: 'id' },
-    row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: r.manufacturer?.name ?? '', category: r.category?.name ?? '', assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
+    row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: nameOf(r.manufacturer), category: nameOf(r.category), assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
   },
   activity: {
     path: '/reports/activity', filters: { action_type: ACTIVITY_ACTIONS },
@@ -367,7 +369,8 @@ const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | r
   accessories: { path: '/accessories', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining_qty ?? r.remaining) },
   consumables: { path: '/consumables', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
   components: { path: '/components', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
-  categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r.assets_count ?? r.licenses_count ?? r.accessories_count ?? r.consumables_count ?? r.components_count) }) },
+  // Older Snipe-ITs send no item_count, only a count per kind (assets_count, accessories_count…); the Category's type says which one is its.
+  categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r[`${text(r.category_type).replace(/y$/, 'ie')}s_count`]) }) },
   manufacturers: { path: '/manufacturers', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, assets: count(r.assets_count) }) },
   suppliers: {
     path: '/suppliers', filters: {},
@@ -389,7 +392,7 @@ function fieldsOf(raw: RawRow): Field[] {
     if (HIDDEN_FIELDS.has(key) || v === null || v === '') continue
     const label = FIELD_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ')
     const field = (x: unknown): Field | null => {
-      if (typeof x !== 'object' || x === null) return x === null || x === '' ? null : { label, value: typeof x === 'boolean' ? (x ? 'Yes' : 'No') : String(x).replace(/<[^>]*>/g, '') }
+      if (typeof x !== 'object' || x === null) return x === null || x === '' ? null : { label, value: typeof x === 'boolean' ? (x ? 'Yes' : 'No') : plainText(String(x)) }
       const o = x as { id?: unknown; name?: unknown; formatted?: unknown; date?: unknown; datetime?: unknown; type?: unknown }
       // A date: as Snipe-IT formats it, or as sent.
       const when = [o.formatted, o.date, o.datetime].find((d) => typeof d === 'string')
@@ -403,10 +406,11 @@ function fieldsOf(raw: RawRow): Field[] {
       const kind = key === 'assigned_to' ? ({ user: 'users', location: 'locations', asset: 'assets' } as const)[o.type as Assignee['type']] : RELATED_KINDS[key]
       return { label, value: o.name, ...(kind && typeof o.id === 'number' && { link: { kind, id: o.id } }) }
     }
-    // A list of records (a Location's children…) gives each its own field; a list of plain values reads as one.
-    if (Array.isArray(v)) {
-      if (v.every((x) => typeof x !== 'object')) fields.push(...(v.length ? [{ label, value: v.join(', ') }] : []))
-      else fields.push(...v.map(field).filter((f): f is Field => f !== null))
+    // A list of records (a Location's children, a User's groups { total, rows }…) gives each its own field; a list of plain values reads as one.
+    const list = Array.isArray(v) ? v : Array.isArray((v as { rows?: unknown }).rows) ? (v as { rows: unknown[] }).rows : null
+    if (list) {
+      if (list.every((x) => typeof x !== 'object')) fields.push(...(list.length ? [{ label, value: list.join(', ') }] : []))
+      else fields.push(...list.map(field).filter((f): f is Field => f !== null))
     } else {
       const f = field(v)
       if (f) fields.push(f)

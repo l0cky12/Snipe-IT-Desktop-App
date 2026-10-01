@@ -958,6 +958,7 @@ describe('the other record kinds', () => {
       ldap_ou: null, currency: '', created_at: { datetime: '2023-08-01 09:00:00', formatted: 'Aug 1, 2023 9:00AM' }, notes: '<p>Back <em>door</em> sticks</p>',
       children: [{ id: 30, name: 'Closet' }], available_actions: { update: true }, image: 'https://snipe.example.org/img.png', active: true,
       opened: { date: '2020-08-17' }, tags: ['north', 'ground floor'], empty: [], budget: { amount: 100, currency: 'USD', note: null },
+      groups: { total: 2, rows: [{ id: 1, name: 'Facilities' }, { id: 2, name: 'IT' }] },
     }
     const { fetch } = fakeFetch({ '/locations/12': { body: location } })
     expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
@@ -974,6 +975,8 @@ describe('the other record kinds', () => {
         { label: 'Opened', value: '2020-08-17' },
         { label: 'Tags', value: 'north, ground floor' },
         { label: 'Budget', value: 'amount: 100, currency: USD' },
+        { label: 'Groups', value: 'Facilities' },
+        { label: 'Groups', value: 'IT' },
       ],
     })
   })
@@ -994,6 +997,15 @@ describe('the other record kinds', () => {
     expect(await snipeIt.record('categories', 8)).toMatchObject({ name: 'Toner', categoryType: 'consumable' })
     await snipeIt.list('consumables', { filters: { category_id: '8' } })
     expect(queries.at(-1)).toMatchObject({ category_id: '8' })
+  })
+
+  it("a Category's items are counted by its own type when Snipe-IT sends no item_count", async () => {
+    const { fetch } = fakeFetch({ '/categories': { body: { total: 2, rows: [
+      { id: 1, name: 'Toner', category_type: 'consumable', assets_count: 0, consumables_count: 12 },
+      { id: 2, name: 'Chargers', category_type: 'accessory', assets_count: 0, accessories_count: 7 },
+      { id: 3, name: 'Laptops', category_type: 'asset', item_count: 40, assets_count: 3 },
+    ] } } })
+    expect((await createSnipeIt(config, fetch).list('categories')).rows.map((r) => r.items)).toEqual([12, 7, 40])
   })
 
   it.each(['activity', 'assets', 'hardware'])('a record of kind %s is refused without asking Snipe-IT', async (kind) => {
