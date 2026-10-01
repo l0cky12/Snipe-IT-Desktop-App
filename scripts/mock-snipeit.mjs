@@ -136,6 +136,7 @@ function saveRecord(kind, body, row) {
   const target = row ?? { id: Math.max(0, ...store[kind].map((r) => r.id)) + 1 }
   for (const [k, v] of Object.entries(body)) {
     if (k.startsWith('password')) continue
+    if (k === 'groups') { target.groups = groupsOf(v); continue }
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
     else if (/date$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
@@ -147,6 +148,19 @@ function saveRecord(kind, body, row) {
   return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
 }
 
+// Permissions. MOCK_OPERATOR=limited runs as an Operator who isn't a superuser: groups are refused, and each record's
+// available_actions (what Snipe-IT lets the key do) allows Checkout and Checkin but not editing or deleting.
+const limited = process.env.MOCK_OPERATOR === 'limited'
+const groups = [
+  { id: 1, name: 'IT Staff', permissions: { 'assets.view': '1', 'assets.create': '1', 'assets.edit': '1', 'assets.checkout': '1', 'assets.checkin': '1', 'users.view': '1' } },
+  { id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.checkin': '1' } },
+]
+const groupsOf = (ids) => ({ total: ids.length, rows: ids.map((id) => ({ id, name: groups.find((g) => g.id === id)?.name ?? '' })) })
+for (const u of users) Object.assign(u, { groups: groupsOf(u.id % 3 ? [2] : [1]), permissions: u.id === 1 ? { 'reports.view': '1', 'assets.delete': '-1' } : {} })
+const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true }
+for (const r of [...assets, ...users, ...locations]) r.available_actions = actions
+const noGroups = { status: 'error', messages: 'You do not have permission to access this area.', payload: null }
+
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
@@ -155,7 +169,20 @@ createServer(async (req, res) => {
     latency + rowCost * (value?.rows?.length ?? 1))
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator' })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'groups' || path.startsWith('groups/')) {
+    if (limited) return send(noGroups, 403)
+    if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
+    const g = groups.find((x) => x.id === Number(path.split('/')[1]))
+    if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
+    if (req.method === 'PATCH') {
+      if (!body.name) return fail({ name: ['The name field is required.'] })
+      let permissions
+      try { permissions = body.permissions && JSON.parse(body.permissions) } catch { return fail({ permissions: ['The permissions must be JSON.'] }) }
+      Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
+    }
+    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
+  }
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
   if ((m = path.match(/^hardware\/bytag\/(.+)$/))) return send(assets.find((a) => a.asset_tag.toLowerCase() === decodeURIComponent(m[1]).toLowerCase()) ?? { status: 'error', messages: 'Asset does not exist.' })
   if ((m = path.match(/^fieldsets\/(\d+)\/fields$/))) return send({ total: fieldset.fields.length, rows: fieldset.fields })

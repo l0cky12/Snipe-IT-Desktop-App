@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -8,6 +8,7 @@ import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome }
 import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
+import { GroupsView, type CanManage } from './AccessView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -25,6 +26,13 @@ export const StatusChip = ({ asset }: { asset: AssetSummary }) => (
 export const statusChoices = (labels: StatusLabel[], a: Asset) =>
   labels.some((l) => l.id === a.statusId) || a.statusId === null ? labels : [{ id: a.statusId, name: a.status }, ...labels]
 
+// Why an action is off when Snipe-IT says the Operator's key may not do it.
+export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
+// Why an Asset's Checkin / Checkout button is disabled (its title), or undefined when it may go ahead.
+export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
+export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
+  !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
+
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
 // The Lists in the left strip; every List (these and the rest) is on the All records page.
@@ -39,7 +47,7 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'records' } | { page: ListKind; drill?: Drill; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 
 export function App() {
@@ -63,6 +71,8 @@ export function App() {
   // One run at a time: a second would act on the same Assets and overwrite the first's results.
   const batchBusy = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
+  // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
+  const [canManage, setCanManage] = useState<CanManage>(null)
   // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
   const [opened, setOpened] = useState(0)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
@@ -85,12 +95,13 @@ export function App() {
       // Keep the Asset's current status available if loading labels fails.
       window.snipeIt.statusLabels().then((v) => !stale && setStatusLabels(v), () => {})
       window.snipeIt.locations().then((v) => !stale && setLocations(v), () => {})
+      window.snipeIt.canManagePermissions().then((v) => !stale && setCanManage(v), (e: Error) => !stale && setCanManage({ error: e.message }))
     }
     return () => { stale = true }
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([])
+    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -198,7 +209,7 @@ export function App() {
   }
   const page = !showSettings && view?.page
   // The All records button stands for every page not in the strip.
-  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   return (
     <div className="layout">
@@ -268,8 +279,9 @@ export function App() {
         </div>
       </aside>
       <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
-        : view?.page === 'records' ? <RecordsIndex onGo={go} />
-        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} />
+        : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
+        : view?.page === 'groups' ? <GroupsView canManage={canManage} />
+        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} onNew={(k) => editRecord(k, null)} />
         : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
@@ -279,7 +291,7 @@ export function App() {
 }
 
 // Every List, the ones in the strip and the rest.
-function RecordsIndex({ onGo }: { onGo: (page: ListKind) => void }) {
+function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
   return (
     <>
       <header className="head"><h1>All records</h1></header>
@@ -288,6 +300,7 @@ function RecordsIndex({ onGo }: { onGo: (page: ListKind) => void }) {
           const Icon = listIcon[k]
           return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
         })}
+        <button className="record-kind" onClick={onGroups}><ShieldCheck size={20} />Permission groups</button>
       </div>
     </>
   )
@@ -320,7 +333,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   const [statusId, setStatusId] = useState(a.statusId)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
-  const off = !a.assignee || busy
+  const off = !a.assignee || !a.can.checkin || busy
   const labels = statusChoices(props.statusLabels, a)
 
   async function onSubmit(e: React.FormEvent) {
@@ -349,7 +362,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
       <input value={note} onChange={(e) => setNote(e.target.value)} disabled={off} placeholder="Note (optional)" aria-label="Checkin note" />
-      <button disabled={off} title={a.assignee ? undefined : 'Not checked out'}>
+      <button disabled={off} title={checkinReason(a)}>
         {busy ? 'Checking in…' : 'Checkin'}
       </button>
     </form>
@@ -472,18 +485,18 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           ))}
         <div className="actions">
           <button
-            disabled={!a.checkoutAllowed}
+            disabled={!a.checkoutAllowed || !a.can.checkout}
             onClick={() => setCheckingOut((o) => !o)}
-            title={a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}
+            title={checkoutReason(a)}
           >
             {checkingOut ? 'Cancel' : 'Checkout…'}
           </button>
-          <button className="quiet" onClick={onEdit}>Edit</button>
-          <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} />
+          <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
+          <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
         </div>
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
-      {checkingOut && a.checkoutAllowed && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
+      {checkingOut && a.checkoutAllowed && a.can.checkout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
       <div className="grid">
         {facts.map(([k, v, mono]) => (
           <div className="cell" key={k}>

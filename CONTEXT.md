@@ -42,6 +42,12 @@ An Asset whose warranty ends within the next 90 days. "Warranty expiring" is the
 
 **Operator**:
 The IT staff member running the app. Each Operator uses their own Snipe-IT API key, so History shows who did each Checkout/Checkin.
+
+**Permission Group**:
+A named set of Snipe-IT permissions a User inherits by belonging to it. Only a Superuser may change a group or a User's groups.
+
+**Superuser**:
+A Snipe-IT account that may manage Permission Groups and permissions. Distinct from Operator: an Operator may or may not be one.
 _Avoid_: admin, user (User is the Assignee kind)
 
 **History**:

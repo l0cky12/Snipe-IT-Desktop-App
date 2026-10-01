@@ -25,6 +25,21 @@ export type Asset = {
   overdueDays: number | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
+  /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
+  can: Can
+}
+
+/** What the Operator's key may do to one record, as Snipe-IT's available_actions says. */
+export type Can = { checkout: boolean; checkin: boolean; update: boolean; delete: boolean }
+// Snipe-IT sends permissions decoded (key → value); an older one, or a field saved by hand, may send the JSON text.
+const permissionsOf = (raw: unknown): Record<string, unknown> => {
+  let value = raw
+  if (typeof raw === 'string') try { value = JSON.parse(raw) } catch { return {} }
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+const canFrom = (raw: unknown): Can => {
+  const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof Can, unknown>>
+  return { checkout: a.checkout !== false, checkin: a.checkin !== false, update: a.update !== false, delete: a.delete !== false }
 }
 
 export type HistoryEntry = { when: string; action: string; operator: string; detail: string; note: string }
@@ -43,7 +58,7 @@ export type CheckoutTarget = { id: number; name: string; detail: string }
 export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
 
 /** What the rail shows for a match or a recent scan. */
-export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
+export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
 
 /** The kinds that open the Assets List filtered to them. */
 export type OtherKind = 'users' | 'locations' | 'models'
@@ -87,7 +102,24 @@ export type RecordKind = Exclude<ListKind, 'activity'>
 /** One field of a record as the Operator reads it; link is the related record it names, when the app can open it. */
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
 /** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string }
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; can: Can }
+/** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
+export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
+/** A permission group and what it grants (key → '1' granted, '0' not). */
+export type Group = { id: number; name: string; permissions: Record<string, string> }
+
+// Snipe-IT's permission keys (config/permissions.php), by area, as its group editor shows them.
+export const PERMISSIONS: [area: string, keys: string[]][] = [
+  ['Global', ['superuser', 'admin', 'import', 'reports.view']],
+  ...(['assets', 'accessories', 'consumables', 'licenses', 'components'] as const).map((k): [string, string[]] => [k.charAt(0).toUpperCase() + k.slice(1), [
+    `${k}.view`, `${k}.create`, `${k}.edit`, `${k}.delete`, `${k}.checkout`,
+    ...(k === 'consumables' ? [] : [`${k}.checkin`]), ...(k === 'assets' ? ['assets.audit', 'assets.view.requestable', 'assets.view.encrypted_custom_fields'] : []), ...(k === 'licenses' ? ['licenses.keys'] : []),
+  ]]),
+  ...([['Users', 'users'], ['Asset Models', 'models'], ['Categories', 'categories'], ['Departments', 'departments'], ['Status Labels', 'statuslabels'], ['Custom Fields', 'customfields'],
+    ['Suppliers', 'suppliers'], ['Manufacturers', 'manufacturers'], ['Depreciations', 'depreciations'], ['Locations', 'locations'], ['Companies', 'companies'], ['Kits', 'kits']] as const)
+    .map(([area, k]): [string, string[]] => [area, [`${k}.view`, `${k}.create`, `${k}.edit`, `${k}.delete`]]),
+  ['Self', ['self.two_factor', 'self.api', 'self.edit_location', 'self.checkout_assets', 'self.view_purchase_cost']],
+]
 /** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
 export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] }
@@ -168,6 +200,7 @@ type RawAsset = {
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
   expected_checkin: { date: string } | null
+  available_actions?: unknown
 }
 type RawActivity = {
   id: number
@@ -282,8 +315,8 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
   }
 }
 
-export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee }: Asset): AssetSummary =>
-  ({ id, assetTag, name, status, statusMeta, assignee })
+export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
+  ({ id, assetTag, name, status, statusMeta, assignee, can })
 
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = raw.expected_checkin?.date ?? null
@@ -311,6 +344,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
       : { expired: false, daysLeft: warrantyLeft },
+    can: canFrom(raw.available_actions),
   }
 }
 
@@ -333,7 +367,7 @@ const FIELD_LABELS: Record<string, string> = {
   expected_checkin: 'Expected Checkin', last_checkin: 'Last Checkin', last_checkout: 'Last Checkout', assets_count: 'Assets', users_count: 'Users',
 }
 // Shown elsewhere (id, custom fields), not readable (images, the permissions map), or not about the record (what the key may do).
-const HIDDEN_FIELDS = new Set(['id', 'name', 'custom_fields', 'available_actions', 'user_can_checkout', 'image', 'avatar', 'permissions'])
+const HIDDEN_FIELDS = new Set(['id', 'name', 'custom_fields', 'available_actions', 'user_can_checkout', 'image', 'avatar', 'permissions', 'groups'])
 
 type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
 type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
@@ -483,7 +517,7 @@ function fieldsOf(raw: RawRow): Field[] {
       const kind = key === 'assigned_to' ? ({ user: 'users', location: 'locations', asset: 'assets' } as const)[o.type as Assignee['type']] : RELATED_KINDS[key]
       return { label, value: o.name, ...(kind && typeof o.id === 'number' && { link: { kind, id: o.id } }) }
     }
-    // A list of records (a Location's children, a User's groups { total, rows }…) gives each its own field; a list of plain values reads as one.
+    // A list of records (a Location's children, or a { total, rows } page) gives each its own field; a list of plain values reads as one.
     const list = Array.isArray(v) ? v : Array.isArray((v as { rows?: unknown }).rows) ? (v as { rows: unknown[] }).rows : null
     if (list) {
       if (list.every((x) => typeof x !== 'object')) fields.push(...(list.length ? [{ label, value: list.join(', ') }] : []))
@@ -747,7 +781,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(id, 'record')
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
-      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
+      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -807,6 +841,63 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(id, 'record')
       const result = await request(`${LISTS[kind].path}/${id}`, {}, 'DELETE')
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // Whether the Operator's own account may manage permissions: Snipe-IT lets only a superuser read groups, so ask it.
+    async canManagePermissions(): Promise<boolean> {
+      try {
+        const body = await request('/groups?limit=1')
+        // Only a refusal (HTTP 403, caught below) means "not a superuser"; any other error is a reason to show.
+        if (isError(body)) throw new Error(reason(body.messages))
+        return true
+      } catch (e) {
+        // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
+        if (/HTTP 403\b/.test((e as Error).message)) return false
+        throw e
+      }
+    },
+
+    // A User's own permissions and groups; anyone who may view the User may see them.
+    async userAccess(id: number): Promise<UserAccess> {
+      checkId(id, 'User')
+      const user = await request<{ permissions?: unknown; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
+      if (isError(user)) throw new Error(reason(user.messages))
+      const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
+      return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+    },
+
+    // Every permission group (superuser only).
+    async groups(): Promise<StatusLabel[]> {
+      return (await allRows<StatusLabel>('/groups')).map(({ id, name }) => ({ id, name }))
+    },
+
+    async group(id: number): Promise<Group> {
+      checkId(id, 'group')
+      const g = await request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`)
+      if (isError(g)) throw new Error(reason(g.messages))
+      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
+    },
+
+    // A User's groups, all at once: the ones listed are kept or added, the rest removed.
+    async setUserGroups(userId: number, groupIds: number[]): Promise<void> {
+      checkId(userId, 'User')
+      if (!Array.isArray(groupIds)) throw new Error('Invalid groups')
+      for (const g of groupIds) checkId(g, 'group')
+      const result = await request(`/users/${userId}`, { groups: groupIds }, 'PATCH')
+      if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // A group's name and what it grants. Only permission keys and grant/not reach Snipe-IT, which drops keys it doesn't know.
+    async saveGroup(id: number, name: string, permissions: Record<string, string>): Promise<SaveResult> {
+      checkId(id, 'group')
+      if (typeof name !== 'string' || typeof permissions !== 'object' || permissions === null) throw new Error('Invalid group')
+      for (const [k, v] of Object.entries(permissions)) if (!/^[a-z_]+(\.[a-z_]+)*$/.test(k) || (v !== '1' && v !== '0')) throw new Error(`Invalid permission: ${k}`)
+      const result = await request(`/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, 'PATCH')
+      if (!isError(result)) return { ok: true, id }
+      const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
+      return fieldMessages
+        ? { ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)])) }
+        : { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.

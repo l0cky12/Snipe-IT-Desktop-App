@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EditKind, FormField, NamesKind, StatusLabel } from '../../main/snipeit'
 import { singular } from './ListView'
+import { NOT_ALLOWED } from './App'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
 // An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
@@ -124,7 +125,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
 }
 
 // Asks before deleting; Snipe-IT's refusal (e.g. an Asset still checked out) shows in place.
-export function DeleteButton({ kind, id, name, onDeleted }: { kind: EditKind; id: number; name: string; onDeleted: () => void }) {
+export function DeleteButton({ kind, id, name, onDeleted, allowed = true }: { kind: EditKind; id: number; name: string; onDeleted: () => void; allowed?: boolean }) {
   const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -139,7 +140,7 @@ export function DeleteButton({ kind, id, name, onDeleted }: { kind: EditKind; id
       setBusy(false)
     }
   }
-  if (!asking) return <button className="quiet danger" onClick={() => setAsking(true)}>Delete…</button>
+  if (!asking) return <button className="quiet danger" disabled={!allowed} title={allowed ? undefined : NOT_ALLOWED} onClick={() => setAsking(true)}>Delete…</button>
   return (
     <span className="confirm" role="alertdialog" aria-label={`Delete ${name}?`}>
       <span>Delete {name}? It goes to Snipe-IT's deleted items and leaves every List.</span>

@@ -29,6 +29,12 @@ const snipeIt: SnipeIt = {
   customFields: call('snipeit:customFields'),
   save: call('snipeit:save'),
   remove: call('snipeit:remove'),
+  canManagePermissions: call('snipeit:canManagePermissions'),
+  userAccess: call('snipeit:userAccess'),
+  groups: call('snipeit:groups'),
+  group: call('snipeit:group'),
+  setUserGroups: call('snipeit:setUserGroups'),
+  saveGroup: call('snipeit:saveGroup'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)

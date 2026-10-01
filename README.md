@@ -49,6 +49,12 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 
 **Export CSV…** saves the table as a CSV file where you choose. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
 
+## Permissions
+
+What the app offers follows what Snipe-IT lets your API key do: Checkout, Checkin, Status, Edit and Delete are turned off (with the reason on hover) wherever Snipe-IT says your account may not, record by record.
+
+A User's page shows their permission groups and any permissions of their own. Managing permissions needs a Snipe-IT **superuser** account: with one, you can add a User to a group or take them out, and **All records → Permission groups** edits what each group may do. Without one, the app says so and only shows them.
+
 ## Settings
 
 Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
