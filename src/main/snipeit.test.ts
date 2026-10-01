@@ -45,9 +45,12 @@ const snipeItWith = (hardware: object, history: { status?: number; body: unknown
   createSnipeIt(config, fakeFetch({ '/hardware/4812': { body: hardware }, '/reports/activity': history }).fetch, today)
 
 const notFound = { status: 'error', messages: 'Asset does not exist.', payload: null }
+// What Snipe-IT's catch-all route sends for a path it has no route for under that method, e.g. a GET to a POST-only endpoint.
+const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
-// A fake fetch that answers from a path → JSON map and records the paths it was asked for,
-// plus every request as Snipe-IT would receive it (method, path, parsed JSON body), and each query string's parameters.
+// A fake fetch that answers from a route → JSON map, keyed 'POST /path' (or just '/path' for a GET) like Snipe-IT routes,
+// and records the paths it was asked for, plus every request as Snipe-IT would receive it (method, path, parsed JSON body),
+// and each query string's parameters. A path routed only under another method gets Snipe-IT's 404, as a real server sends.
 type FakeRequest = { method: string; path: string; body: unknown }
 function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
   const calls: string[] = []
@@ -56,10 +59,12 @@ function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input))
     const path = url.pathname.replace('/api/v1', '')
+    const method = init?.method ?? 'GET'
     calls.push(path)
     queries.push(Object.fromEntries(url.searchParams))
-    requests.push({ method: init?.method ?? 'GET', path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
-    const route = routes[path] ?? { status: 404, body: notFound }
+    requests.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    const routedOtherwise = Object.keys(routes).some((k) => k.replace(/^[A-Z]+ /, '') === path)
+    const route = routes[method === 'GET' ? path : `${method} ${path}`] ?? { status: 404, body: routedOtherwise ? noEndpoint : notFound }
     return new Response(JSON.stringify(route.body), { status: route.status ?? 200 })
   }
   return { fetch: fetch as typeof globalThis.fetch, calls, requests, queries }
@@ -384,7 +389,7 @@ describe('statusLabels', () => {
 describe('checkin', () => {
   const checkedIn = { status: 'success', messages: 'Asset checked in successfully.', payload: { asset: 'NOMMA-004812' } }
   const checkinWith = (hardware: object, reply: { status?: number; body: unknown } = { body: checkedIn }) =>
-    fakeFetch({ '/hardware/4812': { body: hardware }, '/hardware/4812/checkin': reply })
+    fakeFetch({ '/hardware/4812': { body: hardware }, 'POST /hardware/4812/checkin': reply })
   const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
 
   it('keeps the current status when the Operator picks none', async () => {
@@ -438,7 +443,7 @@ describe('checkout', () => {
   const ready = { ...chromebook, assigned_to: null, expected_checkin: null, status_label: { id: 1, name: 'Ready to Deploy', status_type: 'deployable', status_meta: 'deployable' } }
   const checkedOut = { status: 'success', messages: 'Asset checked out successfully.', payload: { asset: 'NOMMA-004812' } }
   const checkoutWith = (hardware: object, reply: { status?: number; body: unknown } = { body: checkedOut }) =>
-    fakeFetch({ '/hardware/4812': { body: hardware }, '/hardware/4812/checkout': reply })
+    fakeFetch({ '/hardware/4812': { body: hardware }, 'POST /hardware/4812/checkout': reply })
   const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
 
   it('to a User sends the current status, the target type, and the assigned user', async () => {
@@ -788,7 +793,7 @@ it('tests authentication before reporting connection success and detects the ver
 })
 
 it('sends the selected Checkin Location to Snipe-IT', async () => {
-  const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: chromebook }, '/hardware/4812/checkin': { body: { status: 'success' } } })
+  const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: chromebook }, 'POST /hardware/4812/checkin': { body: { status: 'success' } } })
   await createSnipeIt(config, fetch).checkin(4812, { locationId: 9 })
   expect(requests.at(-1)?.body).toEqual({ status_id: 2, location_id: 9 })
 })
@@ -1024,14 +1029,19 @@ describe('the other record kinds', () => {
 })
 
 describe('create, edit and delete', () => {
-  const fieldset = { total: 1, rows: [{ name: 'MAC Address', db_column_name: '_snipeit_mac_1', type: 'text', format: 'MAC', required: 1, field_values_array: null }, { name: 'Cart', db_column_name: '_snipeit_cart_2', type: 'listbox', format: 'ANY', required: 0, field_values_array: ['A', 'B'] },
-    { name: 'Chargers', db_column_name: '_snipeit_chargers_3', type: 'checkbox', format: 'ANY', required: 0, field_values_array: ['USB-C', 'Barrel'] }] }
+  // Snipe-IT sends a Fieldset's Custom Fields with the Fieldset; its /fields endpoint answers only a POST, so a GET there gets the 404.
+  const fieldset = { id: 3, name: 'Chromebooks', fields: { total: 3, rows: [{ name: 'MAC Address', db_column_name: '_snipeit_mac_1', type: 'text', format: 'MAC', required: 1, field_values_array: null }, { name: 'Cart', db_column_name: '_snipeit_cart_2', type: 'listbox', format: 'ANY', required: 0, field_values_array: ['A', 'B'] },
+    { name: 'Chargers', db_column_name: '_snipeit_chargers_3', type: 'checkbox', format: 'ANY', required: 0, field_values_array: ['USB-C', 'Barrel'] }] } }
   const editable = { ...chromebook, rtd_location: { id: 4, name: 'IT Office' }, purchase_cost: '1,200.50', warranty_months: '36 months', notes: '<p>Spare</p>', name: 'Cart <B>', supplier: null, company: null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_1', value: '00:1A:2B:3C:4D:5E' } } }
 
   it("editing an Asset fills its form from what Snipe-IT sent, with its Asset Model's custom fields", async () => {
-    const { fetch } = fakeFetch({ '/hardware/4812': { body: editable }, '/models/7': { body: { id: 7, fieldset: { id: 3, name: 'Chromebooks' } } }, '/fieldsets/3/fields': { body: fieldset } })
-    const { fields, values } = await createSnipeIt(config, fetch).form('assets', 4812)
+    const { fetch } = fakeFetch({ '/hardware/4812': { body: editable }, '/models/7': { body: { id: 7, fieldset: { id: 3, name: 'Chromebooks' } } },
+      '/fieldsets/3': { body: fieldset }, 'POST /fieldsets/3/fields': { body: fieldset.fields } })
+    const snipeIt = createSnipeIt(config, fetch)
+    const { fields, values } = await snipeIt.form('assets', 4812)
+    // Choosing that Asset Model on the form loads the same fields.
+    expect(await snipeIt.customFields(7)).toEqual(fields.slice(-3))
     expect(fields.slice(-3)).toEqual([
       { key: '_snipeit_mac_1', label: 'MAC Address', required: true, type: 'text' },
       { key: '_snipeit_cart_2', label: 'Cart', required: false, type: 'choice', options: ['A', 'B'] },
@@ -1047,7 +1057,7 @@ describe('create, edit and delete', () => {
   })
 
   it("an Accessory's minimum is read from min_qty, as Snipe-IT sends it, and saved as min_amt", async () => {
-    const { fetch, requests } = fakeFetch({ '/accessories/5': { body: { id: 5, name: 'Charger', qty: 60, min_qty: 10, category: { id: 2, name: 'Chargers' } } } })
+    const { fetch, requests } = fakeFetch({ '/accessories/5': { body: { id: 5, name: 'Charger', qty: 60, min_qty: 10, category: { id: 2, name: 'Chargers' } } }, 'PATCH /accessories/5': { body: { status: 'success' } } })
     const snipeIt = createSnipeIt(config, fetch)
     expect((await snipeIt.form('accessories', 5)).values).toMatchObject({ min_amt: '10', category_id: '2', qty: '60' })
     await snipeIt.save('accessories', 5, { min_amt: '12' })
@@ -1061,7 +1071,7 @@ describe('create, edit and delete', () => {
   })
 
   it('creating sends the form to Snipe-IT, a blank choice or date as none, and returns the new id', async () => {
-    const { fetch, requests } = fakeFetch({ '/hardware': { body: { status: 'success', messages: 'Created.', payload: { id: 5001 } } } })
+    const { fetch, requests } = fakeFetch({ 'POST /hardware': { body: { status: 'success', messages: 'Created.', payload: { id: 5001 } } } })
     const result = await createSnipeIt(config, fetch).save('assets', null, { asset_tag: 'NOMMA-5001', model_id: '7', status_id: '1', name: '', supplier_id: '', purchase_date: '', _snipeit_mac_1: '00:11:22:33:44:55' })
     expect(result).toEqual({ ok: true, id: 5001 })
     expect(requests.at(-1)).toEqual({ method: 'POST', path: '/hardware', body: { asset_tag: 'NOMMA-5001', model_id: '7', status_id: '1', name: '', supplier_id: null, purchase_date: null, _snipeit_mac_1: '00:11:22:33:44:55' } })
@@ -1069,17 +1079,17 @@ describe('create, edit and delete', () => {
 
   it("Snipe-IT's reasons come back beside the field they're about; others as one line", async () => {
     const refusal = { status: 'error', messages: { asset_tag: ['The asset tag must be unique.'], model_id: ['The model id field is required.'], image: ['Too big.'] }, payload: null }
-    const { fetch } = fakeFetch({ '/hardware/4812': { body: refusal } })
+    const { fetch } = fakeFetch({ 'PATCH /hardware/4812': { body: refusal } })
     expect(await createSnipeIt(config, fetch).save('assets', 4812, { asset_tag: 'NOMMA-1', model_id: '' })).toEqual({
       ok: false, message: 'Too big.', errors: { asset_tag: 'The asset tag must be unique.', model_id: 'The model id field is required.', image: 'Too big.' },
     })
-    const whole = fakeFetch({ '/users': { status: 422, body: { message: 'The given data was invalid.', errors: { username: ['The username has already been taken.'] } } } })
+    const whole = fakeFetch({ 'POST /users': { status: 422, body: { message: 'The given data was invalid.', errors: { username: ['The username has already been taken.'] } } } })
     expect(await createSnipeIt(config, whole.fetch).save('users', null, { first_name: 'A', username: 'jreyes' }))
       .toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { username: 'The username has already been taken.' } })
   })
 
   it('editing PATCHes only the form, leaving out a new-only password; a field the form lacks is refused', async () => {
-    const { fetch, requests, calls } = fakeFetch({ '/users/311': { body: { status: 'success', payload: { id: 311 } } } })
+    const { fetch, requests, calls } = fakeFetch({ 'PATCH /users/311': { body: { status: 'success', payload: { id: 311 } } } })
     const snipeIt = createSnipeIt(config, fetch)
     expect(await snipeIt.save('users', 311, { first_name: 'Jordan', password: 'x', department_id: '' })).toEqual({ ok: true, id: 311 })
     expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { first_name: 'Jordan', department_id: null } })
@@ -1090,8 +1100,8 @@ describe('create, edit and delete', () => {
 
   it("deleting DELETEs the record; Snipe-IT's refusal is thrown as its reason", async () => {
     const { fetch, requests } = fakeFetch({
-      '/locations/12': { body: { status: 'success', messages: 'Deleted.' } },
-      '/hardware/4812': { body: { status: 'error', messages: 'This asset is currently checked out, and cannot be deleted.' } },
+      'DELETE /locations/12': { body: { status: 'success', messages: 'Deleted.' } },
+      'DELETE /hardware/4812': { body: { status: 'error', messages: 'This asset is currently checked out, and cannot be deleted.' } },
     })
     const snipeIt = createSnipeIt(config, fetch)
     await snipeIt.remove('locations', 12)
@@ -1133,7 +1143,7 @@ describe('permissions', () => {
   })
 
   it("a User's groups are set all at once; a group id that isn't a whole number is refused", async () => {
-    const { fetch, requests, calls } = fakeFetch({ '/users/311': { body: { status: 'success' } } })
+    const { fetch, requests, calls } = fakeFetch({ 'PATCH /users/311': { body: { status: 'success' } } })
     const snipeIt = createSnipeIt(config, fetch)
     await snipeIt.setUserGroups(311, [1, 2])
     expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [1, 2] } })
@@ -1144,6 +1154,7 @@ describe('permissions', () => {
   it("a group's permissions are read as granted or not, and saved as Snipe-IT's JSON; only permission keys are sent", async () => {
     const { fetch, requests } = fakeFetch({
       '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': 1, 'assets.delete': '0' } } },
+      'PATCH /groups/2': { body: { status: 'success' } },
     })
     const snipeIt = createSnipeIt(config, fetch)
     expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
@@ -1154,21 +1165,21 @@ describe('permissions', () => {
   })
 
   it("a group Snipe-IT refuses to save says why, beside the field", async () => {
-    const { fetch } = fakeFetch({ '/groups/2': { body: { status: 'error', messages: { name: ['The name field is required.'] } } } })
+    const { fetch } = fakeFetch({ 'PATCH /groups/2': { body: { status: 'error', messages: { name: ['The name field is required.'] } } } })
     expect(await createSnipeIt(config, fetch).saveGroup(2, '', {})).toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { name: 'The name field is required.' } })
   })
 })
 
 describe('updateStatus', () => {
   it('PATCHes only the new status onto the Asset', async () => {
-    const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: { status: 'success', messages: 'Asset updated.' } } })
+    const { fetch, requests } = fakeFetch({ 'PATCH /hardware/4812': { body: { status: 'success', messages: 'Asset updated.' } } })
     await createSnipeIt(config, fetch).updateStatus(4812, 3)
     expect(requests).toEqual([{ method: 'PATCH', path: '/hardware/4812', body: { status_id: 3 } }])
   })
 
   it("a status Snipe-IT refuses is thrown as Snipe-IT's reason", async () => {
     const refused = { status: 'error', messages: { status_id: ['That status is not deployable.'] }, payload: null }
-    const { fetch } = fakeFetch({ '/hardware/4812': { body: refused } })
+    const { fetch } = fakeFetch({ 'PATCH /hardware/4812': { body: refused } })
     await expect(createSnipeIt(config, fetch).updateStatus(4812, 3)).rejects.toThrow('That status is not deployable.')
   })
 })

@@ -160,6 +160,15 @@ for (const u of users) Object.assign(u, { groups: groupsOf(u.id % 3 ? [2] : [1])
 const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true }
 for (const r of [...assets, ...users, ...locations]) r.available_actions = actions
 const noGroups = { status: 'error', messages: 'You do not have permission to access this area.', payload: null }
+// The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
+// A new endpoint below needs its path here too.
+const routes = [
+  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out))$/, ['POST']],
+  [/^[a-z]+$/, ['GET', 'POST']],
+  [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
+]
+const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
@@ -169,6 +178,7 @@ createServer(async (req, res) => {
     latency + rowCost * (value?.rows?.length ?? 1))
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
+  if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
   if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', permissions: limited ? {} : { superuser: '1' } })
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(noGroups, 403)
@@ -185,7 +195,10 @@ createServer(async (req, res) => {
   }
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
   if ((m = path.match(/^hardware\/bytag\/(.+)$/))) return send(assets.find((a) => a.asset_tag.toLowerCase() === decodeURIComponent(m[1]).toLowerCase()) ?? { status: 'error', messages: 'Asset does not exist.' })
-  if ((m = path.match(/^fieldsets\/(\d+)\/fields$/))) return send({ total: fieldset.fields.length, rows: fieldset.fields })
+  if ((m = path.match(/^fieldsets\/(\d+)(\/fields)?$/))) {
+    const fields = { total: fieldset.fields.length, rows: fieldset.fields }
+    return +m[1] !== fieldset.id ? fail('Fieldset does not exist') : send(m[2] ? fields : { id: fieldset.id, name: fieldset.name, fields })
+  }
   if (req.method === 'POST' && store[path]) return send(saveRecord(path, body))
   // A status-only PATCH is the Quick Action, handled with the other Asset actions below.
   const statusOnly = req.method === 'PATCH' && Object.keys(body).every((k) => k === 'status_id')
