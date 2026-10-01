@@ -5,7 +5,10 @@ import { LIST_SORTS, REPORT_NAMES, type Config, type ListKind, type ReportKind, 
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean } }
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background }
+/** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
+export type Background = { tray: boolean; startAtLogin: boolean }
+export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
 /** ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted. */
 export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string }
 /** A blank password keeps the saved one, as long as the mail server's host and username are the same. */
@@ -18,6 +21,7 @@ export type SettingsApi = {
   locations(input: SettingsInput): Promise<StatusLabel[]>
   clearToken(): Promise<Settings>
   saveMail(input: MailInput): Promise<Settings>
+  saveBackground(input: Background): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
   testMail(input: MailInput): Promise<string>
   savedReports(): Promise<SavedReport[]>
@@ -48,7 +52,7 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string }
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -133,7 +137,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
   function get(): Settings {
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
-      mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword } }
+      mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
+      background: value.background ?? BACKGROUND_OFF }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -196,6 +201,11 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       if (!password) write(rest)
       else if (!available()) write({ ...rest, plainMailPassword: password })
       else write({ ...rest, encryptedMailPassword: storage.encryptString(password).toString('base64') })
+      return get()
+    },
+    saveBackground({ tray, startAtLogin }: Background) {
+      if (typeof tray !== 'boolean' || typeof startAtLogin !== 'boolean') throw new Error('Invalid background settings')
+      write({ ...read(), background: { tray, startAtLogin } })
       return get()
     },
     savedReports,

@@ -1,11 +1,13 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSettingsStore, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { HIDDEN_ARG, linuxAutostart } from './background'
+import { BACKGROUND_OFF, createSettingsStore, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
 import { sendMail } from './mail'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt } from './snipeit'
+import trayIcon from './tray.png?asset'
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
@@ -37,9 +39,35 @@ async function ownLabelPdf(dir: string, html: string): Promise<Buffer> {
   }
 }
 
+// One app at a time: launching it again (say, while it's in the tray) shows this one's window, and no Report sends twice.
+if (!app.requestSingleInstanceLock()) app.exit()
+// The ID electron-builder's Windows installer gives the app's shortcut, which Windows needs to show its notifications.
+if (process.platform === 'win32') app.setAppUserModelId('net.nomma.snipe-it-desktop')
+
 app.whenReady().then(() => {
   const store = createSettingsStore(join(app.getPath('userData'), 'settings.json'), safeStorage, app.getVersion())
   const client = (input?: SettingsInput) => createSnipeIt(store.credentials(input), fetch)
+  // A corrupt settings file shouldn't keep the window from opening to say so.
+  let background = BACKGROUND_OFF
+  try { background = store.get().background } catch {}
+  const win = new BrowserWindow({
+    show: !(background.tray && process.argv.includes(HIDDEN_ARG)),
+    width: 1280,
+    height: 800,
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  win.setMenuBarVisibility(false)
+  if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else win.loadFile(join(__dirname, '../renderer/index.html'))
+  const show = () => { if (win.isMinimized()) win.restore(); win.show(); win.focus() }
+  app.on('second-instance', show)
+
   ipcMain.handle('settings:get', () => store.get())
   ipcMain.handle('settings:save', (_e, input: SettingsInput) => store.save(input))
   ipcMain.handle('settings:clearToken', () => store.clearToken())
@@ -64,12 +92,25 @@ app.whenReady().then(() => {
     send: (mail) => sendMail(store.mailServer(), mail),
     schedules: store.schedules,
     recordSend: store.recordSend,
+    // Only while the window is hidden; open, the Reports page shows the failure. No Report name: an Operator's name for a
+    // Saved Report could name a student, and notifications show on lock screens. ponytail: each hourly retry notifies again.
+    failed: (error) => {
+      if (win.isVisible() || !Notification.isSupported()) return
+      const note = new Notification({ title: "A scheduled Report couldn't be emailed", body: `${error} The Reports page says which.` })
+      note.on('click', show)
+      note.show()
+    },
   })
   ipcMain.handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
   // At launch, sending what came due while the app was closed, then every minute.
   const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
   tick()
   setInterval(tick, 60_000)
+  ipcMain.handle('settings:saveBackground', (_e, input: Background) => {
+    const saved = store.saveBackground(input)
+    applyBackground(saved.background)
+    return saved
+  })
   ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
   for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
@@ -88,20 +129,34 @@ app.whenReady().then(() => {
     return pdf ? 'snipeit' : 'own'
   })
 
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    backgroundColor: '#0d1117',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+  // Tray mode: closing the window hides it (and closes any Label windows), so scheduled Reports keep sending; Quit in the
+  // tray quits. Logging out of Windows ends the app without asking.
+  let tray: Tray | null = null
+  let quitting = false
+  app.on('before-quit', () => { quitting = true })
+  win.on('close', (e) => {
+    if (!tray || quitting) return
+    e.preventDefault()
+    win.getChildWindows().forEach((w) => w.close())
+    win.hide()
   })
-  win.setMenuBarVisibility(false)
-  if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  else win.loadFile(join(__dirname, '../renderer/index.html'))
+  function applyBackground({ tray: inTray, startAtLogin }: Background) {
+    if (inTray && !tray) {
+      tray = new Tray(nativeImage.createFromPath(trayIcon))
+      tray.setToolTip('Snipe-IT Desktop')
+      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => app.quit() }]))
+      tray.on('click', show)
+    } else if (!inTray && tray) {
+      tray.destroy()
+      tray = null
+    }
+    // Every launch too, so an AppImage that moved still starts from where it is now. Not from source: that would point
+    // the installed app's login item at bare Electron.
+    if (!app.isPackaged) return
+    if (process.platform === 'linux') linuxAutostart(startAtLogin, app.getPath('appData'), process.env.APPIMAGE ?? process.execPath)
+    else app.setLoginItemSettings({ openAtLogin: startAtLogin, args: [HIDDEN_ARG] })
+  }
+  try { applyBackground(background) } catch (e) { console.error('Tray and Start at login:', (e as Error).message) }
 })
 
 app.on('window-all-closed', () => app.quit())

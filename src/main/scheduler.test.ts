@@ -18,6 +18,7 @@ function scheduler({ email = 'ecaldwell@nomma.net', report = overdue } = {}) {
     send: async (mail) => void sent.push(mail),
     schedules: () => [],
     recordSend: () => {},
+    failed: () => {},
   })
   return { s, sent, ran }
 }
@@ -99,7 +100,7 @@ const at = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hou
 function scheduled(schedules: [ScheduleKey, Schedule][], { setAt = at(1, 6), fail = '' } = {}) {
   const path = join(mkdtempSync(join(tmpdir(), 'snipe-scheduler-')), 'settings.json')
   dirs.push(join(path, '..'))
-  const t = { clock: setAt, fail, sent: [] as string[], ran: [] as ReportRef[] }
+  const t = { clock: setAt, fail, sent: [] as string[], ran: [] as ReportRef[], failed: [] as string[] }
   const launch = () => {
     const store = createSettingsStore(path, storage, '0.1.0')
     return { store, scheduler: createReportScheduler({
@@ -109,6 +110,7 @@ function scheduled(schedules: [ScheduleKey, Schedule][], { setAt = at(1, 6), fai
       send: async (mail) => { if (t.fail) throw new Error(t.fail); t.sent.push(`${mail.subject} @ ${t.clock.toString().slice(4, 21)}`) },
       schedules: store.schedules,
       recordSend: store.recordSend,
+      failed: (error) => void t.failed.push(error),
     }) }
   }
   let app = launch()
@@ -209,5 +211,14 @@ describe('scheduled Reports', () => {
     await t.tick(at(2, 8), at(2, 8, 1), at(2, 9), at(3, 6, 59))
     expect(t.last()).toEqual({ at: at(2, 8).toISOString(), rows: 2 })
     expect(t.sent).toEqual(['Overdue, 2026-10-01 @ Oct 01 2026 07:00', 'Overdue, 2026-10-02 @ Oct 02 2026 08:00'])
+  })
+
+  it('tells of each failed scheduled send, so it can be shown while the window is hidden', async () => {
+    const t = scheduled([[{ builtIn: 'overdue' }, { every: 'day', time: '07:00' }]])
+    t.fail = 'Wrong password'
+    await t.tick(at(1, 7), at(1, 7, 1), at(1, 8))
+    t.fail = ''
+    await t.tick(at(1, 9))
+    expect(t.failed).toEqual(['Wrong password', 'Wrong password'])
   })
 })

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { MailInput, Settings, SettingsInput } from '../../main/config'
+import type { Background, MailInput, Settings, SettingsInput } from '../../main/config'
 
 export function SettingsPage({ settings, onSaved }: { settings: Settings; onSaved: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
@@ -9,7 +9,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background'>('connection')
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
@@ -91,6 +91,18 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
       </fieldset>
     </form>
     {place === 'mail' && notes}
+    <fieldset disabled={busy}>
+      <section className="settings-section">
+        <h2>Running in the background</h2><p className="dim">So scheduled Reports still send with the window closed.</p>
+        {([['tray', 'Keep running in the tray', 'Closing the window hides it. Open it again from the tray icon, or by starting the app again; quit from the tray icon.'],
+          ['startAtLogin', 'Start at login', 'With Keep running in the tray on too, it starts hidden in the tray.']] as const).map(([key, name, hint]) =>
+          <label key={key} className="check"><input type="checkbox" checked={settings.background[key]} onChange={(e) => {
+            const background: Background = { ...settings.background, [key]: e.target.checked }
+            run(async () => { onSaved(await window.settings.saveBackground(background)); setMessage('Saved.') }, 'background')
+          }} /><span>{name}<span className="hint">{hint}</span></span></label>)}
+      </section>
+    </fieldset>
+    {place === 'background' && notes}
     <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
       <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
     </section>

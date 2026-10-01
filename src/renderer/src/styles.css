@@ -201,6 +201,9 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .connection-row > div { flex: 1; }
 .settings-page input[readonly] { background: transparent; border-style: dashed; color: var(--dim); }
 .settings-page .hint { font-size: 13px; color: var(--dim); margin: 10px 0 0; }
+.settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+.settings-page .check input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
+.settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .settings-footer { display: flex; align-items: center; gap: 16px; padding: 20px 4px; font-size: 13px; }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); padding: 10px 22px; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }

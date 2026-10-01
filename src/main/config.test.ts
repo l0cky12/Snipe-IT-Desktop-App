@@ -208,3 +208,14 @@ it('refuses a schedule it could not keep', () => {
   for (const key of [null, 'overdue', 7]) expect(() => store.setSchedule(key as never, weekly, since)).toThrow('Unknown report')
   expect(store.schedules()).toEqual([])
 })
+
+it('keeps running in the tray and starting at login off until turned on, and keeps them across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().background).toEqual({ tray: false, startAtLogin: false })
+  store.save(input)
+  expect(store.saveBackground({ tray: true, startAtLogin: true }).background).toEqual({ tray: true, startAtLogin: true })
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, background: { tray: true, startAtLogin: true } })
+  expect(relaunched.saveBackground({ tray: false, startAtLogin: true }).background).toEqual({ tray: false, startAtLogin: true })
+  expect(() => store.saveBackground({ tray: 'yes', startAtLogin: false } as never)).toThrow('Invalid')
+})

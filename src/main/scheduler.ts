@@ -42,9 +42,9 @@ function rangeOf({ range, since, sentAt }: KeptSchedule, when: Date): ReportQuer
 }
 
 // The Report scheduler: emails a Report to the Operator, and only to them at REPORT_DOMAIN, now or when its schedule
-// comes due (tick, every minute while the app runs). now, run, recipient, send and the schedules are passed in so it
-// can be tested on a fake clock and sender.
-export function createReportScheduler({ now, run, recipient, send, schedules, recordSend }: {
+// comes due (tick, every minute while the app runs). now, run, recipient, send, the schedules and failed are passed in
+// so it can be tested on a fake clock and sender.
+export function createReportScheduler({ now, run, recipient, send, schedules, recordSend, failed }: {
   now: () => Date
   run: (ref: ReportRef) => Promise<ReportRun>
   /** The Operator's Snipe-IT email address. */
@@ -52,6 +52,8 @@ export function createReportScheduler({ now, run, recipient, send, schedules, re
   send: (mail: Mail) => Promise<void>
   schedules: () => Scheduled[]
   recordSend: (report: ScheduleKey, last: LastSend) => void
+  /** A scheduled send failed (each try), with why. */
+  failed: (error: string) => void
 }): ReportsApi & { tick(): Promise<void> } {
   let ticking = false
   const api = {
@@ -65,7 +67,9 @@ export function createReportScheduler({ now, run, recipient, send, schedules, re
         for (const { report, schedule } of schedules()) {
           if (!isDue(schedule, when)) continue
           const ref = 'saved' in report ? report : { builtIn: report.builtIn, query: rangeOf(schedule, when) }
-          recordSend(report, await api.emailNow(ref).then(({ rows }) => ({ at, rows }), (e: Error) => ({ at, error: e.message })))
+          const last: LastSend = await api.emailNow(ref).then(({ rows }) => ({ at, rows }), (e: Error) => ({ at, error: e.message }))
+          recordSend(report, last)
+          if ('error' in last) failed(last.error)
         }
       } finally {
         ticking = false

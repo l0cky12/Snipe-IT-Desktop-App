@@ -63,6 +63,11 @@ Lists load on demand, so there is no refresh interval. Appearance retains the ex
 
 Credentials use Electron safeStorage: macOS Keychain, Windows DPAPI, or the Linux system password store. Only encrypted token bytes are written to `settings.json` in Electron's per-user app data directory. With no usable password store (including Linux's `basic_text` fallback), the token is saved unencrypted in `settings.json` with owner-only (0600) permissions, and Settings says so. The saved token is never returned to the renderer. Log out / clear token removes the encrypted token.
 
+**Running in the background** keeps scheduled Reports sending with the window closed. Both options are off by default:
+
+- **Keep running in the tray**: closing the window hides it; the tray icon's menu opens it again or quits. Starting the app again also opens the hidden window (only one copy runs at a time). While the window is hidden, a scheduled send that fails shows a desktop notification.
+- **Start at login**: through Windows' startup apps, or on Linux an entry in `~/.config/autostart`. With Keep running in the tray on too, it starts hidden in the tray. Only an installed app sets this, not one run from source.
+
 Legacy `config.json` is no longer read. Enter those credentials in Settings, then remove your old plaintext config file. Settings changes take effect without restarting and clear previous server data from the screen.
 
 ## Lists
