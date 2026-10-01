@@ -140,11 +140,11 @@ function saveRecord(kind, body, row) {
     if (k === 'groups') { target.groups = groupsOf(v); continue }
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
-    else if (/date$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
+    else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
     else target[k] = v
   }
-  if (kind === 'users') target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
-  if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
+  if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
+  if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? target.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
   if (!row) store[kind].push(target)
   return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
 }

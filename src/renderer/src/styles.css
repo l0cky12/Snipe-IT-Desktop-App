@@ -235,6 +235,7 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .pager { justify-content: flex-end; padding: 14px 28px; }
 .batch td { white-space: nowrap; }
 .batch td[role=status] { white-space: normal; width: 100%; }
+.form-grid.bulk-form { padding: 12px 0 4px; }
 .bulk-rows { max-height: 40vh; overflow: auto; margin-top: 8px; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }

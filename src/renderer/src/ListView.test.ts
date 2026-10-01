@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, mayDelete, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -134,5 +134,16 @@ describe('Bulk delete', () => {
     expect(again.ids).toEqual([2])
     expect(again.records.map((r) => r.outcome?.state)).toEqual(['done', undefined, 'working', undefined])
     expect(progress(again)).toBe('0 of 1')
+  })
+})
+
+describe('Bulk edit', () => {
+  const row = (id: number, update = true) => ({ id, can: { checkout: true, checkin: true, update, delete: true } })
+
+  it("is offered on a Selection of Assets or Users when Snipe-IT lets the Operator edit what's selected", () => {
+    expect(mayEdit('assets', [row(1), row(2)])).toBe(true)
+    expect(mayEdit('users', [row(1)])).toBe(true)
+    expect(mayEdit('assets', [row(1, false), row(2, false)])).toBe(false)
+    expect(mayEdit('locations', [row(1)])).toBe(false)
   })
 })

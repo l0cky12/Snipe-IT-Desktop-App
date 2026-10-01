@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { EditKind, FormField, NamesKind, StatusLabel } from '../../main/snipeit'
-import { singular } from './ListView'
+import { BULK_FORMS, filled, type BulkKind, type EditKind, type FormField, type NamesKind, type StatusLabel } from '../../main/snipeit'
+import { listName, singular } from './ListView'
 import { NOT_ALLOWED } from './App'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
@@ -15,7 +15,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const modelChoice = useRef(0)
   const [fieldsLoading, setFieldsLoading] = useState(false)
   const [fieldsFailed, setFieldsFailed] = useState(false)
-  const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
+  const [names, setNames] = useState<Names>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -29,9 +29,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
       setValues(f.values)
       setInitial(f.values)
       setLoaded(true)
-      // A choice whose names don't load just offers what it has.
-      for (const n of new Set(f.fields.flatMap((x) => (x.choices ? [x.choices] : []))))
-        window.snipeIt.names(n).then((v) => !stale && setNames((all) => ({ ...all, [n]: v })), () => {})
+      loadNames(f.fields, (n, v) => !stale && setNames((all) => ({ ...all, [n]: v })))
     }, (e: Error) => !stale && setMessage(e.message))
     return () => { stale = true }
   }, [kind, id])
@@ -73,32 +71,6 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     }
   }
 
-  const input = (f: FormField) => {
-    const common = { id: `f-${f.key}`, value: values[f.key] ?? '', required: f.required, 'aria-invalid': !!errors[f.key] || undefined, 'aria-describedby': errors[f.key] ? `e-${f.key}` : undefined }
-    if (f.type === 'textarea') return <textarea {...common} rows={3} onChange={(e) => set(f.key, e.target.value)} />
-    if (f.type === 'choices') {
-      const picked = common.value.split(',').map((v) => v.trim()).filter(Boolean)
-      const toggle = (o: string) => set(f.key, (picked.includes(o) ? picked.filter((p) => p !== o) : [...picked, o]).join(', '))
-      return (
-        <div className="choices" id={common.id} role="group" aria-describedby={common['aria-describedby']}>
-          {f.options?.map((o) => <label key={o}><input type="checkbox" checked={picked.includes(o)} onChange={() => toggle(o)} /> {o}</label>)}
-        </div>
-      )
-    }
-    if (f.type === 'choice') {
-      const options = f.options?.map((o) => ({ id: o, name: o })) ?? names[f.choices!] ?? []
-      return (
-        <select {...common} onChange={(e) => set(f.key, e.target.value)}>
-          <option value="">{f.required ? `Choose ${f.label.toLowerCase()}` : 'None'}</option>
-          {/* The current value shows even before the names load. */}
-          {common.value && !options.some((o) => String(o.id) === common.value) && <option value={common.value}>…</option>}
-          {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </select>
-      )
-    }
-    return <input {...common} type={f.type} step={f.type === 'number' ? 'any' : undefined} autoComplete={f.type === 'password' ? 'new-password' : 'off'} onChange={(e) => set(f.key, e.target.value)} />
-  }
-
   return (
     <form className="record-form" onSubmit={submit} noValidate>
       <header className="head">
@@ -115,8 +87,77 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
         {fields.map((f) => (
           <div key={f.key} className={`form-field${f.type === 'textarea' ? ' wide' : ''}`}>
             <label htmlFor={`f-${f.key}`}>{f.label}{f.required && <span className="dim"> (required)</span>}</label>
-            {input(f)}
+            <FieldInput field={f} value={values[f.key] ?? ''} error={errors[f.key]} names={names} onChange={(v) => set(f.key, v)} />
             {errors[f.key] && <p id={`e-${f.key}`} className="field-error">{errors[f.key]}</p>}
+          </div>
+        ))}
+      </div>
+    </form>
+  )
+}
+
+type Names = Partial<Record<NamesKind, StatusLabel[]>>
+// Loads the names each choice offers; a choice whose names don't load just offers what it has.
+function loadNames(fields: FormField[], add: (n: NamesKind, names: StatusLabel[]) => void) {
+  for (const n of new Set(fields.flatMap((f) => (f.choices ? [f.choices] : [])))) window.snipeIt.names(n).then((v) => add(n, v), () => {})
+}
+
+// One field's input. blank: what an empty choice says.
+function FieldInput({ field: f, value, error, names, blank = f.required ? `Choose ${f.label.toLowerCase()}` : 'None', onChange }: {
+  field: FormField; value: string; error?: string; names: Names; blank?: string; onChange: (value: string) => void
+}) {
+  const common = { id: `f-${f.key}`, value, required: f.required, 'aria-invalid': !!error || undefined, 'aria-describedby': error ? `e-${f.key}` : undefined }
+  if (f.type === 'textarea') return <textarea {...common} rows={3} onChange={(e) => onChange(e.target.value)} />
+  if (f.type === 'choices') {
+    const picked = value.split(',').map((v) => v.trim()).filter(Boolean)
+    const toggle = (o: string) => onChange((picked.includes(o) ? picked.filter((p) => p !== o) : [...picked, o]).join(', '))
+    return (
+      <div className="choices" id={common.id} role="group" aria-describedby={common['aria-describedby']}>
+        {f.options?.map((o) => <label key={o}><input type="checkbox" checked={picked.includes(o)} onChange={() => toggle(o)} /> {o}</label>)}
+      </div>
+    )
+  }
+  if (f.type === 'choice') {
+    const options = f.options?.map((o) => ({ id: o, name: o })) ?? names[f.choices!] ?? []
+    return (
+      <select {...common} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{blank}</option>
+        {/* The current value shows even before the names load. */}
+        {value && !options.some((o) => String(o.id) === value) && <option value={value}>…</option>}
+        {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+      </select>
+    )
+  }
+  return <input {...common} type={f.type} step={f.type === 'number' ? 'any' : undefined} autoComplete={f.type === 'password' ? 'new-password' : 'off'} onChange={(e) => onChange(e.target.value)} />
+}
+
+// "Edit shared fields" for a Selection: it starts empty, and only what the Operator fills in is applied to each Record;
+// a field left blank stays as each one has it.
+// busy: another Bulk Action is still running, so this one waits.
+export function BulkEditForm({ kind, count, busy, onApply, onCancel }: { kind: BulkKind; count: number; busy: boolean; onApply: (values: Record<string, string>) => void; onCancel: () => void }) {
+  const fields = BULK_FORMS[kind]
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [names, setNames] = useState<Names>({})
+  useEffect(() => {
+    let stale = false
+    loadNames(fields, (n, v) => !stale && setNames((all) => ({ ...all, [n]: v })))
+    return () => { stale = true }
+  }, [fields])
+  const shared = filled(values)
+  const anyFilled = Object.keys(shared).length > 0
+  return (
+    <form className="selection" aria-label="Edit shared fields" noValidate onSubmit={(e) => (e.preventDefault(), anyFilled && !busy && onApply(shared))}>
+      <div className="actions">
+        <b>Edit shared fields</b>
+        <span className="dim">A field left blank stays as each {singular(kind)} has it.</span>
+        <button disabled={!anyFilled || busy}>Apply to {count.toLocaleString()} {count === 1 ? singular(kind) : listName[kind]}</button>
+        <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
+      </div>
+      <div className="form-grid bulk-form">
+        {fields.map((f) => (
+          <div key={f.key} className={`form-field${f.type === 'textarea' ? ' wide' : ''}`}>
+            <label htmlFor={`f-${f.key}`}>{f.label}</label>
+            <FieldInput field={f} value={values[f.key] ?? ''} names={names} blank="Leave as is" onChange={(v) => setValues((all) => ({ ...all, [f.key]: v }))} />
           </div>
         ))}
       </div>

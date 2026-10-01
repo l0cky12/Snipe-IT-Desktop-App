@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSnipeIt, markdownOf, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, markdownOf, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -1132,6 +1132,29 @@ describe('create, edit and delete', () => {
   it("a User with items checked out isn't deleted: Snipe-IT's refusal is thrown as its reason", async () => {
     const { fetch } = fakeFetch({ 'DELETE /users/311': { body: { status: 'error', messages: 'This user has items assigned and could not be deleted.' } } })
     await expect(createSnipeIt(config, fetch).remove('users', 311)).rejects.toThrow('This user has items assigned and could not be deleted.')
+  })
+
+  it("a bulk edit offers the fields an Asset's own form does but its Asset Tag and Serial, and a User's Department, Location and Company", () => {
+    expect(BULK_FORMS.assets.map((f) => f.key)).toEqual(['model_id', 'status_id', 'expected_checkin', 'name', 'rtd_location_id', 'supplier_id', 'company_id', 'order_number',
+      'purchase_date', 'purchase_cost', 'warranty_months', 'notes'])
+    expect(BULK_FORMS.users.map((f) => f.key)).toEqual(['department_id', 'location_id', 'company_id'])
+    // Left blank, a field is left as each Record has it, so none is required.
+    expect([...BULK_FORMS.assets, ...BULK_FORMS.users].some((f) => f.required)).toBe(false)
+  })
+
+  it('a bulk edit sends one PATCH per Record with only the fields the Operator filled in', async () => {
+    const { fetch, requests } = fakeFetch(Object.fromEntries(['/hardware/1', '/hardware/2', '/users/311', '/users/312']
+      .map((p) => [`PATCH ${p}`, { body: { status: 'success', messages: 'Updated.' } }])))
+    const snipeIt = createSnipeIt(config, fetch)
+    const shared = filled({ status_id: '4', expected_checkin: '2026-10-15', name: '', supplier_id: '', notes: '  ' })
+    for (const id of [1, 2]) await snipeIt.save('assets', id, shared)
+    for (const id of [311, 312]) await snipeIt.save('users', id, filled({ department_id: '', location_id: '9', company_id: '' }))
+    expect(requests).toEqual([
+      { method: 'PATCH', path: '/hardware/1', body: { status_id: '4', expected_checkin: '2026-10-15' } },
+      { method: 'PATCH', path: '/hardware/2', body: { status_id: '4', expected_checkin: '2026-10-15' } },
+      { method: 'PATCH', path: '/users/311', body: { location_id: '9' } },
+      { method: 'PATCH', path: '/users/312', body: { location_id: '9' } },
+    ])
   })
 
   it("every List row says whether the Operator may delete it, from Snipe-IT's available_actions", async () => {

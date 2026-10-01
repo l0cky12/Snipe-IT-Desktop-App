@@ -456,7 +456,7 @@ const stockForm = (category: NamesKind, own: FormField[], minFrom?: string): For
 // What each kind's form asks for, in Snipe-IT's field names; required as Snipe-IT requires. An Asset's custom fields come from its Asset Model.
 export const FORMS: Record<EditKind, FormField[]> = {
   assets: [
-    txt('asset_tag', 'Asset Tag', { required: true }), pick('model_id', 'Asset Model', 'models', { required: true }), pick('status_id', 'Status', 'statuslabels', { required: true, from: 'status_label' }),
+    txt('asset_tag', 'Asset Tag', { required: true }), pick('model_id', 'Asset Model', 'models', { required: true }), pick('status_id', 'Status', 'statuslabels', { required: true, from: 'status_label' }), { key: 'expected_checkin', label: 'Expected Checkin', type: 'date' },
     txt('name', 'Name'), txt('serial', 'Serial'), pick('rtd_location_id', 'Default Location', 'locations', { from: 'rtd_location' }), pick('supplier_id', 'Supplier', 'suppliers'),
     pick('company_id', 'Company', 'companies'), txt('order_number', 'Order number'), { key: 'purchase_date', label: 'Purchase date', type: 'date' },
     { key: 'purchase_cost', label: 'Purchase cost', type: 'number' }, { key: 'warranty_months', label: 'Warranty (months)', type: 'number' }, { key: 'notes', label: 'Notes', type: 'textarea' },
@@ -481,6 +481,18 @@ export const FORMS: Record<EditKind, FormField[]> = {
   consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
 }
+
+/** The kinds a Selection can be bulk edited for. */
+export type BulkKind = 'assets' | 'users'
+// A bulk edit's fields: what Records of a kind can share (not an Asset Tag or Serial, each Asset's own), none required,
+// since a field left blank is left as each Record has it. ponytail: no custom fields; they differ by Asset Model.
+const optional = (fields: FormField[]) => fields.map((f) => ({ ...f, required: false }))
+export const BULK_FORMS: Record<BulkKind, FormField[]> = {
+  assets: optional(FORMS.assets.filter((f) => f.key !== 'asset_tag' && f.key !== 'serial')),
+  users: optional(FORMS.users.filter((f) => ['department_id', 'location_id', 'company_id'].includes(f.key))),
+}
+/** Only the fields filled in, so a bulk edit leaves the rest as each Record has them. */
+export const filled = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim() !== ''))
 
 // Snipe-IT keeps notes as Markdown but sends them rendered to inline HTML; this turns what it renders back into
 // Markdown, so editing a note keeps its links and emphasis. ponytail: the inline subset Snipe-IT renders, not all of HTML.

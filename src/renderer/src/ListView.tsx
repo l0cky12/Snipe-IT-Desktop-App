@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, DELETE_KINDS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
-import { OutcomeText, type Outcome } from './BatchView'
+import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
+import { BulkEditForm } from './RecordForm'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -185,6 +186,8 @@ export async function allMatching<T extends { id: number }>(page: (offset: numbe
   }
 }
 
+/** A Bulk Action: what it does to each Record of a List, under a title. deletes: a Record it's done leaves the List. */
+export type BulkAction = BatchAction & { kind: ListKind; title: string; deletes?: true }
 /** A Bulk Action's run: each Record by name with how it fared, and the ones this run (or a retry) goes over. stopping: Stop was pressed. */
 export type BulkRun = { records: { id: number; name: string; outcome?: Outcome }[]; ids: number[]; busy: boolean; stopping?: true }
 const finished = (o?: Outcome) => o?.state === 'done' || o?.state === 'failed'
@@ -206,14 +209,17 @@ export const deletable = (kind: ListKind): kind is DeleteKind => (DELETE_KINDS a
 // Offered when Snipe-IT lets the Operator delete any of them. Its available_actions also says no to one it won't let go
 // (a User with items checked out); that one is still tried, so Snipe-IT's reason shows beside it.
 export const mayDelete = (kind: ListKind, rows: { can: Can }[]) => deletable(kind) && rows.some((r) => r.can.delete)
+const bulkEditable = (kind: ListKind): kind is BulkKind => Object.hasOwn(BULK_FORMS, kind)
+// "Edit shared fields" is offered on Assets and Users when Snipe-IT lets the Operator edit them.
+export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(kind) && rows.some((r) => r.can.update)
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onDelete, onStopBulk, onCloseBulk }: {
+export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
-  // App runs a bulk delete, so leaving the List mid-run loses nothing; its panel shows on the List it deletes from.
-  bulk: (BulkRun & { kind: DeleteKind }) | null
-  onDelete: (kind: DeleteKind, run: BulkRun) => void
+  // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
+  bulk: (BulkRun & BulkAction) | null
+  onBulk: (action: BulkAction, run: BulkRun) => void
   onStopBulk: () => void
   onCloseBulk: () => void
   kind: ListKind
@@ -245,9 +251,11 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
   const selectEpoch = useRef(0)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [editing, setEditing] = useState(false)
   const mine = bulk?.kind === kind ? bulk : null
   // A deleted Record leaves the Selection; one that failed stays ticked.
   useEffect(() => {
+    if (!mine?.deletes) return
     const gone = new Set(mine?.records.filter((r) => r.outcome?.state === 'done').map((r) => r.id))
     if (gone.size) setSelection((s) => ([...gone].some((id) => s.has(id)) ? new Map([...s].filter(([id]) => !gone.has(id))) : s))
   }, [mine])
@@ -313,10 +321,23 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   const checkin = (a: Asset) => (id: number, o: CheckinOptions) => act(`Checked in ${a.assetTag}`, window.snipeIt.checkin(id, o))
   const checkout = (a: Asset) => (o: CheckoutOptions) => act(`Checked out ${a.assetTag}`, window.snipeIt.checkout(a.id, o))
 
+  const selectionRun = (): BulkRun => {
+    const records = [...selection.values()].map((r) => ({ id: r.id, name: rowName(r) }))
+    return { records, ids: records.map((r) => r.id), busy: true }
+  }
   const deleteSelection = () => {
     setConfirmingDelete(false)
-    const records = [...selection.values()].map((r) => ({ id: r.id, name: rowName(r) }))
-    if (deletable(kind)) onDelete(kind, { records, ids: records.map((r) => r.id), busy: true })
+    if (deletable(kind)) onBulk({ kind, title: `Delete ${listName[kind]}`, done: 'Deleted', deletes: true, work: (id) => window.snipeIt.remove(kind, id) }, selectionRun())
+  }
+  // Each Record gets the usual single edit with only the filled-in fields; Snipe-IT's reasons show beside the one it refused.
+  const editSelection = (values: Record<string, string>) => {
+    setEditing(false)
+    if (!bulkEditable(kind)) return
+    const work = async (id: number) => {
+      const result = await window.snipeIt.save(kind, id, values)
+      if (!result.ok) throw new Error(Object.values(result.errors).join(' ') || result.message)
+    }
+    onBulk({ kind, title: `Edit ${listName[kind]}`, done: 'Saved', work }, selectionRun())
   }
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
@@ -408,6 +429,9 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             </button>
           )}
           {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+          {mayEdit(kind, [...selection.values()]) && (
+            <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
+          )}
           {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
             <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
               <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
@@ -418,7 +442,8 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
           <button className="quiet" onClick={clear}>Clear</button>
         </div>
       )}
-      {mine && <BulkResults title={`Delete ${listName[kind]}`} run={mine} onStop={onStopBulk} onRetry={() => onDelete(mine.kind, retrying(mine))} onClose={onCloseBulk} />}
+      {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
+      {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
       <table className="history list-table">
         <thead>
           <tr>
