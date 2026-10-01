@@ -66,7 +66,7 @@ The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, a
 _Avoid_: audit log
 
 **Report**:
-A table over the whole inventory the Operator runs on request and can export as CSV: the Activity Report, Overdue, or Expiring Warranty, each optionally narrowed to a date range.
+A table over the whole inventory the Operator runs on request and can export as CSV: the Activity Report, Overdue, Expiring Warranty (each optionally narrowed to a date range), or a Saved Report.
 _Avoid_: export (the export is the file a Report is saved to)
 
 **Record type**:
@@ -105,7 +105,27 @@ A Checkout, Checkin, status change, or add-to-Batch done from an Asset's row in 
 
 **Batch**:
 Assets gathered on the Batch page for one Checkout or Checkin of all of them. It lives only for the session; each Asset still goes through the single Checkout or Checkin, so History credits the Operator as usual.
-_Avoid_: bulk, selection, cart
+_Avoid_: cart, selection (a Selection is ticked rows in one List; it can be added to the Batch)
+
+**Selection**:
+The Records ticked in one List, across its pages, that a Bulk Action applies to. It clears when the Operator leaves the List.
+_Avoid_: batch, cart
+
+**Bulk Action**:
+One action (edit shared fields, delete, add to Batch, print Labels) applied to every Record in a Selection, one Record at a time, with a result for each. Nothing is rolled back.
+_Avoid_: mass edit
+
+**Label**:
+The printed sticker for an Asset: a QR code linking to the Asset in Snipe-IT and a barcode encoding its Asset Tag.
+_Avoid_: tag (the Asset Tag is the identifier, not the sticker)
+
+**Import**:
+Creating or updating Records from a CSV through Snipe-IT's own importer, with each CSV column matched to a field.
+_Avoid_: upload, sync
+
+**Saved Report**:
+A List with its filters and Columns saved under a name by the Operator, which can be emailed to the Operator.
+_Avoid_: custom report, saved search
 
 **License**:
 A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise.
@@ -138,6 +158,8 @@ _Avoid_: stats, widgets
 - Every **Checkout** and **Checkin** adds an entry to the Asset's **History**, credited to the **Operator**
 - An Asset can only be **Overdue** if it was given an **Expected Checkin**
 - Only Assets have a status; the other kinds are counted by quantity
+- A **Selection** belongs to one **List**; a **Bulk Action** acts on one **Selection**
+- A **Saved Report** is emailed only to the **Operator's** own address
 
 ## Flagged ambiguities
 
