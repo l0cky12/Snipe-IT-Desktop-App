@@ -1,11 +1,13 @@
 /// <reference types="vite/client" />
-import type { SnipeIt } from '../../main/snipeit'
+import type { SnipeItBridge } from '../../main/snipeit'
 
 import type { SettingsApi } from '../../main/config'
+import type { LabelApi } from '../../main/index'
 
 declare global {
   interface Window {
-    snipeIt: SnipeIt
+    snipeIt: SnipeItBridge
     settings: SettingsApi
+    label: LabelApi
   }
 }

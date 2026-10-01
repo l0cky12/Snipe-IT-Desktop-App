@@ -184,6 +184,8 @@ export type RecordForm = { fields: FormField[]; values: Record<string, string> }
 export type SaveResult = { ok: true; id: number } | { ok: false; message: string; errors: Record<string, string> }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
+/** What the screen can call: labelPdf only the main process uses, to print a Label. */
+export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
 
 type SnipeItError = { status: 'error'; messages: unknown }
 type Named = { id: number; name: string } | null
@@ -577,7 +579,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (!res.ok) {
       const failure = body as { messages?: unknown; message?: unknown } | undefined
       const snipeItReason = reason(failure?.messages ?? failure?.message)
-      throw new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`)
+      throw Object.assign(new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`), { status: res.status })
     }
     if (body === undefined)
       throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
@@ -698,6 +700,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return { ...asset, history: rows.map(toHistoryEntry) }
     },
 
+    // The Label PDF Snipe-IT builds from its label settings, base64, so it matches the web UI's. null when Snipe-IT can't make
+    // one over the API: an older Snipe-IT has no endpoint (404, or 405 where GET /hardware/{id} holds the path), and one on
+    // the legacy label engine answers 500. The app then prints its own Label. ponytail: any 500 falls back, as the legacy
+    // engine's reason comes translated to the Operator's language; narrow it if a broken server should say so instead.
+    async labelPdf(assetTag: string): Promise<string | null> {
+      if (typeof assetTag !== 'string' || !assetTag) throw new Error('Invalid Asset Tag')
+      const body = await request<{ payload?: { pdf?: unknown } }>('/hardware/labels', { asset_tags: [assetTag] }).catch((e: Error & { status?: number }) => {
+        if (e.status === 405 || e.status === 500) return null
+        throw e
+      })
+      const pdf = body && !isError(body) ? body.payload?.pdf : null
+      // "JVBERi" is "%PDF" in base64.
+      return typeof pdf === 'string' && pdf.startsWith('JVBERi') ? pdf : null
+    },
+
     async statusLabels(): Promise<StatusLabel[]> {
       // ponytail: first 500 status labels; a school has a handful.
       const body = await request<{ rows: StatusLabel[] }>('/statuslabels?limit=500')
@@ -720,7 +737,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
         else params.set(key, value)
       }
-      const sorts: Record<string, string> = LIST_SORTS[kind]
+      // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
+      const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
       if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
       const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`)
       if (isError(page)) throw new Error(reason(page.messages))
