@@ -163,11 +163,14 @@ export function App() {
   const pick = (id: number) => run((isStale) => open(id, isStale))
   // While the batch is open, a scanned or picked Asset joins it instead of opening.
   const batching = !showSettings && view?.page === 'batch'
-  function addToBatch(a: AssetSummary) {
+  function addToBatch(...assets: AssetSummary[]) {
     // Membership is read from the render-time batch for the message; the updater re-checks so a stale closure can never add a duplicate.
-    const known = batch.some((b) => b.id === a.id)
-    setBatch((b) => (b.some((x) => x.id === a.id) ? b : [...b, a]))
-    setMessage({ text: known ? `${a.assetTag} is already in the batch` : `Added ${a.assetTag} to the batch` })
+    const known = assets.filter((a) => batch.some((b) => b.id === a.id)).length
+    setBatch((b) => [...b, ...assets.filter((a) => !b.some((x) => x.id === a.id))])
+    const added = assets.length - known
+    setMessage({ text: assets.length === 1
+      ? known ? `${assets[0].assetTag} is already in the batch` : `Added ${assets[0].assetTag} to the batch`
+      : `Added ${added} ${added === 1 ? 'Asset' : 'Assets'} to the batch${known ? `; ${known} already in it` : ''}` })
   }
   const choose = (a: AssetSummary) => (batching ? addToBatch(a) : pick(a.id))
   async function runBatch(action: BatchAction, ids: number[]) {
@@ -321,7 +324,7 @@ export function App() {
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} onNew={(k) => editRecord(k, null)} />
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)} />
         : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
             onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
@@ -150,13 +150,46 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 
+/** The Records ticked in the open List, by id, across its pages; kept with their rows so a Bulk Action has what it needs. */
+export type Selection<T extends { id: number } = { id: number }> = Map<number, T>
+// Ticking rows (one, or a page by its header box): ticks them all, or clears them when every one is already ticked.
+export function tick<T extends { id: number }>(s: Selection<T>, rows: T[]): Selection<T> {
+  const next = new Map(s)
+  if (pageTicks(s, rows) === 'all') for (const r of rows) next.delete(r.id)
+  else for (const r of rows) next.set(r.id, r)
+  return next
+}
+// The Selection with any of its rows that just reloaded swapped for their new values.
+export const refreshed = <T extends { id: number }>(s: Selection<T>, rows: T[]): Selection<T> =>
+  rows.some((r) => s.has(r.id)) ? new Map([...s].map(([id, r]) => [id, rows.find((x) => x.id === id) ?? r])) : s
+// What a page's header box shows.
+export const pageTicks = (s: Selection, rows: { id: number }[]) => {
+  const n = rows.filter((r) => s.has(r.id)).length
+  return n && n === rows.length ? 'all' : n ? 'some' : 'none'
+}
+// "Select all N matching" asks first past this many, so a Bulk Action can't reach thousands of Records by accident.
+const SELECT_ALL_ASK = 100
+export const confirmSelectAll = (n: number) => n > SELECT_ALL_ASK
+// Every Record matching the List's search and filters, page by page; null if the Operator left or changed the List meanwhile.
+// ponytail: one page at a time (50 rows); 2,000 matches is 40 requests, a few seconds.
+export async function allMatching<T extends { id: number }>(page: (offset: number) => Promise<Pick<ListPage<ListKind>, 'total'> & { rows: T[] }>, stale = () => false): Promise<Selection<T> | null> {
+  const all: Selection<T> = new Map()
+  for (let offset = 0; ; ) {
+    const p = await page(offset)
+    if (stale()) return null
+    for (const r of p.rows) all.set(r.id, r)
+    offset += p.rows.length
+    if (!p.rows.length || offset >= p.total) return all
+  }
+}
+
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew }: {
   onNew: (kind: EditKind) => void
   kind: ListKind
   batch: AssetSummary[]
-  onBatch: (a: AssetSummary) => void
+  onBatch: (a: AssetSummary[]) => void
   drill?: Drill
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
@@ -177,6 +210,13 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   const [customizing, setCustomizing] = useState(false)
   const [quick, setQuick] = useState<Quick | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
+  // The Selection lives with this List; leaving it (or opening another) starts the next one empty.
+  const [selection, setSelection] = useState<Selection<ListRows[ListKind]>>(new Map())
+  // "Select all N matching": asking to confirm, or fetching; a newer query or Clear makes a fetch still going stale.
+  const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
+  const selectEpoch = useRef(0)
+  // One page of this List as searched, filtered and sorted now; "select all" pages it in id order instead.
+  const fetchPage = (offset: number, order = sort) => window.snipeIt.list(kind, { search, filters, sort: order?.key, order: order?.order, offset })
 
   // Search after a short pause in typing, from the first page.
   useEffect(() => {
@@ -184,15 +224,18 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
     const timer = setTimeout(() => (setSearch(text), setOffset(0)), 300)
     return () => clearTimeout(timer)
   }, [text])
+  // A "select all" still fetching stops when what matches changes; turning the page or a refresh doesn't change that.
+  useEffect(() => () => { selectEpoch.current++; setSelectingAll(null) }, [kind, search, filters, sort])
   useEffect(() => {
     let stale = false
     setLoading(true)
-    window.snipeIt.list(kind, { search, filters, sort: sort?.key, order: sort?.order, offset }).then(
+    fetchPage(offset).then(
       (p) => {
         if (stale) return
         // A Quick Action can shrink the List under the current page; step back to the last page that has rows.
         if (offset > 0 && offset >= p.total) return setOffset(Math.max(0, Math.ceil(p.total / LIST_PAGE) - 1) * LIST_PAGE)
         setPage(p)
+        setSelection((s) => refreshed(s, p.rows))
         setMessage((m) => (m.error ? { text: '' } : m))
       },
       (e: Error) => !stale && (setPage(null), setMessage({ text: e.message, error: true })),
@@ -244,6 +287,22 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
 
   const rows = page?.rows ?? []
   const total = page?.total ?? 0
+  // Activity Report rows are log entries, not Records: nothing to select.
+  const selectable = kind !== 'activity'
+  const ticks = pageTicks(selection, rows)
+  async function selectAll() {
+    const mine = ++selectEpoch.current
+    setSelectingAll('fetching')
+    try {
+      const all = await allMatching((offset) => fetchPage(offset, { key: 'id', order: 'asc' }), () => mine !== selectEpoch.current)
+      if (all) setSelection((s) => new Map([...s, ...all]))
+    } catch (e) {
+      if (mine === selectEpoch.current) setMessage({ text: (e as Error).message, error: true })
+    }
+    if (mine === selectEpoch.current) setSelectingAll(null)
+  }
+  const clear = () => (selectEpoch.current++, setSelectingAll(null), setSelection(new Map()))
+  const tickedHere = rows.filter((r) => selection.has(r.id)).length
   const filterBar = filtersFor(kind, names, statusLabels, locations)
   return (
     <>
@@ -282,9 +341,35 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
         ))}
       </div>
       {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
+      {selectable && (selection.size > 0 || selectingAll) && (
+        <div className="selection actions" role="region" aria-label="Selection">
+          {/* Ticks on other pages, or hidden by the filter, still count; the bar says how many are here. */}
+          <b>{selection.size.toLocaleString()} selected</b>
+          {tickedHere < selection.size && <span className="dim">{tickedHere.toLocaleString()} on this page</span>}
+          {selectingAll === 'asking' ? (
+            <span className="confirm" role="alertdialog" aria-label={`Select all ${total.toLocaleString()} ${listName[kind]}?`}>
+              <span>Select all {total.toLocaleString()} matching {listName[kind]}?</span>
+              <button autoFocus onClick={selectAll}>Select all</button>
+              <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
+            </span>
+          ) : total > rows.length && (
+            <button className="quiet" disabled={selectingAll === 'fetching'} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
+              {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+            </button>
+          )}
+          {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+          <button className="quiet" onClick={clear}>Clear</button>
+        </div>
+      )}
       <table className="history list-table">
         <thead>
           <tr>
+            {selectable && (
+              <th className="tick">
+                <input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
+                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" />
+              </th>
+            )}
             {columns.map((c) => (
               <th key={c.key} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
                 {Object.hasOwn(sortable, c.key)
@@ -302,7 +387,13 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             const toggle = (action: Quick['action']) => (setQuick(q?.action === action ? null : { id: row.id, action }), setMessage({ text: '' }))
             const inBatch = batch.some((b) => b.id === a.id)
             return [
-              <tr key={row.id} className={q ? 'sel' : undefined}>
+              <tr key={row.id} className={q ? 'sel' : selection.has(row.id) ? 'ticked' : undefined}>
+                {selectable && (
+                  <td className="tick">
+                    <input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
+                      aria-label={`Select ${kind === 'assets' ? a.assetTag : (row as { name?: string }).name ?? `#${row.id}`}`} />
+                  </td>
+                )}
                 {columns.map((c, i) => cell(c, row, i === 0))}
                 {kind === 'assets' && (
                   <td className="quick">
@@ -311,13 +402,13 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                     <button disabled={!a.checkoutAllowed || !a.can.checkout} onClick={() => toggle('checkout')} className={q?.action === 'checkout' ? 'on' : undefined}
                       title={checkoutReason(a)}>Checkout</button>
                     <button disabled={!a.can.update} onClick={() => toggle('status')} className={q?.action === 'status' ? 'on' : undefined} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
-                    <button disabled={inBatch} onClick={() => onBatch(toSummary(a))}>{inBatch ? 'In batch' : 'Batch'}</button>
+                    <button disabled={inBatch} onClick={() => onBatch([toSummary(a)])}>{inBatch ? 'In batch' : 'Batch'}</button>
                   </td>
                 )}
               </tr>,
               q && (
                 <tr key={`${row.id}-quick`} className="quick-form">
-                  <td colSpan={columns.length + 1}>
+                  <td colSpan={columns.length + 1 + (selectable ? 1 : 0)}>
                     {q.action === 'checkin' && <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a)} />}
                     {q.action === 'checkout' && <CheckoutForm defaultLocation={defaultLocation} onCheckout={checkout(a)} />}
                     {q.action === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => act(`Changed ${a.assetTag}'s status`, window.snipeIt.updateStatus(a.id, statusId))} />}

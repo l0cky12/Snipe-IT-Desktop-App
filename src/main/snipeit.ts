@@ -737,7 +737,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
         else params.set(key, value)
       }
-      const sorts: Record<string, string> = LIST_SORTS[kind]
+      // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
+      const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
       if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
       const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`)
       if (isError(page)) throw new Error(reason(page.messages))

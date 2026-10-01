@@ -846,6 +846,12 @@ describe('list', () => {
     expect(queries[1]).not.toHaveProperty('sort')
   })
 
+  it('any List can be paged in id order, so rows added meanwhile don\'t shift the pages of a "select all"', async () => {
+    const { fetch, queries } = fakeFetch({ '/suppliers': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('suppliers', { sort: 'id', order: 'asc' })
+    expect(queries[0]).toMatchObject({ sort: 'id', order: 'asc' })
+  })
+
   it('an unknown List is refused without asking Snipe-IT', async () => {
     const { fetch, calls } = fakeFetch({})
     await expect(createSnipeIt(config, fetch).list('constructor' as 'assets')).rejects.toThrow('Unknown list')

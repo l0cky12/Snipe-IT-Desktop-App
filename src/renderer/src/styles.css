@@ -216,7 +216,11 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .filters input { flex: 1; min-width: 200px; }
 .filters .filter { flex: 0 1 220px; min-width: 150px; }
 .list-table td, .list-table th { vertical-align: middle; white-space: nowrap; padding: 8px 12px; }
-.list-table tr.sel td { background: var(--panel2); }
+.list-table tr.sel td, .list-table tr.ticked td { background: var(--panel2); }
+.list-table .tick { width: 1%; padding-right: 0; }
+.list-table .tick input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
+/* The Selection bar: the count, select-all, its Bulk Actions and Clear, above the List. */
+.selection { margin: 12px 28px 0; padding: 8px 14px; border-radius: var(--r-ctl); background: var(--panel2); }
 .list-table .sort { all: unset; cursor: pointer; }
 .list-table .sort:hover, .list-table .sort:focus-visible { color: var(--text); }
 /* Pinned to the right so the Quick Actions stay in reach when a wide List scrolls sideways. */
