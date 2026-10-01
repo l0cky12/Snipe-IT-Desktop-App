@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
+import { FerpaConfirm, saveCsv } from './ReportsView'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -113,6 +114,21 @@ function readColumns(kind: ListKind): string[] {
   } catch {}
   return all.filter((c) => !c.hidden).map((c) => c.key)
 }
+
+// A List as Export saves it: its visible Columns in the order shown, each cell the text the List shows (a status chip's
+// status, an Assignee's name), empty where the List shows a dash.
+export function exportTable(kind: ListKind, shown: string[], rows: Row[]) {
+  const columns = (COLUMNS[kind] as AnyColumn[]).filter((c) => shown.includes(c.key))
+  const text = (c: AnyColumn, row: Row) => {
+    const v = [c.cell?.(row as never), (row as Record<string, unknown>)[c.key]].find((x) => typeof x === 'string' || typeof x === 'number')
+    return v === undefined ? '' : String(v)
+  }
+  return { columns: columns.map((c) => c.label), rows: rows.map((row) => columns.map((c) => text(c, row))) }
+}
+// Lists whose rows hold Users or Assignees (an Asset's, a History entry's, a Department's manager): exporting one asks for
+// the FERPA confirmation first.
+const STUDENT_INFO: ListKind[] = ['assets', 'users', 'activity', 'departments']
+export const holdsStudentInfo = (kind: ListKind) => STUDENT_INFO.includes(kind)
 
 type Option = { value: string; label: string }
 type Filter = { key: string; label: string; options: Option[] }
@@ -253,6 +269,8 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
   const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
   const selectEpoch = useRef(0)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // Export CSV: asking for the FERPA confirmation, or fetching every matching row.
+  const [exporting, setExporting] = useState<'asking' | 'fetching' | null>(null)
   const [editing, setEditing] = useState(false)
   const mine = bulk?.kind === kind ? bulk : null
   // A deleted Record leaves the Selection; one that failed stays ticked.
@@ -341,6 +359,19 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
     }
     onBulk({ kind, title: `Edit ${listName[kind]}`, done: 'Saved', work }, selectionRun())
   }
+  // The List as shown, every matching row up to the Report row cap; saved where the Operator chooses.
+  async function exportCsv() {
+    setExporting('fetching')
+    try {
+      const { rows, capped } = await window.snipeIt.exportList(kind, { search, filters, sort: sort?.key, order: sort?.order })
+      const table = exportTable(kind, shown, rows)
+      saveCsv(listName[kind], table.columns, table.rows)
+      setMessage({ text: capped ? `Exported the first ${rows.length.toLocaleString()} rows; filter the List for the rest.` : `Exported ${rows.length.toLocaleString()} rows` })
+    } catch (e) {
+      setMessage({ text: (e as Error).message, error: true })
+    }
+    setExporting(null)
+  }
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
   function open(row: Row): (() => void) | undefined {
@@ -385,6 +416,10 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
           {editable(kind) && <button className="quiet" onClick={() => onNew(kind)}>New {singular(kind)}</button>}
+          <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
+            onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
+            {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
+          </button>
           <button onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
         </div>
       </header>
@@ -413,6 +448,7 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
           </button>
         ))}
       </div>
+      {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
       {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
       {selectable && (selection.size > 0 || selectingAll) && (
         <div className="selection actions" role="region" aria-label="Selection">

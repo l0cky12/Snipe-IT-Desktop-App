@@ -878,6 +878,51 @@ describe('list', () => {
   })
 })
 
+describe('exportList', () => {
+  // A fake Snipe-IT that pages /suppliers by limit/offset (at most pageMax a page), recording each query it was sent.
+  function suppliers(count: number, pageMax = 500) {
+    const queries: Record<string, string>[] = []
+    const rows = Array.from({ length: count }, (_, i) => ({ id: i + 1, name: `Supplier ${i + 1}`, contact: '', phone: '', email: '', assets_count: 0 }))
+    const fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      queries.push(Object.fromEntries(url.searchParams))
+      const limit = Math.min(Number(url.searchParams.get('limit')), pageMax)
+      const offset = Number(url.searchParams.get('offset'))
+      return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(offset, offset + limit) }))
+    }) as typeof globalThis.fetch
+    return { snipeIt: createSnipeIt(config, fetch), queries }
+  }
+
+  it('fetches every page of the List, with its search, filters and sort, 500 rows a page', async () => {
+    const { snipeIt, queries } = suppliers(1234)
+    const out = await snipeIt.exportList('suppliers', { search: 'acme', sort: 'name', order: 'asc' })
+    expect(out.capped).toBe(false)
+    expect(out.rows.map((r) => r.id)).toEqual(Array.from({ length: 1234 }, (_, i) => i + 1))
+    expect(queries.map((q) => q.offset)).toEqual(['0', '500', '1000'])
+    expect(queries[0]).toEqual({ limit: '500', offset: '0', search: 'acme', sort: 'name', order: 'asc' })
+  })
+
+  it('a server that caps pages lower still gives every row', async () => {
+    const { snipeIt, queries } = suppliers(250, 100)
+    expect((await snipeIt.exportList('suppliers')).rows).toHaveLength(250)
+    expect(queries.map((q) => q.offset)).toEqual(['0', '100', '200'])
+  })
+
+  it("stops at the Report row cap and says it's cut short", async () => {
+    const { snipeIt } = suppliers(10_001)
+    const out = await snipeIt.exportList('suppliers')
+    expect(out.rows).toHaveLength(10_000)
+    expect(out.capped).toBe(true)
+    expect((await suppliers(10_000).snipeIt.exportList('suppliers')).capped).toBe(false)
+  })
+
+  it('a filter the List does not have is refused, as for one page', async () => {
+    const { snipeIt, queries } = suppliers(3)
+    await expect(snipeIt.exportList('suppliers', { filters: { status: 'RTD' } })).rejects.toThrow('Invalid filter')
+    expect(queries).toEqual([])
+  })
+})
+
 describe('report', () => {
   const entry = (id: number, datetime: string, type = 'asset', action_type = 'checkout') => ({
     id, action_type, created_at: { datetime }, created_by: { id: 5, name: 'E. Caldwell' }, target: { id: 311, name: 'Jordan Reyes' }, note: null, item: { id, name: `NOMMA-${id}`, type },

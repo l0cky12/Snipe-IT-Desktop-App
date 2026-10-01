@@ -12,6 +12,33 @@ export function toCsv(columns: string[], rows: string[][]): string {
   return '\uFEFF' + [columns, ...rows].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n'
 }
 
+// Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
+export function saveCsv(name: string, columns: string[], rows: string[][]) {
+  const url = URL.createObjectURL(new Blob([toCsv(columns, rows)], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  // Local date, so a late-evening export isn't stamped with tomorrow (UTC).
+  const d = new Date()
+  const stamp = [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-')
+  a.download = `${name.toLowerCase().replace(/ /g, '-')}-${stamp}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Asked before saving rows that hold Users or Assignees.
+export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExport: () => void; onCancel: () => void }) {
+  return (
+    <div className="ferpa" role="alertdialog" aria-labelledby="ferpa-heading">
+      <p><b id="ferpa-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
+        post it, or save it to a shared or personal drive, and delete it when you're done.</p>
+      <div className="actions">
+        <button onClick={onExport}>I understand, export {rows.toLocaleString()} rows</button>
+        <button className="quiet" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 // Runs when asked (a report can page through a lot), not on every change of a filter.
 export function ReportsView() {
   const [kind, setKind] = useState<ReportKind>('activity')
@@ -47,17 +74,8 @@ export function ReportsView() {
     }
   }
 
-  // The file is saved where the Operator chooses; nothing is written without that.
   function download(r: Report, what: ReportKind) {
-    const url = URL.createObjectURL(new Blob([toCsv(r.columns, r.rows)], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    // Local date, so a late-evening export isn't stamped with tomorrow (UTC).
-    const d = new Date()
-    const stamp = [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-')
-    a.download = `${reportName[what].toLowerCase().replace(/ /g, '-')}-${stamp}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    saveCsv(reportName[what], r.columns, r.rows)
     setExporting(false)
   }
 
@@ -91,14 +109,7 @@ export function ReportsView() {
         </form>
       </header>
       {exporting && report && ran && (
-        <div className="ferpa" role="alertdialog" aria-labelledby="ferpa-heading">
-          <p><b id="ferpa-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
-            post it, or save it to a shared or personal drive, and delete it when you're done.</p>
-          <div className="actions">
-            <button onClick={() => download(report, ran.kind)}>I understand, export {report.rows.length.toLocaleString()} rows</button>
-            <button className="quiet" onClick={() => setExporting(false)}>Cancel</button>
-          </div>
-        </div>
+        <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}

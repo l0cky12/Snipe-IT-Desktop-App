@@ -74,7 +74,7 @@ The kind of thing an Activity Report entry is about: an Asset, License, Accessor
 _Avoid_: item type (Snipe-IT's field name)
 
 **List**:
-A page listing one kind of record (or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide. "All records" is the page that names every List.
+A page listing one kind of record (or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide, and saved as a CSV as shown. "All records" is the page that names every List.
 _Avoid_: tab, grid, table
 
 **Record**:

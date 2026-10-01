@@ -22,6 +22,7 @@ const snipeIt: SnipeItBridge = {
   checkin: call('snipeit:checkin'),
   dashboard: call('snipeit:dashboard'),
   list: call('snipeit:list'),
+  exportList: call('snipeit:exportList'),
   names: call('snipeit:names'),
   updateStatus: call('snipeit:updateStatus'),
   report: call('snipeit:report'),

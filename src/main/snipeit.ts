@@ -230,8 +230,9 @@ const QUANTITIES = {
   consumables: ['/consumables', 'qty', 'remaining'],
   components: ['/components', 'qty', 'remaining'],
 } as const
-// ponytail: a report holds this many rows at most (it says so when it's cut short); a school year of activity is far below it.
-const REPORT_MAX = 10000
+// ponytail: a Report, or a List's CSV, holds this many rows at most (it says so when it's cut short); a school year of
+// activity, or every Asset, is far below it.
+export const REPORT_MAX = 10000
 
 // ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
 const SEARCH_LIMIT = 50
@@ -624,6 +625,30 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return rows
   }
 
+  // A page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
+  async function listPage<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery, limit: number, timeout?: number): Promise<ListPage<K>> {
+    if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
+    if ((search !== undefined && typeof search !== 'string') || typeof filters !== 'object' || filters === null) throw new Error('Invalid search or filters')
+    const spec = LISTS[kind]
+    const params = new URLSearchParams({ limit: String(limit), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
+    if (search?.trim()) params.set('search', search.trim())
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === '' || value === undefined) continue
+      if (typeof value !== 'string') throw new Error(`Invalid filter: ${key}`)
+      const allowed = Object.hasOwn(spec.filters, key) ? spec.filters[key] : undefined
+      if (!allowed || !(allowed === 'id' ? /^[1-9]\d*$/.test(value) : allowed.includes(value))) throw new Error(`Invalid filter: ${key}`)
+      if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
+      else params.set(key, value)
+    }
+    // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
+    const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
+    if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
+    const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`, undefined, undefined, timeout)
+    if (isError(page)) throw new Error(reason(page.messages))
+    const now = today()
+    return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
+  }
+
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
   const checkId = (id: number, what = 'Asset') => {
     if (!Number.isInteger(id)) throw new Error(`Invalid ${what} id: ${id}`)
@@ -739,28 +764,23 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return body.rows.map(({ id, name }) => ({ id, name }))
     },
 
-    // One page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
-    async list<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery = {}): Promise<ListPage<K>> {
-      if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
-      if ((search !== undefined && typeof search !== 'string') || typeof filters !== 'object' || filters === null) throw new Error('Invalid search or filters')
-      const spec = LISTS[kind]
-      const params = new URLSearchParams({ limit: String(LIST_PAGE), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
-      if (search?.trim()) params.set('search', search.trim())
-      for (const [key, value] of Object.entries(filters)) {
-        if (value === '' || value === undefined) continue
-        if (typeof value !== 'string') throw new Error(`Invalid filter: ${key}`)
-        const allowed = Object.hasOwn(spec.filters, key) ? spec.filters[key] : undefined
-        if (!allowed || !(allowed === 'id' ? /^[1-9]\d*$/.test(value) : allowed.includes(value))) throw new Error(`Invalid filter: ${key}`)
-        if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
-        else params.set(key, value)
+    // One page of a List.
+    async list<K extends ListKind>(kind: K, query: ListQuery = {}): Promise<ListPage<K>> {
+      return listPage(kind, query, LIST_PAGE)
+    },
+
+    // Every row of a List as searched, filtered and sorted on screen, for its CSV, up to the Report row cap. Each page starts
+    // where the last one's rows ended: a server may cap pages below PAGE_LIMIT. ponytail: offset paging, so a row added or
+    // removed meanwhile can shift one into the next page or out of the export; fine for a snapshot, id order if it matters.
+    async exportList<K extends ListKind>(kind: K, query: Omit<ListQuery, 'offset'> = {}): Promise<{ rows: ListPage<K>['rows']; capped: boolean }> {
+      const rows: ListPage<K>['rows'] = []
+      for (let offset = 0; ; ) {
+        const page = await listPage(kind, { ...query, offset }, PAGE_LIMIT, PAGE_TIMEOUT)
+        rows.push(...page.rows)
+        offset += page.rows.length
+        if (rows.length >= REPORT_MAX) return { rows: rows.slice(0, REPORT_MAX), capped: page.total > REPORT_MAX }
+        if (!page.rows.length || offset >= page.total) return { rows, capped: false }
       }
-      // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
-      const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
-      if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
-      const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`)
-      if (isError(page)) throw new Error(reason(page.messages))
-      const now = today()
-      return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
     },
 
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
