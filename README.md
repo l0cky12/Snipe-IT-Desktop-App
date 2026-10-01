@@ -61,7 +61,9 @@ Legacy `config.json` is no longer read. Enter those credentials in Settings, the
 
 ## Lists
 
-Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Opening a User, Location, or Asset Model shows the Assets checked out to it or in it. Asset rows have Quick Actions: Checkin, Checkout, Status, and Batch.
+Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report; **All records** (the boxes icon) lists every kind, adding Licenses, Accessories, Consumables, Components, Categories, Manufacturers, Suppliers, Departments, Companies and Status Labels. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Asset rows have Quick Actions: Checkin, Checkout, Status, and Batch.
+
+Opening any other row shows every field Snipe-IT has for it; a related record (its Location, Department, Manager…) links to its own page, and buttons open what belongs to it, such as a User's checked-out Assets or a Location's Assets and Users. An Asset's sheet has the same under **All fields**, custom fields included.
 
 The **Batch** page (in the rail, with a count badge) gathers Assets for one Checkout or Checkin of all of them. While it is open, scanning or picking an Asset adds it instead of opening it. The result of each Asset is shown in the row; failed ones can be retried and successful ones removed. The Batch is not saved between sessions.
 

@@ -68,8 +68,31 @@ The kind of thing an Activity Report entry is about: an Asset, License, Accessor
 _Avoid_: item type (Snipe-IT's field name)
 
 **List**:
-A page listing one kind (Assets, Users, Locations, Asset Models, or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide.
+A page listing one kind of record (or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide. "All records" is the page that names every List.
 _Avoid_: tab, grid, table
+
+**Record**:
+One Snipe-IT thing of any kind but the Activity Report (an Asset, a User, a Category…). Opening a Record shows every field Snipe-IT sent, with related Records linked and what belongs to it (a Location's Assets, a Category's Models) one click away as a filtered List.
+_Avoid_: item, entry, row (a row is a Record's line in a List)
+
+**Category**:
+Snipe-IT's grouping of one kind of thing: a Category holds Assets (via their Asset Models), Licenses, Accessories, Consumables, or Components, never a mix.
+
+**Manufacturer**:
+Who made an Asset Model, Accessory, Consumable, Component, or License (e.g. "HP").
+
+**Supplier**:
+Who an Asset was bought from.
+
+**Department**:
+A group of Users within a Company, with an optional manager (a User) and Location.
+
+**Company**:
+The top-level owner Snipe-IT can split Assets and Users by. NOMMA has one unless multi-company is turned on.
+
+**Status Label**:
+An Asset's status in Snipe-IT (e.g. "Ready to Deploy", "Broken"), each of a type: deployable, pending, undeployable, or archived.
+_Avoid_: state, status (alone, when the label is meant)
 
 **Quick Action**:
 A Checkout, Checkin, status change, or add-to-Batch done from an Asset's row in a List, without opening the Asset.

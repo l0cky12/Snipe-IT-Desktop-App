@@ -29,8 +29,8 @@ export type Asset = {
 
 export type HistoryEntry = { when: string; action: string; operator: string; detail: string; note: string }
 
-/** historyError is set when History couldn't be loaded (e.g. the key lacks permission); the Asset still shows. */
-export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?: string }
+/** historyError is set when History couldn't be loaded (e.g. the key lacks permission); the Asset still shows. fields: every field Snipe-IT sent. */
+export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?: string; fields: Field[] }
 
 export type StatusLabel = { id: number; name: string }
 
@@ -67,8 +67,27 @@ export type LocationRow = { id: number; name: string; parent: string; city: stri
 export type ModelRow = { id: number; name: string; modelNumber: string; manufacturer: string; category: string; assets: number; available: number | null }
 /** One Activity Report entry; item is what was acted on (an Asset, a License…). */
 export type ActivityRow = HistoryEntry & { id: number; item: { type: string; id: number; name: string } | null }
-export type ListRows = { assets: Asset; users: UserRow; locations: LocationRow; models: ModelRow; activity: ActivityRow }
+export type LicenseRow = { id: number; name: string; manufacturer: string; category: string; seats: number; free: number; expires: string }
+/** Accessories, Consumables and Components: stocked by quantity. */
+export type StockRow = { id: number; name: string; category: string; manufacturer: string; location: string; qty: number; remaining: number }
+export type CategoryRow = { id: number; name: string; type: string; items: number }
+export type ManufacturerRow = { id: number; name: string; assets: number }
+export type SupplierRow = { id: number; name: string; contact: string; phone: string; email: string; assets: number }
+export type DepartmentRow = { id: number; name: string; company: string; manager: string; location: string; users: number }
+export type CompanyRow = { id: number; name: string; assets: number; users: number }
+export type StatusLabelRow = { id: number; name: string; type: string; assets: number }
+export type ListRows = {
+  assets: Asset; users: UserRow; locations: LocationRow; models: ModelRow; activity: ActivityRow
+  licenses: LicenseRow; accessories: StockRow; consumables: StockRow; components: StockRow
+  categories: CategoryRow; manufacturers: ManufacturerRow; suppliers: SupplierRow; departments: DepartmentRow; companies: CompanyRow; statuslabels: StatusLabelRow
+}
 export type ListKind = keyof ListRows
+/** The kinds with one record per row, which open to show all their fields. */
+export type RecordKind = Exclude<ListKind, 'activity'>
+/** One field of a record as the Operator reads it; link is the related record it names, when the app can open it. */
+export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
+/** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string }
 /** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
 export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] }
@@ -227,6 +246,9 @@ const actions: Record<string, { label: string; prep: string }> = {
 /** Glossary label for a Snipe-IT action_type. */
 export const actionLabel = (a: string) => actions[a]?.label ?? a.charAt(0).toUpperCase() + a.slice(1)
 
+// Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
+const plainText = (s: string) => s.replace(/<[^>]*>/g, '')
+
 function toHistoryEntry(raw: RawActivity): HistoryEntry {
   const known = actions[raw.action_type]
   const target = raw.target?.name
@@ -235,8 +257,7 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
     action: actionLabel(raw.action_type),
     operator: (raw.created_by ?? raw.admin)?.name ?? '',
     detail: target ? (known?.prep ?? '') + target : '',
-    // Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
-    note: raw.note?.replace(/<[^>]*>/g, '') ?? '',
+    note: raw.note ? plainText(raw.note) : '',
   }
 }
 
@@ -272,6 +293,27 @@ function toAsset(raw: RawAsset, today: Date): Asset {
   }
 }
 
+// A row of a kind the app reads only a few fields of.
+type RawRow = { id: number; name: string; [field: string]: unknown }
+const nameOf = (v: unknown) => (v && typeof v === 'object' && typeof (v as Named)?.name === 'string' ? (v as { name: string }).name : '')
+const text = (v: unknown) => (typeof v === 'string' ? v : '')
+// Snipe-IT sends a quantity of 0 as null for some kinds.
+const count = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
+const stockRow = (r: RawRow, remaining: unknown): StockRow =>
+  ({ id: r.id, name: r.name, category: nameOf(r.category), manufacturer: nameOf(r.manufacturer), location: nameOf(r.location), qty: count(r.qty), remaining: count(remaining) })
+// Which kind of record a related field names, so its detail can link to it.
+const RELATED_KINDS: Record<string, RecordKind> = {
+  location: 'locations', rtd_location: 'locations', parent: 'locations', children: 'locations', department: 'departments', company: 'companies', manufacturer: 'manufacturers',
+  category: 'categories', supplier: 'suppliers', model: 'models', status_label: 'statuslabels', manager: 'users',
+}
+// Snipe-IT's field names in the app's words, where they differ (see CONTEXT.md); others read as Snipe-IT names them.
+const FIELD_LABELS: Record<string, string> = {
+  asset_tag: 'Asset Tag', model: 'Asset Model', model_number: 'Model No.', status_label: 'Status', assigned_to: 'Assignee', rtd_location: 'Default Location',
+  expected_checkin: 'Expected Checkin', last_checkin: 'Last Checkin', last_checkout: 'Last Checkout', assets_count: 'Assets', users_count: 'Users',
+}
+// Shown elsewhere (id, custom fields), not readable (images, the permissions map), or not about the record (what the key may do).
+const HIDDEN_FIELDS = new Set(['id', 'name', 'custom_fields', 'available_actions', 'user_can_checkout', 'image', 'avatar', 'permissions'])
+
 type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
 type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
 type RawModel = { id: number; name: string; model_number: string | null; manufacturer: Named; category: Named; assets_count: number | null; remaining?: number | null }
@@ -283,6 +325,16 @@ export const LIST_SORTS = {
   locations: { name: 'name', parent: 'parent', city: 'city', assets: 'assets_count', checkedOut: 'assigned_assets_count', users: 'users_count' },
   models: { name: 'name', modelNumber: 'model_number', manufacturer: 'manufacturer', category: 'category', assets: 'assets_count', available: 'remaining' },
   activity: { when: 'created_at', action: 'action_type', operator: 'created_by' },
+  licenses: { name: 'name', manufacturer: 'manufacturer', seats: 'seats', expires: 'expiration_date' },
+  accessories: { name: 'name', category: 'category', manufacturer: 'manufacturer', location: 'location', qty: 'qty' },
+  consumables: { name: 'name', category: 'category', manufacturer: 'manufacturer', location: 'location', qty: 'qty' },
+  components: { name: 'name', category: 'category', location: 'location', qty: 'qty' },
+  categories: { name: 'name', type: 'category_type' },
+  manufacturers: { name: 'name', assets: 'assets_count' },
+  suppliers: { name: 'name', assets: 'assets_count' },
+  departments: { name: 'name', users: 'users_count' },
+  companies: { name: 'name', assets: 'assets_count', users: 'users_count' },
+  statuslabels: { name: 'name', type: 'type', assets: 'assets_count' },
 } satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
 
 // Snipe-IT action_type values the Activity Report can be filtered by.
@@ -293,23 +345,81 @@ const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', '
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
 // user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type).
 const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
-  assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', status: ['Deployed', 'RTD'] }, row: toAsset },
+  assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'] }, row: toAsset },
   users: {
-    path: '/users', filters: { location_id: 'id', department_id: 'id' },
-    row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: r.department?.name ?? '', location: r.location?.name ?? '', assets: r.assets_count ?? 0 }),
+    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id' },
+    row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
     path: '/locations', filters: {},
-    row: (r: RawLocation) => ({ id: r.id, name: r.name, parent: r.parent?.name ?? '', city: r.city ?? '', assets: r.assets_count ?? 0, checkedOut: r.assigned_assets_count ?? 0, users: r.users_count ?? 0 }),
+    row: (r: RawLocation) => ({ id: r.id, name: r.name, parent: nameOf(r.parent), city: r.city ?? '', assets: r.assets_count ?? 0, checkedOut: r.assigned_assets_count ?? 0, users: r.users_count ?? 0 }),
   },
   models: {
     path: '/models', filters: { category_id: 'id' },
-    row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: r.manufacturer?.name ?? '', category: r.category?.name ?? '', assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
+    row: (r: RawModel) => ({ id: r.id, name: r.name, modelNumber: r.model_number ?? '', manufacturer: nameOf(r.manufacturer), category: nameOf(r.category), assets: r.assets_count ?? 0, available: typeof r.remaining === 'number' ? r.remaining : null }),
   },
   activity: {
     path: '/reports/activity', filters: { action_type: ACTIVITY_ACTIONS },
     row: (r: RawActivity) => ({ id: r.id, ...toHistoryEntry(r), item: r.item ? { type: r.item.type, id: r.item.id, name: r.item.name } : null }),
   },
+  licenses: {
+    path: '/licenses', filters: { category_id: 'id' },
+    row: (r: RawRow) => ({ id: r.id, name: r.name, manufacturer: nameOf(r.manufacturer), category: nameOf(r.category), seats: count(r.seats), free: count(r.free_seats_count), expires: (r.expiration_date as { date?: string } | null)?.date ?? '' }),
+  },
+  accessories: { path: '/accessories', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining_qty ?? r.remaining) },
+  consumables: { path: '/consumables', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
+  components: { path: '/components', filters: { category_id: 'id' }, row: (r: RawRow) => stockRow(r, r.remaining) },
+  // Older Snipe-ITs send no item_count, only a count per kind (assets_count, accessories_count…); the Category's type says which one is its.
+  categories: { path: '/categories', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.category_type), items: count(r.item_count ?? r[`${text(r.category_type).replace(/y$/, 'ie')}s_count`]) }) },
+  manufacturers: { path: '/manufacturers', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, assets: count(r.assets_count) }) },
+  suppliers: {
+    path: '/suppliers', filters: {},
+    row: (r: RawRow) => ({ id: r.id, name: r.name, contact: text(r.contact), phone: text(r.phone), email: text(r.email), assets: count(r.assets_count) }),
+  },
+  departments: {
+    path: '/departments', filters: {},
+    row: (r: RawRow) => ({ id: r.id, name: r.name, company: nameOf(r.company), manager: nameOf(r.manager), location: nameOf(r.location), users: count(r.users_count) }),
+  },
+  companies: { path: '/companies', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, assets: count(r.assets_count), users: count(r.users_count) }) },
+  statuslabels: { path: '/statuslabels', filters: {}, row: (r: RawRow) => ({ id: r.id, name: r.name, type: text(r.type), assets: count(r.assets_count) }) },
+}
+
+// Every field of a record as the Operator reads it, in Snipe-IT's order, then an Asset's custom fields.
+// A related record (a Location, a Manager…) links to it; dates show as Snipe-IT formats them; Markdown notes as plain text.
+function fieldsOf(raw: RawRow): Field[] {
+  const fields: Field[] = []
+  for (const [key, v] of Object.entries(raw)) {
+    if (HIDDEN_FIELDS.has(key) || v === null || v === '') continue
+    const label = FIELD_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ')
+    const field = (x: unknown): Field | null => {
+      if (typeof x !== 'object' || x === null) return x === null || x === '' ? null : { label, value: typeof x === 'boolean' ? (x ? 'Yes' : 'No') : plainText(String(x)) }
+      const o = x as { id?: unknown; name?: unknown; formatted?: unknown; date?: unknown; datetime?: unknown; type?: unknown }
+      // A date: as Snipe-IT formats it, or as sent.
+      const when = [o.formatted, o.date, o.datetime].find((d) => typeof d === 'string')
+      if (when) return { label, value: when as string }
+      // Something else structured (an amount and its currency…): its plain values, so no field goes missing.
+      if (typeof o.name !== 'string') {
+        const plain = Object.entries(o).filter(([, p]) => p !== null && p !== '' && typeof p !== 'object').map(([k, p]) => `${k}: ${p}`)
+        return plain.length ? { label, value: plain.join(', ') } : null
+      }
+      // An Asset's Assignee says what kind it is.
+      const kind = key === 'assigned_to' ? ({ user: 'users', location: 'locations', asset: 'assets' } as const)[o.type as Assignee['type']] : RELATED_KINDS[key]
+      return { label, value: o.name, ...(kind && typeof o.id === 'number' && { link: { kind, id: o.id } }) }
+    }
+    // A list of records (a Location's children, a User's groups { total, rows }…) gives each its own field; a list of plain values reads as one.
+    const list = Array.isArray(v) ? v : Array.isArray((v as { rows?: unknown }).rows) ? (v as { rows: unknown[] }).rows : null
+    if (list) {
+      if (list.every((x) => typeof x !== 'object')) fields.push(...(list.length ? [{ label, value: list.join(', ') }] : []))
+      else fields.push(...list.map(field).filter((f): f is Field => f !== null))
+    } else {
+      const f = field(v)
+      if (f) fields.push(f)
+    }
+  }
+  // Snipe-IT sends custom fields as label → { value }, or [] when there are none.
+  for (const [label, f] of Object.entries((raw.custom_fields ?? {}) as Record<string, { value?: unknown } | null>))
+    if (f?.value != null && f.value !== '') fields.push({ label, value: String(f.value) })
+  return fields
 }
 
 // `today` is injectable so the date rules can be tested with a fixed date.
@@ -446,7 +556,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         ),
       ])
       if (isError(body)) throw new Error(reason(body.messages))
-      const asset = toAsset(body, today())
+      const asset = { ...toAsset(body, today()), fields: fieldsOf(body as unknown as RawRow) }
       if (typeof historyRows === 'string') return { ...asset, history: [], historyError: historyRows }
       // Sort here too: newest first is a promise of this interface, not of every Snipe-IT version.
       const rows = [...historyRows].sort((a, b) =>
@@ -529,6 +639,16 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           .map(({ a, left }) => [a.assetTag, a.name, a.status, a.warrantyEnd!, String(left)]),
         capped: false,
       }
+    },
+
+    // One record of any kind but Assets (whose sheet is getAsset), with every field Snipe-IT sends.
+    async record(kind: RecordKind, id: number): Promise<RecordDetail> {
+      // kind arrives from the screen over IPC; only a known record kind reaches the URL.
+      if (!Object.hasOwn(LISTS, kind) || (kind as ListKind) === 'activity' || kind === 'assets') throw new Error(`Unknown record: ${kind}`)
+      checkId(id, 'record')
+      const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.

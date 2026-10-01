@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, FileSpreadsheet, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type OtherKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 import { ReportsView } from './ReportsView'
+import { FieldGrid, RecordView } from './RecordView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -25,14 +26,19 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
+// The Lists in the left strip; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
-const listIcon: Record<ListKind, LucideIcon> = { assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity }
+const listIcon: Record<ListKind, LucideIcon> = {
+  assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
+  components: Cpu, categories: Tags, manufacturers: Factory, suppliers: Truck, departments: Briefcase, companies: Building2, statuslabels: Tag,
+}
 const kindName: Record<SearchKind, string> = { users: 'Users', locations: 'Locations', models: 'Asset Models', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components' }
 // The kinds a match opens (the Assets List filtered to it); the stocked kinds are only listed.
 const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind === 'locations' || kind === 'models'
 
-// What the main area shows besides an Asset: the dashboard, the batch, a report, or a List. n is bumped on every visit so a List starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: ListKind; drill?: Drill; n: number }
+// What the main area shows besides an Asset: the dashboard, the batch, a report, the All records page, a List, or one record's fields.
+// n is bumped on every visit so a List or record starts fresh.
+type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'records' } | { page: ListKind; drill?: Drill; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -176,7 +182,10 @@ export function App() {
   // The dashboard stays in the main area, so the Operator can click through several segments in turn.
   const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: cancel() }))
+  const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   const page = !showSettings && view?.page
+  // The All records button stands for every page not in the strip.
+  const elsewhere = page === 'records' || page === 'record' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   return (
     <div className="layout">
@@ -196,6 +205,9 @@ export function App() {
           </button>
           <button title="Reports" aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
             <FileSpreadsheet size={20} />
+          </button>
+          <button title="All records" aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
+            <Boxes size={20} />
           </button>
           <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
         </nav>
@@ -242,8 +254,26 @@ export function App() {
           </div>
         </div>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} /> : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onDrill={(d) => go('assets', d)} batch={batch} onBatch={addToBatch} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+        : view?.page === 'records' ? <RecordsIndex onGo={go} />
+        : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} />
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} /> : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
+  )
+}
+
+// Every List, the ones in the strip and the rest.
+function RecordsIndex({ onGo }: { onGo: (page: ListKind) => void }) {
+  return (
+    <>
+      <header className="head"><h1>All records</h1></header>
+      <div className="records">
+        {(Object.keys(listName) as ListKind[]).map((k) => {
+          const Icon = listIcon[k]
+          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
+        })}
+      </div>
+    </>
   )
 }
 
@@ -385,7 +415,9 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations }: {
+function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset }: {
+  onOpenRecord: (kind: RecordKind, id: number) => void
+  onOpenAsset: (id: number) => void
   defaultLocation: StatusLabel | null
   locations: StatusLabel[]
   asset: AssetWithHistory
@@ -440,6 +472,11 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           </div>
         ))}
       </div>
+      {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
+      <details className="all-fields">
+        <summary className="section">All fields ({a.fields.length})</summary>
+        <FieldGrid fields={a.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
+      </details>
       <div className="section">History</div>
       <table className="history">
         <thead>
