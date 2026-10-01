@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -62,4 +62,46 @@ it('never sends the saved token to a changed server and validates URL and Locati
   for (const baseUrl of ['file:///tmp/x', 'https://name:password@example.org', 'https://example.org?token=x'])
     expect(() => store.save({ ...input, baseUrl })).toThrow('HTTP(S)')
   expect(() => store.save({ ...input, defaultLocation: { id: -1, name: 'Bad' } })).toThrow('valid default Location')
+})
+
+const report = { name: 'Broken Chromebooks', kind: 'assets' as const, search: 'chromebook', filters: { status_id: '3' }, sort: { key: 'assetTag', order: 'desc' as const }, columns: ['assetTag', 'status', 'serial'] }
+
+it('keeps Saved Reports across a restart, renames, re-saves and deletes them, and keeps them when the token changes', () => {
+  const { path, storage, store } = setup()
+  expect(store.savedReports()).toEqual([])
+  const saved = store.saveReport(report)
+  expect(saved).toMatchObject(report)
+  store.save(input)
+  store.clearToken()
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.savedReports()).toEqual([saved])
+  expect(relaunched.renameReport(saved.id, '  Broken  ')).toEqual([{ ...saved, name: 'Broken' }])
+  const resaved = relaunched.saveReport({ ...report, id: saved.id, name: 'Broken', filters: { status_id: '4', location_id: '' } })
+  expect(resaved).toEqual({ ...saved, name: 'Broken', filters: { status_id: '4' } })
+  const other = relaunched.saveReport({ ...report, kind: 'users', filters: {}, sort: null, columns: ['name'] })
+  expect(other.id).not.toBe(saved.id)
+  expect(relaunched.deleteReport(saved.id)).toEqual([other])
+  expect(createSettingsStore(path, storage, '0.1.0').savedReports()).toEqual([other])
+})
+
+it('re-saving or renaming keeps what a later ticket stores beside a Saved Report (its schedule, its last send)', () => {
+  const { path, storage, store } = setup()
+  const saved = store.saveReport(report)
+  const stored = JSON.parse(readFileSync(path, 'utf8'))
+  stored.savedReports[0].schedule = { every: 'week' }
+  writeFileSync(path, JSON.stringify(stored))
+  store.renameReport(saved.id, 'Renamed')
+  expect(store.saveReport({ ...report, id: saved.id })).toMatchObject({ schedule: { every: 'week' } })
+})
+
+it('refuses a Saved Report it could not open again', () => {
+  const { store } = setup()
+  expect(() => store.saveReport({ ...report, name: '  ' })).toThrow('Name the report')
+  expect(() => store.saveReport({ ...report, kind: 'nope' as 'assets' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, filters: { status_id: 3 as unknown as string } })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, sort: { key: 'nope', order: 'asc' } })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, columns: 'assetTag' as unknown as string[] })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, id: 'missing' })).toThrow('no longer exists')
+  expect(() => store.renameReport('missing', 'x')).toThrow('no longer exists')
+  expect(store.savedReports()).toEqual([])
 })

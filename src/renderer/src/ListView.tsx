@@ -6,6 +6,7 @@ import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
 import { FerpaConfirm, saveCsv } from './ReportsView'
+import type { SavedReport } from '../../main/config'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -107,11 +108,14 @@ const COLUMNS: { [K in ListKind]: Column<K>[] } = {
 // Stored per computer and per List: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
 function readColumns(kind: ListKind): string[] {
+  try { return shownColumns(kind, JSON.parse(localStorage.getItem(columnsKey(kind)) ?? 'null')) }
+  catch { return shownColumns(kind, null) }
+}
+// Which of a List's columns show, from a stored list of keys (the first column always, ones it no longer has dropped);
+// its default ones when there's none.
+export function shownColumns(kind: ListKind, stored: unknown): string[] {
   const all: AnyColumn[] = COLUMNS[kind]
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(columnsKey(kind)) ?? 'null')
-    if (Array.isArray(stored)) return all.filter((c, i) => i === 0 || stored.includes(c.key)).map((c) => c.key)
-  } catch {}
+  if (Array.isArray(stored)) return all.filter((c, i) => i === 0 || stored.includes(c.key)).map((c) => c.key)
   return all.filter((c) => !c.hidden).map((c) => c.key)
 }
 
@@ -232,7 +236,8 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
+// report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
+export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
@@ -244,22 +249,26 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
   batch: AssetSummary[]
   onBatch: (a: AssetSummary[]) => void
   drill?: Drill
+  report?: SavedReport
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
   defaultLocation: StatusLabel | null
   onOpenAsset: (id: number) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
-  const [text, setText] = useState('')
-  const [search, setSearch] = useState('')
+  const [text, setText] = useState(report?.search ?? '')
+  const [search, setSearch] = useState(report?.search ?? '')
   const [filters, setFilters] = useState<Record<string, string>>(drill?.filters ?? {})
-  const [sort, setSort] = useState<{ key: string; order: 'asc' | 'desc' } | null>(null)
+  const [sort, setSort] = useState<SavedReport['sort']>(report?.sort ?? null)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState<ListPage<ListKind> | null>(null)
   const [loading, setLoading] = useState(false)
   const [reloads, setReloads] = useState(0)
   const [names, setNames] = useState<Names>({})
-  const [shown, setShown] = useState(() => readColumns(kind))
+  const [shown, setShown] = useState(() => (report ? shownColumns(kind, report.columns) : readColumns(kind)))
+  // The Saved Report this List is (once opened from or saved as one), so Save writes over it; and the name being typed.
+  const [saved, setSaved] = useState(report ?? null)
+  const [naming, setNaming] = useState<string | null>(null)
   const [customizing, setCustomizing] = useState(false)
   const [quick, setQuick] = useState<Quick | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
@@ -319,7 +328,8 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
     for (const n of namesNeeded[kind] ?? []) window.snipeIt.names(n).then((v) => !stale && setNames((names) => ({ ...names, [n]: v })), () => {})
     return () => { stale = true }
   }, [kind])
-  useEffect(() => localStorage.setItem(columnsKey(kind), JSON.stringify(shown)), [kind, shown])
+  // A Saved Report's Columns are its own; they don't change the List's usual ones.
+  useEffect(() => { if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(shown)) }, [kind, shown])
 
   const all: AnyColumn[] = COLUMNS[kind]
   const columns = all.filter((c) => shown.includes(c.key))
@@ -372,6 +382,19 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
     }
     setExporting(null)
   }
+  // The List as it is now, under the typed name: over the Saved Report it is (asNew: as another), or as a new one.
+  // The search as typed, even if the List hasn't caught up with the last keystrokes; the label while its chip shows.
+  async function saveReport(asNew: boolean) {
+    const drilled = Object.keys(drill?.filters ?? {}).some((k) => filters[k] && !filterBar.some((f) => f.key === k))
+    try {
+      const r = await window.settings.saveReport({ id: asNew ? undefined : saved?.id, name: naming ?? '', kind, search: text, filters, label: drilled ? drill?.label : undefined, sort, columns: shown })
+      setSaved(r)
+      setNaming(null)
+      setMessage({ text: `Saved report "${r.name}"` })
+    } catch (e) {
+      setMessage({ text: (e as Error).message, error: true })
+    }
+  }
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
   function open(row: Row): (() => void) | undefined {
@@ -411,10 +434,11 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
   return (
     <>
       <header className="head">
-        <h1>{listName[kind]}</h1>
+        <h1>{listName[kind]}{saved && `: ${saved.name}`}</h1>
         <span className="dim mono">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
+          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
           {editable(kind) && <button className="quiet" onClick={() => onNew(kind)}>New {singular(kind)}</button>}
           <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
             onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
@@ -437,6 +461,15 @@ export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaul
             ))}
           </ol>
         </div>
+      )}
+      {naming !== null && (
+        <form className="filters actions" onSubmit={(e) => (e.preventDefault(), saveReport(false))}>
+          <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
+          <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
+          {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
+          <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
+          <span className="dim">Saves this List's search, filters, sort and Columns.</span>
+        </form>
       )}
       <div className="filters actions">
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />

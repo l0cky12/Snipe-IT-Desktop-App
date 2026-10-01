@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
-import type { Config, StatusLabel } from './snipeit'
+import { LIST_SORTS, type Config, type ListKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
@@ -11,8 +12,32 @@ export type SettingsApi = {
   test(input: SettingsInput): Promise<{ version: string }>
   locations(input: SettingsInput): Promise<StatusLabel[]>
   clearToken(): Promise<Settings>
+  savedReports(): Promise<SavedReport[]>
+  saveReport(report: SavedReportInput): Promise<SavedReport>
+  renameReport(id: string, name: string): Promise<SavedReport[]>
+  deleteReport(id: string): Promise<SavedReport[]>
 }
-type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null }
+/** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …"). */
+export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[] }
+// The scheduler will keep a Saved Report's schedule and last send beside these; re-saving and renaming leave them be.
+export type SavedReport = SavedReportQuery & { id: string; name: string }
+/** No id: a new Saved Report. An id: re-saves that one. */
+export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
+type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[] }
+
+const isStrings = (v: unknown, of: 'array' | 'record') =>
+  (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
+// What comes from the screen, checked and with emptied filters dropped, so the store only ever holds a List it can open.
+function reportQuery(r: SavedReportInput): SavedReportQuery & { name: string } {
+  const name = typeof r?.name === 'string' ? r.name.trim() : ''
+  if (!name) throw new Error('Name the report.')
+  const sorts: Record<string, string> | undefined = Object.hasOwn(LIST_SORTS, r.kind) ? LIST_SORTS[r.kind] : undefined
+  if (!sorts || typeof r.search !== 'string' || !isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || (r.label !== undefined && typeof r.label !== 'string')
+    || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order))))
+    throw new Error('Invalid report')
+  const filters = Object.fromEntries(Object.entries(r.filters).filter(([, v]) => v))
+  return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns] }
+}
 
 export function createSettingsStore(path: string, storage: Pick<typeof safeStorage, 'isEncryptionAvailable' | 'getSelectedStorageBackend' | 'encryptString' | 'decryptString'>, appVersion: string) {
   function read(): Stored {
@@ -31,6 +56,9 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     writeFileSync(path + '.tmp', JSON.stringify(value), { mode: 0o600 })
     renameSync(path + '.tmp', path)
   }
+  const withoutToken = ({ encryptedToken: _, plainToken: __, ...rest }: Stored): Stored => rest
+  const savedReports = () => read().savedReports ?? []
+  const gone = (): never => { throw new Error('That Saved Report no longer exists.') }
   function get(): Settings {
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion }
@@ -60,15 +88,45 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       if (loc !== null && (!Number.isSafeInteger(loc?.id) || loc.id <= 0 || typeof loc.name !== 'string'))
         throw new Error('Choose a valid default Location.')
       const defaultLocation = loc && { id: loc.id, name: loc.name }
+      const rest = withoutToken(read())
       // No keychain: fall back to the owner-only (0600) file rather than locking the Operator out every launch.
-      if (!available()) write({ baseUrl: config.baseUrl, plainToken: config.apiKey, defaultLocation })
-      else write({ baseUrl: config.baseUrl, encryptedToken: storage.encryptString(config.apiKey).toString('base64'), defaultLocation })
+      if (!available()) write({ ...rest, baseUrl: config.baseUrl, plainToken: config.apiKey, defaultLocation })
+      else write({ ...rest, baseUrl: config.baseUrl, encryptedToken: storage.encryptString(config.apiKey).toString('base64'), defaultLocation })
       return get()
     },
     clearToken() {
-      const saved = read()
-      write({ baseUrl: saved.baseUrl, defaultLocation: saved.defaultLocation })
+      write(withoutToken(read()))
       return get()
+    },
+    savedReports,
+    saveReport(input: SavedReportInput): SavedReport {
+      const query = reportQuery(input)
+      const saved = read()
+      const reports = saved.savedReports ?? []
+      if (input.id === undefined) {
+        const report = { id: randomUUID(), ...query }
+        write({ ...saved, savedReports: [...reports, report] })
+        return report
+      }
+      const old = reports.find((r) => r.id === input.id) ?? gone()
+      // The old label goes, so one the List no longer has doesn't linger; anything else beside the query stays.
+      const { label: _, ...kept } = old
+      const report = { ...kept, ...query }
+      write({ ...saved, savedReports: reports.map((r) => (r === old ? report : r)) })
+      return report
+    },
+    renameReport(id: string, name: string) {
+      const saved = read()
+      const reports = saved.savedReports ?? []
+      const old = reports.find((r) => r.id === id) ?? gone()
+      const { name: named } = reportQuery({ ...old, name })
+      write({ ...saved, savedReports: reports.map((r) => (r === old ? { ...r, name: named } : r)) })
+      return savedReports()
+    },
+    deleteReport(id: string) {
+      const saved = read()
+      write({ ...saved, savedReports: (saved.savedReports ?? []).filter((r) => r.id !== id) })
+      return savedReports()
     },
   }
 }

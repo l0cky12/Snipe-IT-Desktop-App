@@ -1,4 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { SavedReport } from '../../main/config'
+import { listName } from './ListView'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
 
 const reportName: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
@@ -39,8 +41,8 @@ export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExp
   )
 }
 
-// Runs when asked (a report can page through a lot), not on every change of a filter.
-export function ReportsView() {
+// Runs when asked (a report can page through a lot), not on every change of a filter. A Saved Report opens as its List.
+export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport) => void }) {
   const [kind, setKind] = useState<ReportKind>('activity')
   const [query, setQuery] = useState<ReportQuery>({})
   const [report, setReport] = useState<Report | null>(null)
@@ -112,6 +114,7 @@ export function ReportsView() {
         <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
+      <SavedReports onOpen={onOpenSaved} />
       {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
@@ -122,5 +125,66 @@ export function ReportsView() {
       {report && report.rows.length === 0 && <p className="empty">Nothing matches</p>}
       {!report && !error && !busy && <p className="empty">Choose a report and run it</p>}
     </>
+  )
+}
+
+// The Operator's Saved Reports, each opening as its List, renamed in place, or deleted after asking.
+function SavedReports({ onOpen }: { onOpen: (report: SavedReport) => void }) {
+  const [reports, setReports] = useState<SavedReport[] | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => { window.settings.savedReports().then(setReports, (e: Error) => setError(e.message)) }, [])
+  const change = async (work: Promise<SavedReport[]>) => {
+    try {
+      setReports(await work)
+      setRenaming(null)
+      setDeleting(null)
+      setError('')
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  return (
+    <section className="saved-reports" aria-label="Saved Reports">
+      <h2>Saved Reports</h2>
+      {error && <p className="message error" role="alert">{error}</p>}
+      {reports?.length === 0 && <p className="dim">None yet. Save any List as a report with its Save report button.</p>}
+      {!!reports?.length && (
+        <table className="history">
+          <tbody>
+            {reports.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  {renaming?.id === r.id ? (
+                    <form className="actions" onSubmit={(e) => (e.preventDefault(), change(window.settings.renameReport(r.id, renaming.name)))}>
+                      <input autoFocus value={renaming.name} onChange={(e) => setRenaming({ id: r.id, name: e.target.value })}
+                        onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)} aria-label={`New name for ${r.name}`} />
+                      <button disabled={!renaming.name.trim()}>Rename</button>
+                      <button type="button" className="quiet" onClick={() => setRenaming(null)}>Cancel</button>
+                    </form>
+                  ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
+                </td>
+                <td className="dim">{listName[r.kind]}</td>
+                <td><div className="actions">
+                  {deleting === r.id ? (
+                    <span className="confirm" role="alertdialog" aria-label={`Delete ${r.name}?`}>
+                      <span>Delete "{r.name}"?</span>
+                      <button className="danger" autoFocus onClick={() => change(window.settings.deleteReport(r.id))}>Delete</button>
+                      <button className="quiet" onClick={() => setDeleting(null)}>Cancel</button>
+                    </span>
+                  ) : (
+                    <>
+                      <button className="quiet" onClick={() => (setDeleting(null), setRenaming({ id: r.id, name: r.name }))}>Rename</button>
+                      <button className="quiet danger" onClick={() => (setRenaming(null), setDeleting(r.id))}>Delete…</button>
+                    </>
+                  )}
+                </div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   )
 }

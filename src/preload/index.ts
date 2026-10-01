@@ -49,5 +49,6 @@ contextBridge.exposeInMainWorld('snipeIt', snipeIt)
 const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
-const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken') }
+const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
+  savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport') }
 contextBridge.exposeInMainWorld('settings', settings)

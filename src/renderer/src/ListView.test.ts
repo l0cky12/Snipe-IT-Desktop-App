@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, deleteQuestion, exportTable, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, choices, confirmSelectAll, deleteQuestion, exportTable, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, shownColumns, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -173,5 +173,12 @@ describe('Export CSV', () => {
   it('Lists whose rows hold Users or Assignees need the FERPA confirmation', () => {
     expect(['assets', 'users', 'activity', 'departments'].every((k) => holdsStudentInfo(k as 'assets'))).toBe(true)
     expect(['suppliers', 'locations', 'licenses', 'statuslabels'].some((k) => holdsStudentInfo(k as 'assets'))).toBe(false)
+  })
+})
+
+describe('a Saved Report opened again', () => {
+  it('shows its Columns in the List order, always the first, without ones the List no longer has', () => {
+    expect(shownColumns('assets', ['serial', 'gone', 'status'])).toEqual(['assetTag', 'status', 'serial'])
+    expect(shownColumns('users', null)).toEqual(['name', 'username', 'department', 'location', 'assets'])
   })
 })
