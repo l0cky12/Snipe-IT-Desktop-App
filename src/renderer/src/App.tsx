@@ -28,6 +28,10 @@ export const statusChoices = (labels: StatusLabel[], a: Asset) =>
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
 export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
+// Why an Asset's Checkin / Checkout button is disabled (its title), or undefined when it may go ahead.
+export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
+export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
+  !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
@@ -358,7 +362,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
       <input value={note} onChange={(e) => setNote(e.target.value)} disabled={off} placeholder="Note (optional)" aria-label="Checkin note" />
-      <button disabled={off} title={!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out'}>
+      <button disabled={off} title={checkinReason(a)}>
         {busy ? 'Checking in…' : 'Checkin'}
       </button>
     </form>
@@ -483,7 +487,7 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           <button
             disabled={!a.checkoutAllowed || !a.can.checkout}
             onClick={() => setCheckingOut((o) => !o)}
-            title={!a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}
+            title={checkoutReason(a)}
           >
             {checkingOut ? 'Cancel' : 'Checkout…'}
           </button>

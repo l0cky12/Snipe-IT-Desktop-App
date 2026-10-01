@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AssetSummary, StatusLabel } from '../../main/snipeit'
-import { CheckoutForm, StatusChip } from './App'
+import { CheckoutForm, NOT_ALLOWED, StatusChip } from './App'
 
 /** How one Asset in the batch fared in the last Checkout or Checkin. */
 export type Outcome = { state: 'working' } | { state: 'done'; text: string } | { state: 'failed'; reason: string }
@@ -48,6 +48,9 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
   const failed = batch.filter((a) => a.outcome?.state === 'failed')
   const done = batch.filter((a) => a.outcome?.state === 'done')
   const off = busy || batch.length === 0
+  // Snipe-IT would refuse each one anyway; saying so up front beats a run of failed rows.
+  const cantCheckout = batch.some((a) => !a.can.checkout)
+  const cantCheckin = batch.some((a) => !a.can.checkin)
 
   return (
     <>
@@ -58,7 +61,7 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
           {/* Retry repeats the same action; to change it (another User, a Location…), keep only the failed ones and act again. */}
           {last && failed.length > 0 && !busy && <button title="Runs the same Checkout or Checkin again on the ones that failed" onClick={() => onRun(last, failed.map((a) => a.id))}>Retry failed ({failed.length})</button>}
           {done.length > 0 && !busy && <button className="quiet" onClick={() => onRemove(done.map((a) => a.id))}>Remove the ones that worked</button>}
-          <button disabled={off} onClick={() => setCheckingOut((o) => !o)}>{checkingOut ? 'Cancel' : 'Checkout all…'}</button>
+          <button disabled={off || cantCheckout} title={cantCheckout ? NOT_ALLOWED : undefined} onClick={() => setCheckingOut((o) => !o)}>{checkingOut ? 'Cancel' : 'Checkout all…'}</button>
           <button className="quiet" disabled={off} onClick={onClear}>Clear</button>
         </div>
         <form className="actions" onSubmit={(e) => (e.preventDefault(), run({ done: 'Checked in', work: (id) => window.snipeIt.checkin(id, { statusId, locationId, note }) }))}>
@@ -72,7 +75,7 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
           <input value={note} onChange={(e) => setNote(e.target.value)} disabled={off} placeholder="Note (optional)" aria-label="Checkin note" />
-          <button disabled={off}>{busy ? 'Working…' : 'Checkin all'}</button>
+          <button disabled={off || cantCheckin} title={cantCheckin ? NOT_ALLOWED : undefined}>{busy ? 'Working…' : 'Checkin all'}</button>
         </form>
       </header>
       {checkingOut && batch.length > 0 && (

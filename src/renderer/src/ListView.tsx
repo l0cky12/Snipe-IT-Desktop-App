@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
-import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, statusChoices } from './App'
+import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -307,9 +307,9 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                 {kind === 'assets' && (
                   <td className="quick">
                     <button disabled={!a.assignee || !a.can.checkin} onClick={() => toggle('checkin')} className={q?.action === 'checkin' ? 'on' : undefined}
-                      title={!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out'}>Checkin</button>
+                      title={checkinReason(a)}>Checkin</button>
                     <button disabled={!a.checkoutAllowed || !a.can.checkout} onClick={() => toggle('checkout')} className={q?.action === 'checkout' ? 'on' : undefined}
-                      title={!a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`}>Checkout</button>
+                      title={checkoutReason(a)}>Checkout</button>
                     <button disabled={!a.can.update} onClick={() => toggle('status')} className={q?.action === 'status' ? 'on' : undefined} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
                     <button disabled={inBatch} onClick={() => onBatch(toSummary(a))}>{inBatch ? 'In batch' : 'Batch'}</button>
                   </td>

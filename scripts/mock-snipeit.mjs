@@ -177,7 +177,9 @@ createServer(async (req, res) => {
     if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
     if (req.method === 'PATCH') {
       if (!body.name) return fail({ name: ['The name field is required.'] })
-      Object.assign(g, { name: body.name, ...(body.permissions && { permissions: JSON.parse(body.permissions) }) })
+      let permissions
+      try { permissions = body.permissions && JSON.parse(body.permissions) } catch { return fail({ permissions: ['The permissions must be JSON.'] }) }
+      Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
     }
     return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
   }

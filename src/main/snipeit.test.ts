@@ -100,6 +100,7 @@ describe('lookup', () => {
         status: 'Deployed',
         statusMeta: 'deployed',
         assignee: { type: 'user', id: 311, name: 'Jordan Reyes' },
+        can: { checkout: true, checkin: true, update: true, delete: true },
         matched: 'Assignee',
       },
     ])
@@ -617,7 +618,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     if (!Array.isArray(assets)) throw new Error('expected segments')
     expect(assets[0].assets.map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-3'])
     expect(assets[1].assets).toEqual([
-      { id: 2, assetTag: 'NOMMA-2', name: 'CB-LIB-012', status: 'Out for Repair', statusMeta: 'undeployable', assignee: null },
+      { id: 2, assetTag: 'NOMMA-2', name: 'CB-LIB-012', status: 'Out for Repair', statusMeta: 'undeployable', assignee: null, can: { checkout: true, checkin: true, update: true, delete: true } },
     ])
   })
 
@@ -958,7 +959,8 @@ describe('the other record kinds', () => {
       ldap_ou: null, currency: '', created_at: { datetime: '2023-08-01 09:00:00', formatted: 'Aug 1, 2023 9:00AM' }, notes: '<p>Back <em>door</em> sticks</p>',
       children: [{ id: 30, name: 'Closet' }], available_actions: { update: true }, image: 'https://snipe.example.org/img.png', active: true,
       opened: { date: '2020-08-17' }, tags: ['north', 'ground floor'], empty: [], budget: { amount: 100, currency: 'USD', note: null },
-      groups: { total: 2, rows: [{ id: 1, name: 'Facilities' }, { id: 2, name: 'IT' }] },
+      // A { total, rows } list reads one field per row; a User's groups are the same shape but shown in their own section, not as fields.
+      zones: { total: 2, rows: [{ id: 1, name: 'North wing' }, { id: 2, name: 'South wing' }] }, groups: { total: 1, rows: [{ id: 1, name: 'Facilities' }] },
     }
     const { fetch } = fakeFetch({ '/locations/12': { body: location } })
     expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
@@ -975,8 +977,8 @@ describe('the other record kinds', () => {
         { label: 'Opened', value: '2020-08-17' },
         { label: 'Tags', value: 'north, ground floor' },
         { label: 'Budget', value: 'amount: 100, currency: USD' },
-        { label: 'Groups', value: 'Facilities' },
-        { label: 'Groups', value: 'IT' },
+        { label: 'Zones', value: 'North wing' },
+        { label: 'Zones', value: 'South wing' },
       ],
     })
   })

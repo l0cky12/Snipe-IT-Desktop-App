@@ -3,15 +3,15 @@ import { PERMISSIONS, type Group, type StatusLabel, type UserAccess } from '../.
 
 /** Whether the Operator's account may manage permissions: null until Snipe-IT says; error when it couldn't be asked. */
 export type CanManage = boolean | null | { error: string }
+// Said wherever permissions could be managed but the Operator's account can't.
+export const CANT_MANAGE = "Managing permissions needs a Snipe-IT superuser account. Yours isn't one, so groups and their permissions can't be changed from here; ask a Snipe-IT superuser."
+
 // What the check's answer means on screen: nothing yet, the superuser notice, or why it couldn't be checked.
 function AccessNotice({ canManage }: { canManage: CanManage }) {
   if (canManage === false) return <p className="notice" role="status">{CANT_MANAGE}</p>
   if (canManage && typeof canManage === 'object') return <p className="message error" role="alert">Couldn't check whether your account can manage permissions: {canManage.error}</p>
   return null
 }
-
-// Said wherever permissions could be managed but the Operator's account can't.
-export const CANT_MANAGE = "Managing permissions needs a Snipe-IT superuser account. Yours isn't one, so groups and their permissions can't be changed from here; ask a Snipe-IT superuser."
 
 // "assets.view.requestable" → "View requestable" under Assets: the prefix every key of the area shares goes. Global's keys
 // share none, so "reports.view" reads "Reports view".
@@ -75,6 +75,7 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
             )}
           </div>
           <div className="k">Permissions of their own</div>
+          <p className="dim">What each group grants is under All records → Permission groups.</p>
           {own.length === 0
             ? <p className="dim">None; everything they may do comes from their groups.</p>
             : <ul className="permissions">{own.map(([k, v]) => <li key={k}><span className={`chip ${v === '1' ? 'c-green' : 'c-red'}`}>{v === '1' ? 'Granted' : 'Denied'}</span> <span className="mono">{k}</span></li>)}</ul>}

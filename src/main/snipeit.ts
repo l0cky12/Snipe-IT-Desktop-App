@@ -33,8 +33,9 @@ export type Asset = {
 export type Can = { checkout: boolean; checkin: boolean; update: boolean; delete: boolean }
 // Snipe-IT sends permissions decoded (key → value); an older one, or a field saved by hand, may send the JSON text.
 const permissionsOf = (raw: unknown): Record<string, unknown> => {
-  if (typeof raw === 'string') try { raw = JSON.parse(raw) } catch { return {} }
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  let value = raw
+  if (typeof raw === 'string') try { value = JSON.parse(raw) } catch { return {} }
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 const canFrom = (raw: unknown): Can => {
   const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof Can, unknown>>
@@ -57,7 +58,7 @@ export type CheckoutTarget = { id: number; name: string; detail: string }
 export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
 
 /** What the rail shows for a match or a recent scan. */
-export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee'>
+export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
 
 /** The kinds that open the Assets List filtered to them. */
 export type OtherKind = 'users' | 'locations' | 'models'
@@ -314,8 +315,8 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
   }
 }
 
-export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee }: Asset): AssetSummary =>
-  ({ id, assetTag, name, status, statusMeta, assignee })
+export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
+  ({ id, assetTag, name, status, statusMeta, assignee, can })
 
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = raw.expected_checkin?.date ?? null
@@ -516,7 +517,7 @@ function fieldsOf(raw: RawRow): Field[] {
       const kind = key === 'assigned_to' ? ({ user: 'users', location: 'locations', asset: 'assets' } as const)[o.type as Assignee['type']] : RELATED_KINDS[key]
       return { label, value: o.name, ...(kind && typeof o.id === 'number' && { link: { kind, id: o.id } }) }
     }
-    // A list of records (a Location's children, a User's groups { total, rows }…) gives each its own field; a list of plain values reads as one.
+    // A list of records (a Location's children, or a { total, rows } page) gives each its own field; a list of plain values reads as one.
     const list = Array.isArray(v) ? v : Array.isArray((v as { rows?: unknown }).rows) ? (v as { rows: unknown[] }).rows : null
     if (list) {
       if (list.every((x) => typeof x !== 'object')) fields.push(...(list.length ? [{ label, value: list.join(', ') }] : []))
