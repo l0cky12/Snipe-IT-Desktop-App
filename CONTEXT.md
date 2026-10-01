@@ -116,6 +116,10 @@ A stocked part installed into Assets (RAM, a drive). Each unit is **In use** or 
 **Holding**:
 A User who currently has at least one Asset, License seat, or Accessory checked out. Consumables don't count; they never come back.
 
+**Custom Field**:
+An extra field an Asset carries because its Asset Model asks for it (a MAC Address, a Cart). An Asset Model's set of them is its **Fieldset**; choosing another Asset Model swaps them.
+_Avoid_: attribute, property, extra
+
 **Inventory Chart**:
 The dashboard's one-bar-per-kind summary: Assets split by status, Licenses, Accessories, Consumables, and Components split by use, Users split by Holding.
 _Avoid_: stats, widgets

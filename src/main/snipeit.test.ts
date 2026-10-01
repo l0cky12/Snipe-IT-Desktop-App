@@ -1024,7 +1024,7 @@ describe('the other record kinds', () => {
 describe('create, edit and delete', () => {
   const fieldset = { total: 1, rows: [{ name: 'MAC Address', db_column_name: '_snipeit_mac_1', type: 'text', format: 'MAC', required: 1, field_values_array: null }, { name: 'Cart', db_column_name: '_snipeit_cart_2', type: 'listbox', format: 'ANY', required: 0, field_values_array: ['A', 'B'] },
     { name: 'Chargers', db_column_name: '_snipeit_chargers_3', type: 'checkbox', format: 'ANY', required: 0, field_values_array: ['USB-C', 'Barrel'] }] }
-  const editable = { ...chromebook, rtd_location: { id: 4, name: 'IT Office' }, purchase_cost: '1,200.50', notes: '<p>Spare</p>', supplier: null, company: null,
+  const editable = { ...chromebook, rtd_location: { id: 4, name: 'IT Office' }, purchase_cost: '1,200.50', warranty_months: '36 months', notes: '<p>Spare</p>', name: 'Cart <B>', supplier: null, company: null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_1', value: '00:1A:2B:3C:4D:5E' } } }
 
   it("editing an Asset fills its form from what Snipe-IT sent, with its Asset Model's custom fields", async () => {
@@ -1036,7 +1036,7 @@ describe('create, edit and delete', () => {
       { key: '_snipeit_chargers_3', label: 'Chargers', required: false, type: 'choices', options: ['USB-C', 'Barrel'] },
     ])
     expect(values).toMatchObject({ asset_tag: 'NOMMA-004812', model_id: '7', status_id: '2', rtd_location_id: '4', supplier_id: '', purchase_date: '2023-08-01',
-      purchase_cost: '1200.50', notes: 'Spare', _snipeit_mac_1: '00:1A:2B:3C:4D:5E', _snipeit_cart_2: '' })
+      purchase_cost: '1200.50', warranty_months: '36', notes: 'Spare', name: 'Cart <B>', _snipeit_mac_1: '00:1A:2B:3C:4D:5E', _snipeit_cart_2: '' })
   })
 
   it("a note Snipe-IT sends rendered comes back as Markdown, so editing it keeps its links and emphasis", () => {

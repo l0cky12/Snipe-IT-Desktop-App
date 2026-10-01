@@ -11,7 +11,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const [initial, setInitial] = useState<Record<string, string>>({})
   // Bumped per Asset Model chosen; custom fields that arrive for an earlier choice are dropped. Save waits for them,
   // and stays off if they couldn't load, so an Asset isn't saved without the custom fields its model asks for.
-  const model = useRef(0)
+  const modelChoice = useRef(0)
   const [fieldsLoading, setFieldsLoading] = useState(false)
   const [fieldsFailed, setFieldsFailed] = useState(false)
   const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
@@ -41,15 +41,15 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     setErrors(({ [key]: _, ...rest }) => rest)
     if (kind !== 'assets' || key !== 'model_id') return
     const own = (f: FormField) => !f.key.startsWith('_snipeit_')
-    const mine = ++model.current
+    const mine = ++modelChoice.current
     // The old Asset Model's custom fields go at once, so they can't be saved with the new one.
     setFields((all) => all.filter(own))
     setFieldsFailed(false)
     if (!value) return setFieldsLoading(false)
     setFieldsLoading(true)
     window.snipeIt.customFields(Number(value)).then(
-      (custom) => mine === model.current && (setFields((all) => [...all.filter(own), ...custom]), setFieldsLoading(false)),
-      (e: Error) => mine === model.current && (setMessage(`Couldn't load this Asset Model's custom fields: ${e.message}`), setFieldsLoading(false), setFieldsFailed(true)))
+      (custom) => mine === modelChoice.current && (setFields((all) => [...all.filter(own), ...custom]), setFieldsLoading(false)),
+      (e: Error) => mine === modelChoice.current && (setMessage(`Couldn't load this Asset Model's custom fields: ${e.message}`), setFieldsLoading(false), setFieldsFailed(true)))
   }
 
   async function submit(e: React.FormEvent) {
@@ -75,7 +75,6 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const input = (f: FormField) => {
     const common = { id: `f-${f.key}`, value: values[f.key] ?? '', required: f.required, 'aria-invalid': !!errors[f.key] || undefined, 'aria-describedby': errors[f.key] ? `e-${f.key}` : undefined }
     if (f.type === 'textarea') return <textarea {...common} rows={3} onChange={(e) => set(f.key, e.target.value)} />
-    if (f.type === 'checkbox') return <input id={common.id} type="checkbox" checked={values[f.key] === '1'} onChange={(e) => set(f.key, e.target.checked ? '1' : '')} />
     if (f.type === 'choices') {
       const picked = common.value.split(',').map((v) => v.trim()).filter(Boolean)
       const toggle = (o: string) => set(f.key, (picked.includes(o) ? picked.filter((p) => p !== o) : [...picked, o]).join(', '))

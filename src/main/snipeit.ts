@@ -143,7 +143,7 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
  * edited record keeps the value, when not under key (an id sits in its object: model_id in model.id). newOnly: creating only.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'checkbox' | 'choice' | 'choices'
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices'
   required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
@@ -455,9 +455,10 @@ function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
   if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
-  if (f.type === 'checkbox') return v ? '1' : ''
-  // ponytail: Snipe-IT formats costs with thousands separators ("1,200.50"); assumes "," is the thousands one.
-  return f.type === 'number' ? String(v).replace(/,/g, '') : markdownOf(String(v))
+  // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
+  // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
+  if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
+  return f.type === 'textarea' ? markdownOf(String(v)) : String(v)
 }
 
 // Every field of a record as the Operator reads it, in Snipe-IT's order, then an Asset's custom fields.
@@ -574,6 +575,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
   const checkId = (id: number, what = 'Asset') => {
     if (!Number.isInteger(id)) throw new Error(`Invalid ${what} id: ${id}`)
+  }
+  // kind arrives from the screen over IPC; only a kind the app edits reaches the URL.
+  const checkKind = (kind: EditKind) => {
+    if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
   }
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
@@ -747,7 +752,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
     async form(kind: EditKind, id?: number): Promise<RecordForm> {
-      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      checkKind(kind)
       if (id === undefined) return { fields: FORMS[kind], values: {} }
       checkId(id, 'record')
       const raw = await request<RawRow>(`${LISTS[kind].path}/${id}`)
@@ -764,7 +769,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // Creates (id null) or edits a record. Only the form's fields (and custom fields) reach Snipe-IT; a blank choice, number
     // or date is sent as none, and a blank password when editing is left out. Snipe-IT's refusal comes back per field.
     async save(kind: EditKind, id: number | null, values: Record<string, string>): Promise<SaveResult> {
-      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      checkKind(kind)
       if (id !== null) checkId(id, 'record')
       if (typeof values !== 'object' || values === null) throw new Error('Invalid form')
       const byKey = new Map(FORMS[kind].map((f) => [f.key, f]))
@@ -774,17 +779,23 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
         if (f?.newOnly && id !== null) continue
         const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
-        body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
+        body[key] = value === '' && blankIsNone ? null : value
       }
       const path = LISTS[kind].path
       const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
-      if (!isError(result)) return { ok: true, id: id ?? result.payload?.id ?? 0 }
+      if (!isError(result)) {
+        const saved = id ?? result.payload?.id
+        if (!saved) throw new Error("Snipe-IT saved it but didn't say which record it is; look for it in the List.")
+        return { ok: true, id: saved }
+      }
       // Validation arrives as field → messages; anything else is one line.
       const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
       if (!fieldMessages) return { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
       const errors = Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)]))
+      // A field the form shows (an edit sends only the changed ones; an Asset's custom fields are its model's) is marked below, not repeated in the line.
       const known = new Set([...byKey.keys(), ...Object.keys(values)])
-      const other = Object.entries(errors).filter(([k]) => !known.has(k)).map(([, m]) => m).join(' ')
+      const shown = (k: string) => known.has(k) || (kind === 'assets' && k.startsWith('_snipeit_'))
+      const other = Object.entries(errors).filter(([k]) => !shown(k)).map(([, m]) => m).join(' ')
       return { ok: false, message: other || "Snipe-IT didn't save it: see the fields marked below.", errors }
     },
 
@@ -792,7 +803,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // Deletes a record; Snipe-IT refuses (e.g. an Asset still checked out) with its reason.
     async remove(kind: EditKind, id: number): Promise<void> {
-      if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+      checkKind(kind)
       checkId(id, 'record')
       const result = await request(`${LISTS[kind].path}/${id}`, {}, 'DELETE')
       if (isError(result)) throw new Error(reason(result.messages))
