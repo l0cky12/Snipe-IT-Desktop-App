@@ -37,6 +37,11 @@ const snipeIt: SnipeItBridge = {
   group: call('snipeit:group'),
   setUserGroups: call('snipeit:setUserGroups'),
   saveGroup: call('snipeit:saveGroup'),
+  canImport: call('snipeit:canImport'),
+  imports: call('snipeit:imports'),
+  uploadImport: call('snipeit:uploadImport'),
+  processImport: call('snipeit:processImport'),
+  deleteImport: call('snipeit:deleteImport'),
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)

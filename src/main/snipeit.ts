@@ -187,6 +187,50 @@ export type RecordForm = { fields: FormField[]; values: Record<string, string> }
 /** Saved (with the record's id), or Snipe-IT's reasons: per field where it gave them, and a line for the rest. */
 export type SaveResult = { ok: true; id: number } | { ok: false; message: string; errors: Record<string, string> }
 
+/** What an Import can create or update, in Snipe-IT's import-type names. */
+export const IMPORT_TYPES = { asset: 'Assets', user: 'Users', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', location: 'Locations' } as const
+export type ImportType = keyof typeof IMPORT_TYPES
+// Snipe-IT's import field lists (its Livewire Importer's {type}_fields), English labels. Snipe-IT fills a Custom Field from
+// the column headed with its name, so custom fields need no matching and aren't listed. ponytail: copied from Snipe-IT v8,
+// which doesn't serve them over the API; a field it adds later is missing here until copied in (its heading still works).
+export const IMPORT_FIELDS: Record<ImportType, [key: string, label: string][]> = {
+  asset: [['id', 'ID'], ['asset_eol_date', 'EOL Date'], ['asset_model', 'Model Name'], ['asset_notes', 'Asset Notes'], ['asset_tag', 'Asset Tag'], ['byod', 'BYOD'],
+    ['category', 'Category'], ['company', 'Company'], ['image', 'Image Filename'], ['item_name', 'Asset Name'], ['location', 'Location'], ['manufacturer', 'Manufacturer'],
+    ['model_notes', 'Model Notes'], ['model_number', 'Model No.'], ['order_number', 'Order Number'], ['purchase_cost', 'Purchase Cost'], ['purchase_date', 'Purchase Date'],
+    ['requestable', 'Requestable'], ['serial', 'Serial Number'], ['status', 'Status'], ['supplier', 'Supplier'], ['warranty_months', 'Warranty'], ['checkout_class', 'Checkout Type'],
+    ['first_name', 'Checked Out to: First Name'], ['last_name', 'Checked Out to: Last Name'], ['full_name', 'Checked Out to: Full Name'], ['email', 'Checked Out to: Email'],
+    ['username', 'Checked Out to: Username'], ['checkout_location', 'Checkout to Location'], ['checkout_asset', 'Checkout to Asset Tag'], ['checkout_user', 'Checkout to Username'],
+    ['last_checkin', 'Last Checkin Date'], ['last_checkout', 'Checkout Date'], ['expected_checkin', 'Expected Checkin Date'], ['last_audit_date', 'Last Audit'], ['next_audit_date', 'Next Audit Date']],
+  user: [['id', 'ID'], ['activated', 'Activated'], ['address', 'Address'], ['avatar', 'Image'], ['city', 'City'], ['company', 'Company'], ['country', 'Country'], ['department', 'Department'],
+    ['email', 'Email'], ['employee_num', 'Employee Number'], ['end_date', 'End Date'], ['first_name', 'First Name'], ['gravatar', 'Gravatar Email'], ['jobtitle', 'Title'], ['last_name', 'Last Name'],
+    ['location', 'Location'], ['manager_first_name', 'Manager First Name'], ['manager_last_name', 'Manager Last Name'], ['manager_employee_num', 'Manager Employee Number'],
+    ['manager_username', 'Manager Username'], ['notes', 'Notes'], ['phone_number', 'Phone'], ['mobile_number', 'Mobile'], ['remote', 'Remote'], ['start_date', 'Start Date'], ['state', 'State'],
+    ['username', 'Username'], ['display_name', 'Display Name'], ['vip', 'VIP'], ['website', 'Website'], ['zip', 'Zip']],
+  license: [['asset_tag', 'Checked Out to: Asset Tag'], ['category', 'Category'], ['checkout_class', 'Checkout Type'], ['company', 'Company'], ['email', 'Checked Out to: Email'],
+    ['expiration_date', 'Expiration Date'], ['full_name', 'Checked Out to: Full Name'], ['item_name', 'License Name'], ['license_email', 'Licensed to Email'], ['license_name', 'Licensed To'],
+    ['location', 'Location'], ['maintained', 'Maintained'], ['manufacturer', 'Manufacturer'], ['min_amt', 'Min. QTY'], ['notes', 'Notes'], ['order_number', 'Order Number'],
+    ['purchase_cost', 'Purchase Cost'], ['purchase_date', 'Purchase Date'], ['purchase_order', 'Purchase Order Number'], ['reassignable', 'Reassignable'], ['seats', 'Seats'],
+    ['serial', 'Serial/Product Key'], ['supplier', 'Supplier'], ['termination_date', 'Termination Date'], ['username', 'Checked Out to: Username']],
+  accessory: [['category', 'Category'], ['company', 'Company'], ['item_name', 'Accessory Name'], ['location', 'Location'], ['manufacturer', 'Manufacturer'], ['min_amt', 'Min QTY'],
+    ['model_number', 'Model No.'], ['notes', 'Notes'], ['order_number', 'Order Number'], ['purchase_cost', 'Purchase Cost'], ['purchase_date', 'Purchase Date'], ['quantity', 'QTY'], ['supplier', 'Supplier']],
+  consumable: [['category', 'Category'], ['checkout_class', 'Checkout Type'], ['company', 'Company'], ['item_name', 'Consumable Name'], ['item_no', 'Item No.'], ['location', 'Location'],
+    ['manufacturer', 'Manufacturer'], ['min_amt', 'Min. QTY'], ['model_number', 'Model No.'], ['notes', 'Notes'], ['order_number', 'Order Number'], ['purchase_cost', 'Purchase Cost'],
+    ['purchase_date', 'Purchase Date'], ['quantity', 'QTY'], ['supplier', 'Supplier']],
+  component: [['category', 'Category'], ['company', 'Company'], ['item_name', 'Component Name'], ['location', 'Location'], ['manufacturer', 'Manufacturer'], ['min_amt', 'Min QTY'],
+    ['model_number', 'Model No.'], ['notes', 'Notes'], ['order_number', 'Order Number'], ['purchase_cost', 'Purchase Cost'], ['purchase_date', 'Purchase Date'], ['quantity', 'QTY'],
+    ['serial', 'Serial Number'], ['supplier', 'Supplier']],
+  location: [['id', 'ID'], ['company', 'Company'], ['name', 'Name'], ['address', 'Address'], ['address2', 'Address Line 2'], ['city', 'City'], ['country', 'Country'], ['currency', 'Currency'],
+    ['ldap_ou', 'LDAP Search OU'], ['manager', 'Manager Full Name'], ['manager_username', 'Manager Username'], ['notes', 'Notes'], ['parent_location', 'Parent'], ['state', 'State'],
+    ['zip', 'Zip'], ['tag_color', 'Tag Color']],
+}
+/**
+ * A CSV uploaded to Snipe-IT's importer: its headings and first row, and how it was last imported (type, and heading →
+ * field), or '' and {} if it hasn't been. uploaded is as Snipe-IT says it ("2 hours ago").
+ */
+export type ImportFile = { id: number; name: string; size: string; uploaded: string; type: ImportType | ''; headers: string[]; firstRow: string[]; mapping: Record<string, string> }
+/** Imported, or Snipe-IT's errors for each row that failed, keyed by the row's name, exactly as Snipe-IT sent them. */
+export type ImportResult = { ok: true } | { ok: false; errors: Record<string, unknown> }
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 /** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
@@ -234,6 +278,9 @@ const QUANTITIES = {
 // activity, or every Asset, is far below it.
 export const REPORT_MAX = 10000
 
+// Processing an Import may take as long as Snipe-IT allows it (its importer's time limit, 10 minutes by default).
+const IMPORT_TIMEOUT = 600000
+
 // ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
 const SEARCH_LIMIT = 50
 // The usual server maximum per page; a server that caps lower still gets paged through.
@@ -259,7 +306,7 @@ const decodeHtml = (s: string) =>
     : String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))))
 
 // Snipe-IT's messages are a string, or field → messages for validation errors; flatten to one line.
-const reason = (messages: unknown): string =>
+export const reason = (messages: unknown): string =>
   messages == null ? ''
   : typeof messages === 'object' ? Object.values(messages).flat().map(reason).join(' ')
   : String(messages)
@@ -376,6 +423,14 @@ const FIELD_LABELS: Record<string, string> = {
 // Shown elsewhere (id, custom fields), not readable (images, the permissions map), or not about the record (what the key may do).
 const HIDDEN_FIELDS = new Set(['id', 'name', 'custom_fields', 'available_actions', 'user_can_checkout', 'image', 'avatar', 'permissions', 'groups'])
 
+type RawImport = { id: number; file_path: string; name: string | null; filesize: string | null; import_type: string | null; created_at: string | null; header_row: unknown; first_row: unknown; field_map: unknown }
+const strings = (v: unknown) => (Array.isArray(v) ? v.map((x) => (x == null ? '' : String(x))) : [])
+const toImportFile = (r: RawImport): ImportFile => ({
+  id: r.id, name: r.name || r.file_path, size: r.filesize ?? '', uploaded: r.created_at ?? '',
+  type: r.import_type && Object.hasOwn(IMPORT_TYPES, r.import_type) ? (r.import_type as ImportType) : '',
+  headers: strings(r.header_row), firstRow: strings(r.first_row),
+  mapping: r.field_map && typeof r.field_map === 'object' ? Object.fromEntries(Object.entries(r.field_map).filter(([, f]) => typeof f === 'string')) : {},
+})
 type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
 type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
 type RawModel = { id: number; name: string; model_number: string | null; manufacturer: Named; category: Named; assets_count: number | null; remaining?: number | null }
@@ -557,7 +612,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
-  // Pass `post` to send it as JSON with `method` (POST unless told otherwise) instead of GETting.
+  // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
@@ -569,8 +624,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       res = await fetch(api + path, {
         signal: AbortSignal.timeout(timeout),
         redirect: 'error',
-        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && { 'Content-Type': 'application/json' }) },
-        ...(post && { method, body: JSON.stringify(post) }),
+        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && !(post instanceof FormData) && { 'Content-Type': 'application/json' }) },
+        ...(post && { method, body: post instanceof FormData ? post : JSON.stringify(post) }),
       })
     } catch (e) {
       throw failed(e)
@@ -593,6 +648,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // Some Snipe-IT versions answer a form they refuse with 422 and field → messages, like the usual 200-with-error.
     if (res.status === 422 && body && typeof body === 'object' && ('messages' in body || 'errors' in body))
       return { status: 'error', messages: (body as { messages?: unknown; errors?: unknown }).messages ?? (body as { errors?: unknown }).errors }
+    // An Import with rows that failed answers 500 with each row's errors; processImport, the only caller it reaches, reads them.
+    if ((body as { status?: unknown } | undefined)?.status === 'import-errors') return body as T
     if (!res.ok) {
       const failure = body as { messages?: unknown; message?: unknown } | undefined
       const snipeItReason = reason(failure?.messages ?? failure?.message)
@@ -656,6 +713,19 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // kind arrives from the screen over IPC; only a kind the app edits (or, to delete, a kind it deletes) reaches the URL.
   const checkKind = (kind: string, kinds: readonly string[] = EDIT_KINDS) => {
     if (!kinds.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+  }
+
+  // Whether Snipe-IT lets the Operator's key read `path`. Only a refusal (HTTP 403) means no; any other error is a reason to show.
+  async function allowed(path: string): Promise<boolean> {
+    try {
+      const body = await request(path)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return true
+    } catch (e) {
+      // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
+      if (/HTTP 403\b/.test((e as Error).message)) return false
+      throw e
+    }
   }
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
@@ -900,17 +970,49 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // Whether the Operator's own account may manage permissions: Snipe-IT lets only a superuser read groups, so ask it.
-    async canManagePermissions(): Promise<boolean> {
-      try {
-        const body = await request('/groups?limit=1')
-        // Only a refusal (HTTP 403, caught below) means "not a superuser"; any other error is a reason to show.
-        if (isError(body)) throw new Error(reason(body.messages))
-        return true
-      } catch (e) {
-        // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
-        if (/HTTP 403\b/.test((e as Error).message)) return false
-        throw e
-      }
+    canManagePermissions: () => allowed('/groups?limit=1'),
+    // Whether the Operator's own account has Snipe-IT's import permission, which listing Imports needs.
+    canImport: () => allowed('/imports'),
+
+    // The CSVs uploaded before, newest first; Snipe-IT shows an Operator who isn't a superuser only their own.
+    async imports(): Promise<ImportFile[]> {
+      const body = await request<RawImport[]>('/imports')
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.map(toImportFile)
+    },
+
+    // Uploads a CSV (its text, read by the screen) under its file name.
+    async uploadImport(name: string, csv: string): Promise<ImportFile> {
+      if (typeof name !== 'string' || typeof csv !== 'string') throw new Error('Invalid CSV')
+      const form = new FormData()
+      form.append('files[]', new Blob([csv], { type: 'text/csv' }), name)
+      const body = await request<{ files: RawImport[] }>('/imports', form, 'POST', PAGE_TIMEOUT)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return toImportFile(body.files[0])
+    },
+
+    // Imports an uploaded CSV as `type`, with each heading matched to one of the type's fields ('' or left out: not matched,
+    // so Snipe-IT reads it only if the heading is a field's name). update: Records that already exist are updated, not skipped.
+    async processImport(id: number, type: ImportType, mapping: Record<string, string>, update: boolean): Promise<ImportResult> {
+      checkId(id, 'import')
+      if (!Object.hasOwn(IMPORT_TYPES, type)) throw new Error(`Unknown import type: ${type}`)
+      if (typeof mapping !== 'object' || mapping === null) throw new Error('Invalid mapping')
+      const fields = new Set(IMPORT_FIELDS[type].map(([key]) => key))
+      const matched = Object.fromEntries(Object.entries(mapping).filter(([, field]) => field !== ''))
+      for (const field of Object.values(matched)) if (!fields.has(field)) throw new Error(`Invalid field: ${field}`)
+      // An older Snipe-IT updates when import-update is sent at all, whatever its value, so skipping leaves it out.
+      const result = await request<{ status?: string; messages?: unknown }>(`/imports/process/${id}`, { 'import-type': type, ...(update === true && { 'import-update': true }), 'column-mappings': matched }, 'POST', IMPORT_TIMEOUT)
+      if (result.status === 'import-errors' && result.messages && typeof result.messages === 'object') return { ok: false, errors: result.messages as Record<string, unknown> }
+      // Any other refusal (a form error, another Operator's CSV…) is one message, not rows.
+      if (isError(result)) throw new Error(reason(result.messages) || "Snipe-IT didn't import it.")
+      return { ok: true }
+    },
+
+    // Deletes an uploaded CSV; Snipe-IT answers one it won't delete (another Operator's) with a warning, which is passed on.
+    async deleteImport(id: number): Promise<void> {
+      checkId(id, 'import')
+      const result = await request<{ status?: string; messages?: unknown }>(`/imports/${id}`, {}, 'DELETE')
+      if (isError(result) || result.status === 'warning') throw new Error(reason(result.messages) || "Snipe-IT didn't delete it.")
     },
 
     // A User's own permissions and groups; anyone who may view the User may see them.

@@ -62,7 +62,8 @@ function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
     const method = init?.method ?? 'GET'
     calls.push(path)
     queries.push(Object.fromEntries(url.searchParams))
-    requests.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    // An upload (multipart) is kept as sent; anything else is JSON.
+    requests.push({ method, path, body: init?.body instanceof FormData ? init.body : init?.body ? JSON.parse(String(init.body)) : undefined })
     const routedOtherwise = Object.keys(routes).some((k) => k.replace(/^[A-Z]+ /, '') === path)
     const route = routes[method === 'GET' ? path : `${method} ${path}`] ?? { status: 404, body: routedOtherwise ? noEndpoint : notFound }
     return new Response(JSON.stringify(route.body), { status: route.status ?? 200 })
@@ -1326,5 +1327,88 @@ describe('labelPdf', () => {
     await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': rejected }).fetch).labelPdf(['NOMMA-004812'])).rejects.toThrow(/rejected your API key/)
     const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
     await expect(createSnipeIt(config, offline).labelPdf(['NOMMA-004812'])).rejects.toThrow(/Can't reach Snipe-IT/)
+  })
+})
+
+describe('Import', () => {
+  // Shaped like Snipe-IT's ImportsTransformer: never imported yet, so no type or mapping.
+  const upload = {
+    id: 12, file_path: '2026-10-01-093015-chromebooks.csv', filesize: '1.2 KB', name: '', import_type: '', created_at: '2 minutes ago',
+    header_row: ['Asset Tag', 'Serial', 'Model'], first_row: ['NOMMA-5000', '5CD2381KQX', 'HP Chromebook 14 G7'], field_map: null,
+  }
+  const file = {
+    id: 12, name: '2026-10-01-093015-chromebooks.csv', size: '1.2 KB', uploaded: '2 minutes ago', type: '',
+    headers: ['Asset Tag', 'Serial', 'Model'], firstRow: ['NOMMA-5000', '5CD2381KQX', 'HP Chromebook 14 G7'], mapping: {},
+  }
+
+  it('lists the CSVs uploaded before, with how each was last imported', async () => {
+    const imported = { ...upload, id: 9, import_type: 'user', field_map: { 'First': 'first_name', 'Login': 'username' } }
+    const { fetch } = fakeFetch({ '/imports': { body: [upload, imported] } })
+    expect(await createSnipeIt(config, fetch).imports()).toEqual([file, { ...file, id: 9, type: 'user', mapping: { First: 'first_name', Login: 'username' } }])
+  })
+
+  it("uploads a CSV as Snipe-IT's importer takes it (multipart files[]) and returns it with its headings", async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /imports': { body: { files: [upload] } } })
+    expect(await createSnipeIt(config, fetch).uploadImport('chromebooks.csv', 'Asset Tag,Serial,Model\r\nNOMMA-5000,5CD2381KQX,HP Chromebook 14 G7\r\n')).toEqual(file)
+    expect(requests.map((r) => [r.method, r.path])).toEqual([['POST', '/imports']])
+    const sent = (requests[0].body as FormData).get('files[]') as File
+    expect(sent.name).toBe('chromebooks.csv')
+    expect(await sent.text()).toBe('Asset Tag,Serial,Model\r\nNOMMA-5000,5CD2381KQX,HP Chromebook 14 G7\r\n')
+  })
+
+  it("an upload Snipe-IT refuses says why", async () => {
+    const refused = { status: 422, body: { status: 'error', messages: "Duplicate header 'Serial' detected, first at column: 2, repeats at column: 3", payload: null } }
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /imports': refused }).fetch).uploadImport('x.csv', 'a,Serial,Serial')).rejects.toThrow("Duplicate header 'Serial'")
+  })
+
+  it('processes it as the chosen type, with each column matched to a field; unmatched columns are left out', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /imports/process/12': { body: { status: 'success', messages: 'Your file has been imported', payload: null } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.processImport(12, 'asset', { 'Asset Tag': 'asset_tag', Model: 'asset_model', Serial: '' }, false)).toEqual({ ok: true })
+    // Matching Records are skipped: an older Snipe-IT updates when import-update is sent at all, so it isn't.
+    expect(requests[0]).toEqual({ method: 'POST', path: '/imports/process/12', body: { 'import-type': 'asset', 'column-mappings': { 'Asset Tag': 'asset_tag', Model: 'asset_model' } } })
+    await snipeIt.processImport(12, 'user', { First: 'first_name' }, true)
+    expect(requests[1].body).toEqual({ 'import-type': 'user', 'import-update': true, 'column-mappings': { First: 'first_name' } })
+  })
+
+  it("passes on Snipe-IT's errors for each row that failed, as it sent them", async () => {
+    const messages = {
+      'CB-LIB-099': { asset: { asset_tag: ['The asset tag must be unique.'] } },
+      'NOMMA-5001': { asset_model: { asset_model: ['Asset Model is required.'] } },
+    }
+    const failed = { status: 500, body: { status: 'import-errors', messages, payload: null } }
+    expect(await createSnipeIt(config, fakeFetch({ 'POST /imports/process/12': failed }).fetch).processImport(12, 'asset', {}, false)).toEqual({ ok: false, errors: messages })
+  })
+
+  it("any other refusal is one message, not rows", async () => {
+    const invalid = { status: 422, body: { status: 'error', messages: { 'import-type': ['The import-type field is required.'] }, payload: null } }
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /imports/process/12': invalid }).fetch).processImport(12, 'asset', {}, false)).rejects.toThrow('The import-type field is required.')
+    const busy = { status: 409, body: { status: 'error', messages: 'This import is already being processed.', payload: null } }
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /imports/process/12': busy }).fetch).processImport(12, 'asset', {}, false)).rejects.toThrow('already being processed')
+  })
+
+  it("refuses an unknown import type, a field the type doesn't have, or a bad id, without asking Snipe-IT", async () => {
+    const { fetch, requests } = fakeFetch({})
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.processImport(12, 'assetHistory' as 'asset', {}, false)).rejects.toThrow('Unknown import type')
+    await expect(snipeIt.processImport(12, 'location', { Name: 'asset_tag' }, false)).rejects.toThrow('Invalid field: asset_tag')
+    await expect(snipeIt.processImport(1.5, 'asset', {}, false)).rejects.toThrow('Invalid import id')
+    await expect(snipeIt.deleteImport(NaN)).rejects.toThrow('Invalid import id')
+    await expect(snipeIt.uploadImport('x.csv', 7 as unknown as string)).rejects.toThrow('Invalid CSV')
+    expect(requests).toEqual([])
+  })
+
+  it("deletes an upload; one Snipe-IT won't delete (another Operator's) says why", async () => {
+    const { fetch, requests } = fakeFetch({ 'DELETE /imports/12': { body: { status: 'success', messages: 'File successfully deleted', payload: null } } })
+    await createSnipeIt(config, fetch).deleteImport(12)
+    expect(requests.map((r) => [r.method, r.path])).toEqual([['DELETE', '/imports/12']])
+    const warning = { body: { status: 'warning', messages: 'File could not be deleted.', payload: null } }
+    await expect(createSnipeIt(config, fakeFetch({ 'DELETE /imports/12': warning }).fetch).deleteImport(12)).rejects.toThrow('File could not be deleted.')
+  })
+
+  it("only an account with Snipe-IT's import permission can import", async () => {
+    expect(await createSnipeIt(config, fakeFetch({ '/imports': { body: [] } }).fetch).canImport()).toBe(true)
+    const operator = fakeFetch({ '/imports': { status: 403, body: { status: 'error', messages: 'You do not have permission to access this area.' } } })
+    expect(await createSnipeIt(config, operator.fetch).canImport()).toBe(false)
   })
 })

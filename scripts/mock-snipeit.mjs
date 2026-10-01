@@ -173,12 +173,22 @@ function labelPdf(tags) {
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`
   return Buffer.from(`${pdf}trailer\n<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xref}\n%%EOF\n`).toString('base64')
 }
-const noGroups = { status: 'error', messages: 'You do not have permission to access this area.', payload: null }
+// Imports. Each keeps its CSV's text; processing fails a row that leaves its name or Asset Tag empty, as Snipe-IT's
+// validation would, and records the type and mapping like Snipe-IT does. MOCK_OPERATOR=limited has no import permission.
+// ponytail: splits on every comma; the mock's CSVs have no quoted cells.
+const csvRows = (text) => text.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(','))
+const imports = [{
+  id: 1, file_path: '2026-09-28-101500-new-chromebooks.csv', name: '', filesize: '96 B', import_type: 'asset', created_at: '3 days ago',
+  csv: 'Asset Tag,Serial,Model,Cart\nNOMMA-9001,5CD9001,HP Chromebook 14 G7,Cart 3\n,5CD9002,HP Chromebook 14 G7,Cart 3\n',
+  field_map: { 'Asset Tag': 'asset_tag', Serial: 'serial', Model: 'asset_model' },
+}]
+const importOf = ({ csv, ...i }) => ({ ...i, header_row: csvRows(csv)[0] ?? [], first_row: csvRows(csv)[1] ?? [] })
+const refused = { status: 'error', messages: 'You do not have permission to access this area.', payload: null }
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
   [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out))$/, ['POST']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -188,7 +198,10 @@ const noEndpoint = { status: 'error', message: '404 endpoint not found. Please c
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
-  const body = req.method === 'GET' ? {} : JSON.parse(await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s || '{}')) }))
+  const raw = req.method === 'GET' ? '' : await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s)) })
+  const type = req.headers['content-type'] ?? ''
+  // An upload is multipart; everything else JSON.
+  const body = type.startsWith('multipart/') ? await new Response(raw, { headers: { 'Content-Type': type } }).formData() : JSON.parse(raw || '{}')
   const send = (value, status = 200) => setTimeout(() => (res.writeHead(status, { 'Content-Type': 'application/json' }), res.end(JSON.stringify(value))),
     latency + rowCost * (value?.rows?.length ?? 1))
   const fail = (messages) => send({ status: 'error', messages, payload: null })
@@ -196,7 +209,7 @@ createServer(async (req, res) => {
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
   if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', permissions: limited ? {} : { superuser: '1' } })
   if (path === 'groups' || path.startsWith('groups/')) {
-    if (limited) return send(noGroups, 403)
+    if (limited) return send(refused, 403)
     if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
     const g = groups.find((x) => x.id === Number(path.split('/')[1]))
     if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
@@ -207,6 +220,31 @@ createServer(async (req, res) => {
       Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
     }
     return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
+  }
+  if (path === 'imports' || path.startsWith('imports/')) {
+    if (limited) return send(refused, 403)
+    if (path === 'imports' && req.method === 'GET') return send(imports.map(importOf))
+    if (path === 'imports') {
+      const file = body.get('files[]')
+      const csv = await file.text()
+      if (new Set(csvRows(csv)[0]).size !== (csvRows(csv)[0] ?? []).length) return send({ status: 'error', messages: 'Duplicate header detected', payload: null }, 422)
+      const i = { id: Math.max(0, ...imports.map((x) => x.id)) + 1, file_path: `2026-10-01-093015-${file.name}`, name: '', filesize: `${csv.length} B`, import_type: '', created_at: '1 second ago', csv, field_map: null }
+      imports.unshift(i)
+      return send({ files: [importOf(i)] })
+    }
+    const i = imports.find((x) => x.id === Number(path.split('/').pop()))
+    if (req.method === 'DELETE') {
+      if (!i) return send({ status: 'warning', messages: 'File could not be deleted.', payload: null })
+      imports.splice(imports.indexOf(i), 1)
+      return send({ status: 'success', messages: 'File successfully deleted', payload: null })
+    }
+    if (!i) return send({ status: 'import-errors', messages: { 0: { 0: 'The selected file is invalid.' } }, payload: null }, 500)
+    Object.assign(i, { import_type: body['import-type'], field_map: body['column-mappings'] })
+    const [head, ...rows] = csvRows(i.csv)
+    const required = { asset: 'asset_tag', user: 'username', location: 'name' }[body['import-type']] ?? 'item_name'
+    const column = head.findIndex((h) => body['column-mappings']?.[h] === required || h.toLowerCase() === required)
+    const errors = Object.fromEntries(rows.flatMap((r, n) => (column >= 0 && r[column] ? [] : [[r.find(Boolean) ?? `Row ${n + 2}`, { [required]: { [required]: [`The ${required.replace(/_/g, ' ')} field is required.`] } }]])))
+    return Object.keys(errors).length ? send({ status: 'import-errors', messages: errors, payload: null }, 500) : send({ status: 'success', messages: { redirect_url: '' }, payload: null })
   }
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
   if (path === 'hardware/labels') {
