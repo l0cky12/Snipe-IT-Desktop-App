@@ -105,3 +105,54 @@ it('refuses a Saved Report it could not open again', () => {
   expect(() => store.renameReport('missing', 'x')).toThrow('no longer exists')
   expect(store.savedReports()).toEqual([])
 })
+
+const mail = { host: 'smtp.gmail.com', port: 465, security: 'ssl' as const, username: 'operator@nomma.net', sender: 'operator@nomma.net', password: 'app-password' }
+
+it("fills in Gmail's mail server, keeps the email password encrypted across a restart, and keeps it when left blank", () => {
+  const { path, storage, store } = setup()
+  expect(store.get().mail).toEqual({ host: 'smtp.gmail.com', port: 465, security: 'ssl', username: '', sender: '', hasPassword: false, plaintext: false })
+  expect(() => store.mailServer()).toThrow('Enter the email password')
+  storage.decryptString.mockReturnValue('app-password')
+  const { password: _, ...server } = mail
+  expect(store.saveMail(mail).mail).toEqual({ ...server, hasPassword: true, plaintext: false })
+  expect(storage.encryptString).toHaveBeenCalledWith('app-password')
+  expect(readFileSync(path, 'utf8')).not.toContain('app-password')
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.mailServer()).toEqual(mail)
+  relaunched.saveMail({ ...mail, port: 587, security: 'starttls', password: '' })
+  expect(relaunched.mailServer()).toEqual({ ...mail, port: 587, security: 'starttls' })
+  // What's typed is tried before saving, with the saved password when it's left blank.
+  expect(relaunched.mailServer({ ...mail, password: '' })).toEqual(mail)
+  expect(relaunched.mailServer({ ...mail, password: 'typed' }).password).toBe('typed')
+  // The API token and Saved Reports are left alone, and logging out leaves the mail settings.
+  relaunched.save(input)
+  expect(relaunched.clearToken().mail.hasPassword).toBe(true)
+})
+
+it('never sends the saved email password to a changed mail server or account', () => {
+  const { storage, store } = setup()
+  storage.decryptString.mockReturnValue('app-password')
+  store.saveMail(mail)
+  expect(() => store.mailServer({ ...mail, host: 'smtp.evil.example', password: '' })).toThrow('Enter the email password')
+  expect(() => store.mailServer({ ...mail, username: 'other@nomma.net', password: '' })).toThrow('Enter the email password')
+  expect(store.saveMail({ ...mail, host: 'smtp.office365.com', password: '' }).mail.hasPassword).toBe(false)
+})
+
+it('without secure storage keeps the email password in the owner-only file', () => {
+  const { path, storage, store } = setup()
+  storage.isEncryptionAvailable.mockReturnValue(false)
+  expect(store.saveMail(mail).mail).toMatchObject({ hasPassword: true, plaintext: true })
+  expect(storage.encryptString).not.toHaveBeenCalled()
+  if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
+  expect(createSettingsStore(path, storage, '0.1.0').mailServer()).toEqual(mail)
+})
+
+it('refuses mail settings it could not send with', () => {
+  const { store } = setup()
+  expect(() => store.saveMail({ ...mail, host: ' ' })).toThrow('Enter the mail server')
+  for (const port of [0, 65536, 46.5, '465' as unknown as number]) expect(() => store.saveMail({ ...mail, port })).toThrow('port')
+  expect(() => store.saveMail({ ...mail, security: 'none' as 'ssl' })).toThrow('security')
+  expect(() => store.saveMail({ ...mail, username: '' })).toThrow('username')
+  expect(() => store.saveMail({ ...mail, sender: 'not an address' })).toThrow('sender')
+  expect(store.get().mail.hasPassword).toBe(false)
+})

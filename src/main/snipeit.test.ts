@@ -793,6 +793,12 @@ it('tests authentication before reporting connection success and detects the ver
   expect(await createSnipeIt(config, older.fetch).testConnection()).toEqual({ version: 'Unavailable' })
 })
 
+it("gets the Operator's own email from Snipe-IT, and says so when their account has none", async () => {
+  expect(await createSnipeIt(config, fakeFetch({ '/users/me': { body: { id: 5, email: 'operator@nomma.net' } } }).fetch).operatorEmail()).toBe('operator@nomma.net')
+  for (const email of ['', null])
+    await expect(createSnipeIt(config, fakeFetch({ '/users/me': { body: { id: 5, email } } }).fetch).operatorEmail()).rejects.toThrow('no email address')
+})
+
 it('sends the selected Checkin Location to Snipe-IT', async () => {
   const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: chromebook }, 'POST /hardware/4812/checkin': { body: { status: 'success' } } })
   await createSnipeIt(config, fetch).checkin(4812, { locationId: 9 })

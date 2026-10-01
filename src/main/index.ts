@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSettingsStore, type SavedReportInput, type SettingsInput } from './config'
+import { createSettingsStore, type MailInput, type SavedReportInput, type SettingsInput } from './config'
+import { sendMail } from './mail'
 import { createSnipeIt } from './snipeit'
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
@@ -41,6 +42,13 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => store.get())
   ipcMain.handle('settings:save', (_e, input: SettingsInput) => store.save(input))
   ipcMain.handle('settings:clearToken', () => store.clearToken())
+  ipcMain.handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
+  ipcMain.handle('settings:testMail', async (_e, input: MailInput) => {
+    const server = store.mailServer(input)
+    const to = await client().operatorEmail()
+    await sendMail(server, { to, subject: 'Snipe-IT Desktop test email', text: 'This is a test email from Snipe-IT Desktop. Your email settings work, so Reports can be emailed to you here.' })
+    return to
+  })
   // Kept here, not in the window's storage, so the Report scheduler can read them with the window closed.
   ipcMain.handle('settings:savedReports', () => store.savedReports())
   ipcMain.handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
@@ -48,7 +56,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
   ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   ipcMain.handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {

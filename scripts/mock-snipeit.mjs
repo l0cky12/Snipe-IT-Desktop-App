@@ -207,7 +207,7 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
     if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))

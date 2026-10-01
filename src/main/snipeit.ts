@@ -771,6 +771,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const version = await request<{ version: string }>('/version').catch(() => null)
       return { version: version && !isError(version) && typeof version.version === 'string' ? version.version : 'Unavailable' }
     },
+    // Where Reports and the test email go: only ever the Operator's own address.
+    async operatorEmail(): Promise<string> {
+      const user = await request<{ email?: string | null }>('/users/me')
+      if (isError(user)) throw new Error(reason(user.messages))
+      if (!user.email) throw new Error('Your Snipe-IT account has no email address. Add one to your user in Snipe-IT.')
+      return user.email
+    },
     async locations(): Promise<StatusLabel[]> {
       return (await allRows<StatusLabel>('/locations')).map(({ id, name }) => ({ id, name }))
     },
