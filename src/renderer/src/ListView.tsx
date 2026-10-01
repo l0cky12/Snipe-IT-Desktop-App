@@ -4,6 +4,7 @@ import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
+import { PrintLabel } from './AssetCodes'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -215,7 +216,7 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
+export function ListView({ kind, drill, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
@@ -223,6 +224,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   onStopBulk: () => void
   onCloseBulk: () => void
   kind: ListKind
+  baseUrl: string
   batch: AssetSummary[]
   onBatch: (a: AssetSummary[]) => void
   drill?: Drill
@@ -429,6 +431,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
             </button>
           )}
           {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+          {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
           {mayEdit(kind, [...selection.values()]) && (
             <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
           )}

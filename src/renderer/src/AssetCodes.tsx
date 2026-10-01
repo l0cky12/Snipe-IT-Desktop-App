@@ -57,22 +57,31 @@ export function AssetCodes({ baseUrl, asset }: { baseUrl: string; asset: Pick<As
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ENTITIES[c])
 
-// The app's own Label, for a Snipe-IT that can't make one over the API: a 2.25″ × 1.25″ page with the QR code beside the
-// Asset Tag and name, above the barcode (its SVG, or null when the tag can't be one) the Label's width.
-export function labelHtml(baseUrl: string, a: Pick<Asset, 'id' | 'assetTag' | 'name'>, barcodeSvg: string | null) {
-  const { size, path } = qrModules(assetCodes(baseUrl, a).url)
-  return `<!doctype html><meta charset="utf-8"><title>Label ${escapeHtml(a.assetTag)}</title><style>
+// The app's own Labels, for a Snipe-IT that can't make them over the API: a 2.25″ × 1.25″ page for each Asset with the QR
+// code beside the Asset Tag and name, above the barcode (its SVG, or null when the tag can't be one) the Label's width.
+type LabelAsset = Pick<Asset, 'id' | 'assetTag' | 'name'>
+export function labelHtml(baseUrl: string, assets: LabelAsset[], barcodeSvg: (tag: string | null) => string | null) {
+  const label = (a: LabelAsset) => {
+    const { url, tag } = assetCodes(baseUrl, a)
+    const { size, path } = qrModules(url)
+    return `<div class="label">
+<svg class="qr" viewBox="${-QUIET} ${-QUIET} ${size} ${size}" shape-rendering="crispEdges"><rect x="${-QUIET}" y="${-QUIET}" width="${size}" height="${size}" fill="#fff"/><path d="${path}"/></svg>
+<div class="text"><div class="tag">${escapeHtml(a.assetTag)}</div><div>${escapeHtml(a.name)}</div></div>
+${barcodeSvg(tag) ?? ''}</div>`
+  }
+  const title = assets.length === 1 ? `Label ${assets[0].assetTag}` : `${assets.length} Labels`
+  return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
 @page { size: 2.25in 1.25in; margin: 0 }
-body { margin: 0; width: 2.25in; height: 1.25in; box-sizing: border-box; padding: .06in; overflow: hidden; color: #000; background: #fff;
-  display: grid; grid-template: 1fr auto / .74in 1fr; gap: .04in .08in; font: 7pt sans-serif }
+body { margin: 0; color: #000; background: #fff; font: 7pt sans-serif }
+.label { width: 2.25in; height: 1.25in; box-sizing: border-box; padding: .06in; overflow: hidden; break-inside: avoid;
+  display: grid; grid-template: 1fr auto / .74in 1fr; gap: .04in .08in }
+.label + .label { break-before: page }
 .qr { width: .74in; height: .74in; align-self: center }
 .text { align-self: center; overflow: hidden; overflow-wrap: anywhere; max-height: .74in }
 .tag { font: bold 9pt monospace }
 .barcode { grid-column: 1 / -1; width: 100%; height: .34in }
 </style>
-<svg class="qr" viewBox="${-QUIET} ${-QUIET} ${size} ${size}" shape-rendering="crispEdges"><rect x="${-QUIET}" y="${-QUIET}" width="${size}" height="${size}" fill="#fff"/><path d="${path}"/></svg>
-<div class="text"><div class="tag">${escapeHtml(a.assetTag)}</div><div>${escapeHtml(a.name)}</div></div>
-${barcodeSvg ?? ''}`
+${assets.map(label).join('\n')}`
 }
 
 // The barcode stretches to the Label's width; stretching every bar alike keeps it scannable.
@@ -85,21 +94,26 @@ function labelBarcode(tag: string | null) {
   return svg.outerHTML
 }
 
-// Opens the Asset's Label in its own window to print or save: Snipe-IT's, or the app's own when Snipe-IT can't make one.
-export function PrintLabel({ baseUrl, asset }: { baseUrl: string; asset: Pick<Asset, 'id' | 'assetTag' | 'name'> }) {
+// Opens the Assets' Labels, one PDF, in their own window to print or save: Snipe-IT's, or the app's own when Snipe-IT can't
+// make them.
+// disabled: the Selection is still filling, so its Labels would miss some.
+export function PrintLabel({ baseUrl, assets, disabled }: { baseUrl: string; assets: LabelAsset[]; disabled?: boolean }) {
   const [state, setState] = useState<{ busy?: boolean; note?: string; error?: string }>({})
+  const one = assets.length === 1
   async function print() {
     setState({ busy: true })
     try {
-      const source = await window.label.print(asset.assetTag, labelHtml(baseUrl, asset, labelBarcode(assetCodes(baseUrl, asset).tag)))
-      setState(source === 'own' ? { note: "Snipe-IT didn't make this Label, so it's the app's own." } : {})
+      const source = await window.label.print(assets.map((a) => a.assetTag), labelHtml(baseUrl, assets, labelBarcode))
+      setState(source === 'own' ? { note: `Snipe-IT didn't make ${one ? 'this Label' : 'these Labels'}, so ${one ? "it's" : "they're"} the app's own.` } : {})
     } catch (e) {
       setState({ error: (e as Error).message })
     }
   }
   return (
     <>
-      <button className="quiet" disabled={state.busy} onClick={print}>{state.busy ? 'Opening Label…' : 'Print label'}</button>
+      <button className="quiet" disabled={disabled || state.busy || !assets.length} onClick={print}>
+        {state.busy ? `Opening ${one ? 'Label' : 'Labels'}…` : one ? 'Print label' : 'Print labels'}
+      </button>
       {state.note && <span className="dim">{state.note}</span>}
       {state.error && <span className="field-error" role="alert">{state.error}</span>}
     </>

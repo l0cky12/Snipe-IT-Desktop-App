@@ -1243,29 +1243,43 @@ describe('labelPdf', () => {
 
   it("POSTs the Asset Tag to Snipe-IT's label endpoint and returns its Label PDF, base64", async () => {
     const { fetch, requests } = fakeFetch({ 'POST /hardware/labels': { body: { status: 'success', messages: 'Labels were successfully generated.', payload: { pdf } } } })
-    await expect(createSnipeIt(config, fetch).labelPdf('NOMMA-004812')).resolves.toBe(pdf)
+    await expect(createSnipeIt(config, fetch).labelPdf(['NOMMA-004812'])).resolves.toBe(pdf)
     expect(requests).toEqual([{ method: 'POST', path: '/hardware/labels', body: { asset_tags: ['NOMMA-004812'] } }])
+  })
+
+  it('asks for one Label PDF covering every Asset Tag', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /hardware/labels': { body: { status: 'success', messages: 'Labels were successfully generated.', payload: { pdf } } } })
+    await expect(createSnipeIt(config, fetch).labelPdf(['NOMMA-004812', 'NOMMA-001003', 'NOMMA-000007'])).resolves.toBe(pdf)
+    expect(requests).toEqual([{ method: 'POST', path: '/hardware/labels', body: { asset_tags: ['NOMMA-004812', 'NOMMA-001003', 'NOMMA-000007'] } }])
+  })
+
+  it('refuses no Asset Tags, or ones that are not text, without asking Snipe-IT', async () => {
+    const { fetch, requests } = fakeFetch({})
+    const snipeIt = createSnipeIt(config, fetch)
+    for (const tags of [[], [''], ['NOMMA-004812', 7], 'NOMMA-004812', null])
+      await expect(snipeIt.labelPdf(tags as string[])).rejects.toThrow(/Invalid Asset Tag/)
+    expect(requests).toEqual([])
   })
 
   it('is null on a Snipe-IT without the label endpoint, so the app prints its own Label', async () => {
     // Snipe-IT's catch-all 404; one where GET /hardware/{id} holds the path answers 405 instead.
-    await expect(createSnipeIt(config, fakeFetch({}).fetch).labelPdf('NOMMA-004812')).resolves.toBeNull()
+    await expect(createSnipeIt(config, fakeFetch({}).fetch).labelPdf(['NOMMA-004812'])).resolves.toBeNull()
     const notAllowed = { status: 405, body: { status: 'error', messages: 'Method not allowed', payload: null } }
-    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': notAllowed }).fetch).labelPdf('NOMMA-004812')).resolves.toBeNull()
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': notAllowed }).fetch).labelPdf(['NOMMA-004812'])).resolves.toBeNull()
   })
 
   it("is null when Snipe-IT can't make Labels over the API (legacy label settings)", async () => {
     const legacy = { status: 500, body: { status: 'error', messages: 'Error while generating labels.', payload: { error_message: 'Enable the New Label Engine to load labels via the API' } } }
-    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': legacy }).fetch).labelPdf('NOMMA-004812')).resolves.toBeNull()
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': legacy }).fetch).labelPdf(['NOMMA-004812'])).resolves.toBeNull()
     // Success, but no PDF in it.
     const empty = { body: { status: 'success', messages: '', payload: { pdf: '' } } }
-    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': empty }).fetch).labelPdf('NOMMA-004812')).resolves.toBeNull()
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': empty }).fetch).labelPdf(['NOMMA-004812'])).resolves.toBeNull()
   })
 
   it('a rejected API key or an unreachable Snipe-IT still says so', async () => {
     const rejected = { status: 401, body: { message: 'Unauthenticated.' } }
-    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': rejected }).fetch).labelPdf('NOMMA-004812')).rejects.toThrow(/rejected your API key/)
+    await expect(createSnipeIt(config, fakeFetch({ 'POST /hardware/labels': rejected }).fetch).labelPdf(['NOMMA-004812'])).rejects.toThrow(/rejected your API key/)
     const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
-    await expect(createSnipeIt(config, offline).labelPdf('NOMMA-004812')).rejects.toThrow(/Can't reach Snipe-IT/)
+    await expect(createSnipeIt(config, offline).labelPdf(['NOMMA-004812'])).rejects.toThrow(/Can't reach Snipe-IT/)
   })
 })

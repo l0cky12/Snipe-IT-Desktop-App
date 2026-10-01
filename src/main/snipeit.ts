@@ -188,7 +188,7 @@ export type RecordForm = { fields: FormField[]; values: Record<string, string> }
 export type SaveResult = { ok: true; id: number } | { ok: false; message: string; errors: Record<string, string> }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
-/** What the screen can call: labelPdf only the main process uses, to print a Label. */
+/** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
 
 type SnipeItError = { status: 'error'; messages: unknown }
@@ -716,13 +716,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return { ...asset, history: rows.map(toHistoryEntry) }
     },
 
-    // The Label PDF Snipe-IT builds from its label settings, base64, so it matches the web UI's. null when Snipe-IT can't make
-    // one over the API: an older Snipe-IT has no endpoint (404, or 405 where GET /hardware/{id} holds the path), and one on
-    // the legacy label engine answers 500. The app then prints its own Label. ponytail: any 500 falls back, as the legacy
-    // engine's reason comes translated to the Operator's language; narrow it if a broken server should say so instead.
-    async labelPdf(assetTag: string): Promise<string | null> {
-      if (typeof assetTag !== 'string' || !assetTag) throw new Error('Invalid Asset Tag')
-      const body = await request<{ payload?: { pdf?: unknown } }>('/hardware/labels', { asset_tags: [assetTag] }).catch((e: Error & { status?: number }) => {
+    // One Label PDF for all the Asset Tags (Snipe-IT leaves out ones it doesn't have), built from Snipe-IT's label settings so
+    // it matches the web UI's, base64. null when Snipe-IT can't make Labels over the API: an older Snipe-IT has no endpoint
+    // (404, or 405 where GET /hardware/{id} holds the path), and one on the legacy label engine answers 500. The app then prints
+    // its own. ponytail: any 500 falls back, as the legacy engine's reason comes translated to the Operator's language; narrow
+    // it if a broken server should say so instead. ponytail: one request however many tags; split it if a big one times out.
+    async labelPdf(assetTags: string[]): Promise<string | null> {
+      if (!Array.isArray(assetTags) || !assetTags.length || !assetTags.every((t) => typeof t === 'string' && t)) throw new Error('Invalid Asset Tag')
+      const body = await request<{ payload?: { pdf?: unknown } }>('/hardware/labels', { asset_tags: assetTags }).catch((e: Error & { status?: number }) => {
         if (e.status === 405 || e.status === 500) return null
         throw e
       })

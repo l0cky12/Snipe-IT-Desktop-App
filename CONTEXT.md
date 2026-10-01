@@ -112,7 +112,7 @@ The Records ticked in one List, across its pages, that a Bulk Action applies to.
 _Avoid_: batch, cart
 
 **Bulk Action**:
-One action (edit shared fields, delete, add to Batch, print Labels) applied to every Record in a Selection, one Record at a time, with a result for each. Nothing is rolled back.
+One action (edit shared fields, delete, add to Batch, print Labels) applied to every Record in a Selection, one Record at a time, with a result for each. Nothing is rolled back. Printing Labels is the exception: one Label PDF for the whole Selection.
 _Avoid_: mass edit
 
 **Label**:

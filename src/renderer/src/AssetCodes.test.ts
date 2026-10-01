@@ -20,15 +20,32 @@ describe("an Asset's QR code and barcode", () => {
 describe("the app's own Label", () => {
   const asset = { id: 42, assetTag: 'NOMMA-001003', name: 'Cart <B> & "spare"' }
 
+  const barcode = (tag: string | null) => (tag ? `<svg class="barcode">${tag}</svg>` : null)
+  // Each Label is its own page.
+  const labels = (html: string) => html.split('<div class="label">').slice(1)
+
   it('is 2.25″ × 1.25″ with the QR code, barcode, Asset Tag and name', () => {
-    const html = labelHtml('https://snipe.nomma.net', asset, '<svg class="barcode"></svg>')
+    const html = labelHtml('https://snipe.nomma.net', [asset], barcode)
     expect(html).toContain('size: 2.25in 1.25in')
-    expect(html).toContain('class="qr"')
-    expect(html).toContain('<svg class="barcode"></svg>')
-    expect(html).toContain('NOMMA-001003')
+    expect(labels(html)).toHaveLength(1)
+    expect(labels(html)[0]).toContain('class="qr"')
+    expect(labels(html)[0]).toContain('<svg class="barcode">NOMMA-001003</svg>')
+    expect(labels(html)[0]).toContain('NOMMA-001003')
+  })
+
+  it('one Label per Asset, in order, each with its own barcode', () => {
+    const html = labelHtml('https://snipe.nomma.net', [asset, { id: 7, assetTag: 'NOMMA-000007', name: 'Projector' }, { id: 8, assetTag: 'Salle-É12', name: 'Cart' }], barcode)
+    const [first, second, third] = labels(html)
+    expect(labels(html)).toHaveLength(3)
+    expect(first).toContain('<svg class="barcode">NOMMA-001003</svg>')
+    expect(second).toContain('<svg class="barcode">NOMMA-000007</svg>')
+    expect(second).toContain('Projector')
+    // A tag Code 128 can't hold still gets its Label, without a barcode.
+    expect(third).toContain('Salle-É12')
+    expect(third).not.toContain('class="barcode"')
   })
 
   it("shows the name as text, not markup", () => {
-    expect(labelHtml('https://snipe.nomma.net', asset, null)).toContain('Cart &lt;B&gt; &amp; &quot;spare&quot;')
+    expect(labelHtml('https://snipe.nomma.net', [asset], () => null)).toContain('Cart &lt;B&gt; &amp; &quot;spare&quot;')
   })
 })

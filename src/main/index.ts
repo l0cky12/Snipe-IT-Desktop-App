@@ -5,15 +5,14 @@ import { join } from 'node:path'
 import { createSettingsStore, type SettingsInput } from './config'
 import { createSnipeIt } from './snipeit'
 
-/** Opens an Asset's Label to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make one. */
-export type LabelApi = { print(assetTag: string, ownLabelHtml: string): Promise<'snipeit' | 'own'> }
+/** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
+export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
 
 // A Label PDF in its own window, in Chromium's PDF viewer: its Print button opens the system print dialog, which can also
 // save it as a PDF, as can its Download button. ponytail: Electron 44 can't open that dialog for a PDF by itself
 // (webContents.print() and the viewer's window.print() never show it), so the Operator clicks Print; call print() once it can.
-async function showLabel(parent: BrowserWindow | null, assetTag: string, pdf: Buffer) {
-  const dir = await mkdtemp(join(tmpdir(), 'snipe-it-label-'))
-  const file = join(dir, `${assetTag.replace(/[^\w.-]+/g, '_')} label.pdf`)
+async function showLabel(parent: BrowserWindow | null, dir: string, name: string, pdf: Buffer) {
+  const file = join(dir, `${name.replace(/[^\w.-]+/g, '_')}.pdf`)
   await writeFile(file, pdf)
   const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: '#0d1117', webPreferences: { plugins: true } })
   win.setMenuBarVisibility(false)
@@ -21,12 +20,15 @@ async function showLabel(parent: BrowserWindow | null, assetTag: string, pdf: Bu
   await win.loadFile(file, { hash: 'navpanes=0' })
 }
 
-// The app's own Label (a page of HTML from the Asset page, see labelHtml) as a PDF the Label's size.
-async function ownLabelPdf(html: string): Promise<Buffer> {
+// The app's own Labels (a page of HTML from the screen, see labelHtml) as a PDF of Label-sized pages. From a file, as a
+// data: URL of many Labels would pass Chromium's 2 MB URL limit.
+async function ownLabelPdf(dir: string, html: string): Promise<Buffer> {
   if (typeof html !== 'string') throw new Error('Invalid Label')
+  const file = join(dir, 'labels.html')
+  await writeFile(file, html)
   const win = new BrowserWindow({ show: false, webPreferences: { javascript: false } })
   try {
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    await win.loadFile(file)
     return await win.webContents.printToPDF({ pageSize: { width: 2.25, height: 1.25 }, margins: { top: 0, bottom: 0, left: 0, right: 0 }, printBackground: true })
   } finally {
     win.destroy()
@@ -43,10 +45,17 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
   for (const name of ['testConnection', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup'] as const)
     ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
-  // Snipe-IT's Label, so it matches the web UI's; the app's own when Snipe-IT can't make one over the API.
-  ipcMain.handle('label:print', async (e, assetTag: string, ownLabelHtml: string) => {
-    const pdf = await client().labelPdf(assetTag)
-    await showLabel(BrowserWindow.fromWebContents(e.sender), assetTag, pdf ? Buffer.from(pdf, 'base64') : await ownLabelPdf(ownLabelHtml))
+  // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
+  ipcMain.handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
+    const pdf = await client().labelPdf(assetTags)
+    const dir = await mkdtemp(join(tmpdir(), 'snipe-it-label-'))
+    try {
+      const name = assetTags.length === 1 ? `${assetTags[0]} label` : `${assetTags.length} labels`
+      await showLabel(BrowserWindow.fromWebContents(e.sender), dir, name, pdf ? Buffer.from(pdf, 'base64') : await ownLabelPdf(dir, ownLabelHtml))
+    } catch (err) {
+      await rm(dir, { recursive: true, force: true })
+      throw err
+    }
     return pdf ? 'snipeit' : 'own'
   })
 

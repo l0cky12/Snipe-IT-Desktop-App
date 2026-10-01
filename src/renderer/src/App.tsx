@@ -351,7 +351,7 @@ export function App() {
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
             onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
@@ -563,7 +563,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           </button>
           <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
           <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
-          <PrintLabel baseUrl={baseUrl} asset={a} />
+          <PrintLabel baseUrl={baseUrl} assets={[a]} />
         </div>
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
