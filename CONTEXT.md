@@ -38,7 +38,7 @@ A checked-out Asset whose Expected Checkin date has passed. Means late *return* 
 _Avoid_: using "overdue" for audits
 
 **Expiring Warranty**:
-An Asset whose warranty ends within the next 90 days.
+An Asset whose warranty ends within the next 90 days. "Warranty expiring" is the same thing as a heading (dashboard list, Report name).
 
 **Operator**:
 The IT staff member running the app. Each Operator uses their own Snipe-IT API key, so History shows who did each Checkout/Checkin.
@@ -57,7 +57,15 @@ _Avoid_: model (alone), product, type
 
 **Activity Report**:
 The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, and edit of anything, with who did it and when. History is the same log for one Asset.
-_Avoid_: report (alone), audit log
+_Avoid_: audit log
+
+**Report**:
+A table over the whole inventory the Operator runs on request and can export as CSV: the Activity Report, Overdue, or Expiring Warranty, each optionally narrowed to a date range.
+_Avoid_: export (the export is the file a Report is saved to)
+
+**Record type**:
+The kind of thing an Activity Report entry is about: an Asset, License, Accessory, Consumable, Component, or User.
+_Avoid_: item type (Snipe-IT's field name)
 
 **List**:
 A page listing one kind (Assets, Users, Locations, Asset Models, or the Activity Report) that can be filtered, sorted, and paged, with Columns the Operator can show or hide.

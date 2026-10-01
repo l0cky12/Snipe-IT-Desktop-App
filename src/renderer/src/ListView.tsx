@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type StatusLabel } from '../../main/snipeit'
 import { CheckinForm, CheckoutForm, StatusChip, statusChoices } from './App'
 
 export const listName: Record<ListKind, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report' }
@@ -71,7 +71,6 @@ type Option = { value: string; label: string }
 type Filter = { key: string; label: string; options: Option[] }
 type Names = Partial<Record<'models' | 'categories' | 'departments', StatusLabel[]>>
 const toOptions = (list: StatusLabel[] = []): Option[] => list.map((l) => ({ value: String(l.id), label: l.name }))
-const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const namesNeeded: Record<ListKind, (keyof Names)[]> = { assets: ['models', 'categories'], users: ['departments'], locations: [], models: ['categories'], activity: [] }
 
 function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], locations: StatusLabel[]): Filter[] {
@@ -89,7 +88,7 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
     ]
     case 'models': return [{ key: 'category_id', label: 'Any category', options: toOptions(names.categories) }]
     case 'activity': return [
-      { key: 'action_type', label: 'Any action', options: ACTIVITY_ACTIONS.map((a) => ({ value: a, label: a === 'checkin from' ? 'Checkin' : capital(a) })) },
+      { key: 'action_type', label: 'Any action', options: ACTIVITY_ACTIONS.map((a) => ({ value: a, label: actionLabel(a) })) },
     ]
     default: return []
   }

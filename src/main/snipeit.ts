@@ -99,6 +99,18 @@ export type Dashboard = {
   }[K]
 }
 
+/** The Reports: the Activity Report over a date range, and the Overdue and Warranty expiring lists in full. */
+export const REPORTS = ['activity', 'overdue', 'expiring'] as const
+export type ReportKind = (typeof REPORTS)[number]
+/** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
+export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
+/** Glossary name for each Record type, for the Activity Report's filter and column. */
+export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
+/** from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty end). */
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string }
+/** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
+export type Report = { columns: string[]; rows: string[][]; capped: boolean }
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 
 type SnipeItError = { status: 'error'; messages: unknown }
@@ -139,6 +151,9 @@ const QUANTITIES = {
   consumables: ['/consumables', 'qty', 'remaining'],
   components: ['/components', 'qty', 'remaining'],
 } as const
+// ponytail: a report holds this many rows at most (it says so when it's cut short); a school year of activity is far below it.
+const REPORT_MAX = 10000
+
 // ponytail: first 50 text-search matches only; a rail longer than that isn't scannable anyway.
 const SEARCH_LIMIT = 50
 // The usual server maximum per page; a server that caps lower still gets paged through.
@@ -209,13 +224,15 @@ const actions: Record<string, { label: string; prep: string }> = {
   checkout: { label: 'Checkout', prep: 'to ' },
   'checkin from': { label: 'Checkin', prep: 'from ' },
 }
+/** Glossary label for a Snipe-IT action_type. */
+export const actionLabel = (a: string) => actions[a]?.label ?? a.charAt(0).toUpperCase() + a.slice(1)
 
 function toHistoryEntry(raw: RawActivity): HistoryEntry {
   const known = actions[raw.action_type]
   const target = raw.target?.name
   return {
     when: raw.created_at?.datetime.slice(0, 16) ?? '',
-    action: known?.label ?? raw.action_type.charAt(0).toUpperCase() + raw.action_type.slice(1),
+    action: actionLabel(raw.action_type),
     operator: (raw.created_by ?? raw.admin)?.name ?? '',
     detail: target ? (known?.prep ?? '') + target : '',
     // Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
@@ -271,6 +288,7 @@ export const LIST_SORTS = {
 // Snipe-IT action_type values the Activity Report can be filtered by.
 // Not item_type: Snipe-IT only applies it together with one item_id.
 export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
+const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note']
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
 // user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type).
@@ -464,6 +482,53 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(page)) throw new Error(reason(page.messages))
       const now = today()
       return { total: page.total, rows: page.rows.map((r) => spec.row(r as never, now)) as ListRows[K][] }
+    },
+
+    // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
+    // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
+    async report(kind: ReportKind, { from, to, itemType, actionType }: ReportQuery = {}): Promise<Report> {
+      // The query arrives from the screen over IPC.
+      if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
+      for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
+      if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
+      if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
+      const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
+      if (kind === 'activity') {
+        const rows: string[][] = []
+        // Each page starts where the last one's rows ended: a server may cap pages below PAGE_LIMIT.
+        for (let offset = 0; ; ) {
+          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }) })
+          const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+          if (isError(page)) throw new Error(reason(page.messages))
+          for (const r of page.rows) {
+            const day = r.created_at?.datetime.slice(0, 10) ?? ''
+            // An entry without a date can't be placed in the range, and mustn't end the report either.
+            if (from && day && day < from) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
+            if (!inRange(day) || (itemType && r.item?.type !== itemType)) continue
+            // Full, and one more matches: it's cut short.
+            if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
+            const e = toHistoryEntry(r)
+            rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
+          }
+          offset += page.rows.length
+          if (!page.rows.length || offset >= page.total) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
+        }
+      }
+      const now = today()
+      const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
+      if (kind === 'overdue')
+        return {
+          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
+          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
+            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
+          capped: false,
+        }
+      return {
+        columns: ['Asset Tag', 'Name', 'Status', 'Warranty ends', 'Days left'],
+        rows: assets.flatMap((a) => (a.warranty && !a.warranty.expired && inRange(a.warrantyEnd!) ? [{ a, left: a.warranty.daysLeft }] : [])).sort((x, y) => x.left - y.left)
+          .map(({ a, left }) => [a.assetTag, a.name, a.status, a.warrantyEnd!, String(left)]),
+        capped: false,
+      }
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.

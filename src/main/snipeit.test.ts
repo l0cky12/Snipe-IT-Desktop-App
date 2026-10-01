@@ -863,6 +863,79 @@ describe('list', () => {
   })
 })
 
+describe('report', () => {
+  const entry = (id: number, datetime: string, type = 'asset', action_type = 'checkout') => ({
+    id, action_type, created_at: { datetime }, created_by: { id: 5, name: 'E. Caldwell' }, target: { id: 311, name: 'Jordan Reyes' }, note: null, item: { id, name: `NOMMA-${id}`, type },
+  })
+  // Newest first, as Snipe-IT sends it, across two pages of 500.
+  const log = [
+    ...Array.from({ length: 500 }, (_, i) => entry(1000 - i, '2026-09-20 10:00:00')),
+    entry(3, '2026-09-10 09:00:00', 'license'), entry(2, '2026-09-05 12:00:00'), entry(1, '2026-08-01 08:00:00'),
+  ]
+  function activityFetch(pageMax = 500) {
+    const offsets: number[] = []
+    const fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      const offset = Number(url.searchParams.get('offset'))
+      offsets.push(offset)
+      return new Response(JSON.stringify({ total: log.length, rows: log.slice(offset, offset + Math.min(pageMax, Number(url.searchParams.get('limit')))) }))
+    }) as typeof globalThis.fetch
+    return { fetch, offsets }
+  }
+
+  it('the Activity Report keeps what happened in the date range and record type, and stops paging once past the start', async () => {
+    const { fetch, offsets } = activityFetch()
+    const r = await createSnipeIt(config, fetch).report('activity', { from: '2026-09-01', to: '2026-09-15', itemType: 'asset' })
+    expect(r.columns).toEqual(['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note'])
+    expect(r.rows).toEqual([['2026-09-05 12:00', 'Checkout', 'E. Caldwell', 'Assets', 'NOMMA-2', 'to Jordan Reyes', '']])
+    expect(offsets).toEqual([0, 500])
+    const licenses = await createSnipeIt(config, activityFetch().fetch).report('activity', { from: '2026-09-01', itemType: 'license' })
+    expect(licenses.rows.map((row) => row[4])).toEqual(['NOMMA-3'])
+  })
+
+  it("an entry without a date is left out of a dated report without ending it early", async () => {
+    const undated = { ...entry(9, ''), created_at: null }
+    const rows = [entry(8, '2026-09-20 10:00:00'), undated, entry(7, '2026-09-10 10:00:00')]
+    const { fetch } = fakeFetch({ '/reports/activity': { body: { total: 3, rows } } })
+    expect((await createSnipeIt(config, fetch).report('activity', { from: '2026-09-01' })).rows.map((r) => r[4])).toEqual(['NOMMA-8', 'NOMMA-7'])
+  })
+
+  it('a server that caps pages below 500 is still paged through without gaps', async () => {
+    const { fetch, offsets } = activityFetch(200)
+    const r = await createSnipeIt(config, fetch).report('activity', { from: '2026-09-01' })
+    expect(r.rows).toHaveLength(502)
+    expect(offsets).toEqual([0, 200, 400])
+  })
+
+  it('an unknown report, action, record type or a malformed date is refused without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.report('everything' as 'activity')).rejects.toThrow('Unknown report')
+    await expect(snipeIt.report('activity', { actionType: 'drop table' })).rejects.toThrow('Unknown action')
+    await expect(snipeIt.report('activity', { itemType: 'App\\Models\\Asset' })).rejects.toThrow('Unknown record type')
+    await expect(snipeIt.report('overdue', { from: '9/1/2026' })).rejects.toThrow('YYYY-MM-DD')
+    expect(calls).toEqual([])
+  })
+
+  it('Overdue and Warranty expiring are the dashboard lists in full, with their dates, narrowed to the date range', async () => {
+    const asset = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: null, warranty_expires: null, ...fields })
+    const hardware = [
+      asset(1, { expected_checkin: { date: '2026-09-20' } }), asset(2, { expected_checkin: { date: '2026-08-01' } }), asset(3, { expected_checkin: { date: '2026-09-23' } }),
+      asset(4, { warranty_expires: { date: '2026-10-01' } }), asset(5, { warranty_expires: { date: '2026-12-01' } }), asset(6, { warranty_expires: { date: '2026-09-01' } }),
+    ]
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    const snipeIt = createSnipeIt(config, fetch, today)
+    expect(await snipeIt.report('overdue')).toEqual({
+      columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
+      rows: [['NOMMA-2', 'CB-2', 'Jordan Reyes', '2026-08-01', '54'], ['NOMMA-1', 'CB-1', 'Jordan Reyes', '2026-09-20', '4'], ['NOMMA-3', 'CB-3', 'Jordan Reyes', '2026-09-23', '1']],
+      capped: false,
+    })
+    expect((await snipeIt.report('overdue', { from: '2026-09-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-1', 'NOMMA-3'])
+    expect((await snipeIt.report('expiring')).rows).toEqual([['NOMMA-4', 'CB-4', 'Deployed', '2026-10-01', '7'], ['NOMMA-5', 'CB-5', 'Deployed', '2026-12-01', '68']])
+    expect((await snipeIt.report('expiring', { to: '2026-11-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-4'])
+  })
+})
+
 describe('updateStatus', () => {
   it('PATCHes only the new status onto the Asset', async () => {
     const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: { status: 'success', messages: 'Asset updated.' } } })
