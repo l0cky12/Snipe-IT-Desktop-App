@@ -80,6 +80,8 @@
     "vitest": "^5.0.1"
   },
   "dependencies": {
-    "lucide-react": "^1.48.0"
+    "jsbarcode": "^3.12.3",
+    "lucide-react": "^1.48.0",
+    "qrcode-generator": "^2.0.4"
   }
 }

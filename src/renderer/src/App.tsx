@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { flushSync } from 'react-dom'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -9,6 +10,7 @@ import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
+import { AssetCodes } from './AssetCodes'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -32,6 +34,14 @@ export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
+
+// Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
+// outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
+export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
+  !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
+
+// Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
+const PANEL_KEY = 'scanPanelOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
@@ -78,6 +88,14 @@ export function App() {
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
+  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== 'false')
+  useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen])
+  // Rendered now, so the box can take focus (and the keystroke being handled) straight away; what was in it is selected, so a scan replaces it.
+  function openPanel() {
+    flushSync(() => setPanelOpen(true))
+    search.current?.focus()
+    search.current?.select()
+  }
   // Bumped by every lookup or open; a result that returns after a newer one started is discarded.
   const latest = useRef(0)
   // The lookup or open still loading, if any; the rail says so until it's done or discarded.
@@ -86,6 +104,17 @@ export function App() {
   const cancel = () => (setBusy(0), ++latest.current)
 
   useEffect(() => search.current?.focus(), [])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = e.target instanceof Element && !!e.target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]')
+      if (!opensPanel(e, inField)) return
+      // Ctrl+K is the app's; a scanned character goes on to the box once it has focus.
+      if (e.ctrlKey) e.preventDefault()
+      openPanel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   useEffect(() => {
     window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
@@ -192,8 +221,8 @@ export function App() {
   }
 
   const selected = view ? undefined : asset?.id
-  // The dashboard stays in the main area, so the Operator can click through several segments in turn.
-  const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
+  // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the panel, so it opens.
+  const showSegment = (s: AssetSegment) => (setPanelOpen(true), setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   const go = (page: ListKind, drill?: Drill) => (setShowSettings(false), setView({ page, drill, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -211,11 +240,25 @@ export function App() {
   // The All records button stands for every page not in the strip.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
+  // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
+  const railMessage = <>
+    {busy > 0 && <p className="message" role="status">Loading…</p>}
+    {message.text && (
+      <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
+        {message.text}
+      </p>
+    )}
+  </>
+
   return (
     <div className="layout">
       <aside className="rail">
         <nav className="strip" aria-label="Pages">
           <span className="logo" aria-hidden="true">S</span>
+          <button title={panelOpen ? 'Close Scan/Search' : 'Scan/Search (Ctrl+K)'} aria-label="Scan/Search panel" aria-expanded={panelOpen} aria-controls={panelOpen ? 'scan-panel' : undefined} className="nav panel-nav"
+            onClick={() => (panelOpen ? setPanelOpen(false) : openPanel())}>
+            <Search size={20} />
+          </button>
           <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
             <LayoutGrid size={20} />
           </button>
@@ -235,7 +278,7 @@ export function App() {
           </button>
           <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
         </nav>
-        <div className="panel">
+        {panelOpen && <div className="panel" id="scan-panel">
           <form onSubmit={onSubmit}>
             <ScanBarcode size={16} />
             <input
@@ -248,12 +291,7 @@ export function App() {
               aria-label="Scan an Asset Tag, or search everything"
             />
           </form>
-          {busy > 0 && <p className="message" role="status">Loading…</p>}
-          {message.text && (
-            <p className={message.error ? 'message error' : 'message'} role={message.error ? 'alert' : undefined}>
-              {message.text}
-            </p>
-          )}
+          {railMessage}
           <div className="list">
             {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={choose} />}
             {others.map((m) => 'error' in m
@@ -276,15 +314,15 @@ export function App() {
               ))}
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={choose} />}
           </div>
-        </div>
+        </div>}
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} onNew={(k) => editRecord(k, null)} />
-        : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
+        : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
             onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
@@ -444,7 +482,8 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+  baseUrl: string
   onEdit: () => void
   onDeleted: () => void
   onOpenRecord: (kind: RecordKind, id: number) => void
@@ -505,6 +544,7 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           </div>
         ))}
       </div>
+      <AssetCodes baseUrl={baseUrl} asset={a} />
       {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
       <details className="all-fields">
         <summary className="section">All fields ({a.fields.length})</summary>

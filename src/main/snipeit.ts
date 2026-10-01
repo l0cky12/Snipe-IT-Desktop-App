@@ -639,9 +639,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const model = await request<{ fieldset?: Named }>(`/models/${modelId}`)
     if (isError(model)) throw new Error(reason(model.messages))
     if (!model.fieldset?.id) return []
-    const set = await request<{ rows: { name: string; db_column_name: string; type: string; format: string; required: number | boolean; field_values_array: string[] | null }[] }>(`/fieldsets/${model.fieldset.id}/fields`)
+    // The Fieldset brings its Custom Fields; Snipe-IT's /fieldsets/{id}/fields answers only a POST.
+    const set = await request<{ fields: { rows: { name: string; db_column_name: string; type: string; format: string; required: number | boolean; field_values_array: string[] | null }[] } }>(`/fieldsets/${model.fieldset.id}`)
     if (isError(set)) throw new Error(reason(set.messages))
-    return set.rows.map((c) => ({
+    return set.fields.rows.map((c) => ({
       key: c.db_column_name, label: c.name, required: !!c.required,
       ...(c.field_values_array?.length ? { type: c.type === 'checkbox' ? 'choices' as const : 'choice' as const, options: c.field_values_array }
         : { type: c.type === 'textarea' ? 'textarea' as const : c.format === 'DATE' ? 'date' as const : c.format === 'NUMERIC' ? 'number' as const : 'text' as const }),
