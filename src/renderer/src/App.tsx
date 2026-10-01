@@ -10,6 +10,7 @@ import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
+import { AssetCodes } from './AssetCodes'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -321,7 +322,7 @@ export function App() {
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={addToBatch} onNew={(k) => editRecord(k, null)} />
-        : asset ? <AssetSheet defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
+        : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
             onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
@@ -481,7 +482,8 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+  baseUrl: string
   onEdit: () => void
   onDeleted: () => void
   onOpenRecord: (kind: RecordKind, id: number) => void
@@ -542,6 +544,7 @@ function AssetSheet({ asset: a, statusLabels, onCheckin, onCheckout, defaultLoca
           </div>
         ))}
       </div>
+      <AssetCodes baseUrl={baseUrl} asset={a} />
       {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
       <details className="all-fields">
         <summary className="section">All fields ({a.fields.length})</summary>
