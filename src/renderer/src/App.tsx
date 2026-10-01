@@ -10,7 +10,7 @@ import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
-import { AssetCodes } from './AssetCodes'
+import { AssetCodes, PrintLabel } from './AssetCodes'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -532,6 +532,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           </button>
           <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
           <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
+          <PrintLabel baseUrl={baseUrl} asset={a} />
         </div>
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>

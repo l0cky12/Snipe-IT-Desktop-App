@@ -159,12 +159,26 @@ const groupsOf = (ids) => ({ total: ids.length, rows: ids.map((id) => ({ id, nam
 for (const u of users) Object.assign(u, { groups: groupsOf(u.id % 3 ? [2] : [1]), permissions: u.id === 1 ? { 'reports.view': '1', 'assets.delete': '-1' } : {} })
 const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true }
 for (const r of [...assets, ...users, ...locations]) r.available_actions = actions
+// Labels. The label endpoint answers with a one-page PDF naming the Asset Tags, standing in for Snipe-IT's label engine.
+// MOCK_LABELS=legacy answers as a Snipe-IT on the legacy label engine does; MOCK_LABELS=none as one without the endpoint.
+const labelEngine = process.env.MOCK_LABELS
+function labelPdf(tags) {
+  const text = `BT /F1 9 Tf 10 60 Td (Mock Snipe-IT Label) Tj 0 -16 Td (${tags.join(' ')}) Tj ET`
+  const objects = ['<</Type/Catalog/Pages 2 0 R>>', '<</Type/Pages/Kids[3 0 R]/Count 1>>', '<</Type/Page/Parent 2 0 R/MediaBox[0 0 162 90]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+    `<</Length ${text.length}>>stream\n${text}\nendstream`, '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>']
+  let pdf = '%PDF-1.4\n'
+  const offsets = objects.map((o, i) => [pdf.length, (pdf += `${i + 1} 0 obj\n${o}\nendobj\n`)][0])
+  const xref = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`
+  return Buffer.from(`${pdf}trailer\n<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xref}\n%%EOF\n`).toString('base64')
+}
 const noGroups = { status: 'error', messages: 'You do not have permission to access this area.', payload: null }
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
   [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out))$/, ['POST']],
+  ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
 ]
@@ -194,6 +208,12 @@ createServer(async (req, res) => {
     return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
   }
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
+  if (path === 'hardware/labels') {
+    const found = (body.asset_tags ?? []).filter((t) => assets.some((a) => a.asset_tag === t))
+    if (!found.length) return send({ status: 'error', messages: 'Asset does not exist.', payload: null }, 404)
+    if (labelEngine === 'legacy') return send({ status: 'error', messages: 'Error while generating labels.', payload: { error_message: 'Enable the New Label Engine to load labels via the API' } }, 500)
+    return send({ status: 'success', messages: 'Labels were successfully generated.', payload: { pdf: labelPdf(found) } })
+  }
   if ((m = path.match(/^hardware\/bytag\/(.+)$/))) return send(assets.find((a) => a.asset_tag.toLowerCase() === decodeURIComponent(m[1]).toLowerCase()) ?? { status: 'error', messages: 'Asset does not exist.' })
   if ((m = path.match(/^fieldsets\/(\d+)(\/fields)?$/))) {
     const fields = { total: fieldset.fields.length, rows: fieldset.fields }

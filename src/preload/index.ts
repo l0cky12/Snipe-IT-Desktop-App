@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
-import type { SnipeIt } from '../main/snipeit'
+import type { SnipeItBridge } from '../main/snipeit'
+import type { LabelApi } from '../main/index'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message.
 // ponytail: matches Electron's current wording; if it changes, the Operator sees the wrapper text too, nothing is lost.
@@ -9,7 +10,7 @@ const call = (name: string) => (...args: unknown[]) =>
     throw new Error(e.message.replace(/^Error invoking remote method '[^']*': (\w*Error: )?/, ''))
   })
 
-const snipeIt: SnipeIt = {
+const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
   locations: call('snipeit:locations'),
   lookup: call('snipeit:lookup'),
@@ -38,6 +39,9 @@ const snipeIt: SnipeIt = {
 }
 
 contextBridge.exposeInMainWorld('snipeIt', snipeIt)
+
+const label: LabelApi = { print: call('label:print') }
+contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken') }
 contextBridge.exposeInMainWorld('settings', settings)
