@@ -104,6 +104,8 @@ export const REPORTS = ['activity', 'overdue', 'expiring'] as const
 export type ReportKind = (typeof REPORTS)[number]
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
+/** Glossary name for each Record type, for the Activity Report's filter and column. */
+export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /** from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty end). */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -222,13 +224,15 @@ const actions: Record<string, { label: string; prep: string }> = {
   checkout: { label: 'Checkout', prep: 'to ' },
   'checkin from': { label: 'Checkin', prep: 'from ' },
 }
+/** Glossary label for a Snipe-IT action_type. */
+export const actionLabel = (a: string) => actions[a]?.label ?? a.charAt(0).toUpperCase() + a.slice(1)
 
 function toHistoryEntry(raw: RawActivity): HistoryEntry {
   const known = actions[raw.action_type]
   const target = raw.target?.name
   return {
     when: raw.created_at?.datetime.slice(0, 16) ?? '',
-    action: known?.label ?? raw.action_type.charAt(0).toUpperCase() + raw.action_type.slice(1),
+    action: actionLabel(raw.action_type),
     operator: (raw.created_by ?? raw.admin)?.name ?? '',
     detail: target ? (known?.prep ?? '') + target : '',
     // Snipe-IT renders notes from Markdown into inline HTML; show the plain text.
@@ -504,7 +508,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             // Full, and one more matches: it's cut short.
             if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
             const e = toHistoryEntry(r)
-            rows.push([e.when, e.action, e.operator, r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
+            rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
           }
           offset += page.rows.length
           if (!page.rows.length || offset >= page.total) return { columns: ACTIVITY_COLUMNS, rows, capped: false }

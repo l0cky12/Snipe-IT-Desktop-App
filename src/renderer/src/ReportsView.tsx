@@ -1,17 +1,15 @@
 import { useRef, useState } from 'react'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
 
 const reportName: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
 // What the date range bounds in each report.
 const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends' }
-const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
-const actionName = (a: string) => (a === 'checkin from' ? 'Checkin' : a.charAt(0).toUpperCase() + a.slice(1))
 
 // Every cell quoted, so commas, quotes and line breaks survive. A cell a spreadsheet would run as a formula
 // (=, +, -, @ first) gets a leading ' so a note can't become one. The byte-order mark lets Excel read it as UTF-8.
 export function toCsv(columns: string[], rows: string[][]): string {
   const cell = (v: string) => `"${(/^[=+\-@\t\r]/.test(v) ? `'${v}` : v).replace(/"/g, '""')}"`
-  return '﻿' + [columns, ...rows].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n'
+  return '\uFEFF' + [columns, ...rows].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n'
 }
 
 // Runs when asked (a report can page through a lot), not on every change of a filter.
@@ -54,7 +52,10 @@ export function ReportsView() {
     const url = URL.createObjectURL(new Blob([toCsv(r.columns, r.rows)], { type: 'text/csv;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = `${reportName[what].toLowerCase().replace(/ /g, '-')}-${new Date().toISOString().slice(0, 10)}.csv`
+    // Local date, so a late-evening export isn't stamped with tomorrow (UTC).
+    const d = new Date()
+    const stamp = [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-')
+    a.download = `${reportName[what].toLowerCase().replace(/ /g, '-')}-${stamp}.csv`
     a.click()
     URL.revokeObjectURL(url)
     setExporting(false)
@@ -82,7 +83,7 @@ export function ReportsView() {
               </select>
               <select value={query.actionType ?? ''} onChange={(e) => set({ actionType: e.target.value })} aria-label="Action">
                 <option value="">Any action</option>
-                {ACTIVITY_ACTIONS.map((a) => <option key={a} value={a}>{actionName(a)}</option>)}
+                {ACTIVITY_ACTIONS.map((a) => <option key={a} value={a}>{actionLabel(a)}</option>)}
               </select>
             </>
           )}
@@ -90,8 +91,8 @@ export function ReportsView() {
         </form>
       </header>
       {exporting && report && ran && (
-        <div className="ferpa" role="alert">
-          <p><b>This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
+        <div className="ferpa" role="alertdialog" aria-labelledby="ferpa-heading">
+          <p><b id="ferpa-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
             post it, or save it to a shared or personal drive, and delete it when you're done.</p>
           <div className="actions">
             <button onClick={() => download(report, ran.kind)}>I understand, export {report.rows.length.toLocaleString()} rows</button>

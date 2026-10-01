@@ -887,7 +887,7 @@ describe('report', () => {
     const { fetch, offsets } = activityFetch()
     const r = await createSnipeIt(config, fetch).report('activity', { from: '2026-09-01', to: '2026-09-15', itemType: 'asset' })
     expect(r.columns).toEqual(['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note'])
-    expect(r.rows).toEqual([['2026-09-05 12:00', 'Checkout', 'E. Caldwell', 'asset', 'NOMMA-2', 'to Jordan Reyes', '']])
+    expect(r.rows).toEqual([['2026-09-05 12:00', 'Checkout', 'E. Caldwell', 'Assets', 'NOMMA-2', 'to Jordan Reyes', '']])
     expect(offsets).toEqual([0, 500])
     const licenses = await createSnipeIt(config, activityFetch().fetch).report('activity', { from: '2026-09-01', itemType: 'license' })
     expect(licenses.rows.map((row) => row[4])).toEqual(['NOMMA-3'])
