@@ -154,6 +154,7 @@ export type Dashboard = {
 /** The Reports: the Activity Report over a date range, and the Overdue and Warranty expiring lists in full. */
 export const REPORTS = ['activity', 'overdue', 'expiring'] as const
 export type ReportKind = (typeof REPORTS)[number]
+export const REPORT_NAMES: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */

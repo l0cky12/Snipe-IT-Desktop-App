@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, deleteQuestion, exportTable, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, shownColumns, tick, type BulkRun } from './ListView'
+import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -149,36 +149,8 @@ describe('Bulk edit', () => {
 })
 
 describe('Export CSV', () => {
-  const can = { checkout: true, checkin: true, update: true, delete: true }
-  const asset = {
-    id: 1, assetTag: 'NOMMA-1', name: 'CB-01', model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed',
-    assignee: { type: 'user' as const, id: 311, name: 'Jordan Reyes' }, checkoutAllowed: false, location: 'Library', category: 'Chromebook',
-    serial: '5CD1', purchaseDate: null, warrantyEnd: null, expectedCheckin: null, overdueDays: null, warranty: null, can,
-  }
-
-  it('holds only the visible Columns, in the order the List shows them', () => {
-    const t = exportTable('assets', ['assignee', 'assetTag', 'status', 'serial'], [asset])
-    expect(t.columns).toEqual(['Asset Tag', 'Status', 'Assignee', 'Serial'])
-    expect(t.rows).toEqual([['NOMMA-1', 'Deployed', 'Jordan Reyes', '5CD1']])
-  })
-
-  it('cells are the text the List shows: names, not records; empty, not a dash', () => {
-    const t = exportTable('assets', ['assetTag', 'assignee', 'expectedCheckin', 'location'], [{ ...asset, assignee: null, location: '' }])
-    expect(t.rows).toEqual([['NOMMA-1', '', '', '']])
-    const activity = { id: 7, when: '2026-08-17 15:40', action: 'Checkin', operator: 'E. Caldwell', detail: 'from Sam Whitaker', note: 'keyboard sticky', item: { type: 'asset', id: 4812, name: 'CB-LIB-012' }, can }
-    expect(exportTable('activity', ['when', 'item', 'note'], [activity]).rows).toEqual([['2026-08-17 15:40', 'CB-LIB-012', 'keyboard sticky']])
-    expect(exportTable('statuslabels', ['name', 'type', 'assets'], [{ id: 1, name: 'Broken', type: 'undeployable', assets: 3, can }]).rows).toEqual([['Broken', 'Undeployable', '3']])
-  })
-
   it('Lists whose rows hold Users or Assignees need the FERPA confirmation', () => {
     expect(['assets', 'users', 'activity', 'departments'].every((k) => holdsStudentInfo(k as 'assets'))).toBe(true)
     expect(['suppliers', 'locations', 'licenses', 'statuslabels'].some((k) => holdsStudentInfo(k as 'assets'))).toBe(false)
-  })
-})
-
-describe('a Saved Report opened again', () => {
-  it('shows its Columns in the List order, always the first, without ones the List no longer has', () => {
-    expect(shownColumns('assets', ['serial', 'gone', 'status'])).toEqual(['assetTag', 'status', 'serial'])
-    expect(shownColumns('users', null)).toEqual(['name', 'username', 'department', 'location', 'assets'])
   })
 })

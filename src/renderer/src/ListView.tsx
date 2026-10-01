@@ -6,6 +6,7 @@ import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
 import { FerpaConfirm, saveCsv } from './ReportsView'
+import { cellText, exportTable, LIST_COLUMNS, shownColumns, type AnyColumn } from '../../main/export'
 import type { SavedReport } from '../../main/config'
 
 export const listName: Record<ListKind, string> = {
@@ -13,121 +14,16 @@ export const listName: Record<ListKind, string> = {
   licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', categories: 'Categories',
   manufacturers: 'Manufacturers', suppliers: 'Suppliers', departments: 'Departments', companies: 'Companies', statuslabels: 'Status Labels',
 }
-// The stocked kinds share their columns: what it is, where it is, and how many are left
-// (Available for Accessories and Components, Remaining for Consumables, as CONTEXT.md names them).
-const stockColumns = <K extends 'accessories' | 'consumables' | 'components'>(left: string): Column<K>[] => [
-  { key: 'name', label: 'Name' },
-  { key: 'category', label: 'Category' },
-  { key: 'manufacturer', label: 'Manufacturer', hidden: true },
-  { key: 'location', label: 'Location' },
-  { key: 'qty', label: 'Quantity' },
-  { key: 'remaining', label: left },
-]
-
-// A List's columns: the first is always shown and opens the row; the rest the Operator can hide. hidden = hidden until shown.
-type Column<K extends ListKind> = { key: keyof ListRows[K] & string; label: string; hidden?: true; cell?: (row: ListRows[K]) => ReactNode }
-// The same columns without their List's row type, for code that works on whichever List is open.
-type AnyColumn = { key: string; label: string; hidden?: true; cell?: (row: never) => ReactNode }
-const COLUMNS: { [K in ListKind]: Column<K>[] } = {
-  assets: [
-    { key: 'assetTag', label: 'Asset Tag' },
-    { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', cell: (a) => <StatusChip asset={a} /> },
-    { key: 'model', label: 'Asset Model' },
-    { key: 'category', label: 'Category' },
-    { key: 'location', label: 'Location' },
-    { key: 'assignee', label: 'Assignee', cell: (a) => a.assignee?.name },
-    { key: 'serial', label: 'Serial', hidden: true },
-    { key: 'expectedCheckin', label: 'Expected checkin', hidden: true },
-    { key: 'purchaseDate', label: 'Purchased', hidden: true },
-    { key: 'warrantyEnd', label: 'Warranty ends', hidden: true },
-  ],
-  users: [
-    { key: 'name', label: 'Name' },
-    { key: 'username', label: 'Username' },
-    { key: 'email', label: 'Email', hidden: true },
-    { key: 'department', label: 'Department' },
-    { key: 'location', label: 'Location' },
-    { key: 'assets', label: 'Assets' },
-  ],
-  locations: [
-    { key: 'name', label: 'Name' },
-    { key: 'parent', label: 'Parent' },
-    { key: 'city', label: 'City', hidden: true },
-    { key: 'assets', label: 'Assets' },
-    { key: 'checkedOut', label: 'Checked out' },
-    { key: 'users', label: 'Users' },
-  ],
-  models: [
-    { key: 'name', label: 'Name' },
-    { key: 'modelNumber', label: 'Model No.' },
-    { key: 'manufacturer', label: 'Manufacturer' },
-    { key: 'category', label: 'Category' },
-    { key: 'assets', label: 'Assets' },
-    { key: 'available', label: 'Available' },
-  ],
-  activity: [
-    { key: 'when', label: 'When' },
-    { key: 'action', label: 'Action' },
-    { key: 'operator', label: 'Operator' },
-    { key: 'item', label: 'Item', cell: (r) => r.item?.name },
-    { key: 'detail', label: 'Detail' },
-    { key: 'note', label: 'Note', cell: (r) => r.note && <span className="note">{r.note}</span> },
-  ],
-  licenses: [
-    { key: 'name', label: 'Name' },
-    { key: 'manufacturer', label: 'Manufacturer' },
-    { key: 'category', label: 'Category', hidden: true },
-    { key: 'seats', label: 'Seats' },
-    { key: 'free', label: 'Free' },
-    { key: 'expires', label: 'Expires' },
-  ],
-  accessories: stockColumns('Available'),
-  consumables: stockColumns('Remaining'),
-  components: stockColumns('Available'),
-  categories: [{ key: 'name', label: 'Name' }, { key: 'type', label: 'Type', cell: (r) => capital(r.type) }, { key: 'items', label: 'Items' }],
-  manufacturers: [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }],
-  suppliers: [
-    { key: 'name', label: 'Name' },
-    { key: 'contact', label: 'Contact' },
-    { key: 'phone', label: 'Phone', hidden: true },
-    { key: 'email', label: 'Email', hidden: true },
-    { key: 'assets', label: 'Assets' },
-  ],
-  departments: [
-    { key: 'name', label: 'Name' },
-    { key: 'company', label: 'Company', hidden: true },
-    { key: 'manager', label: 'Manager' },
-    { key: 'location', label: 'Location' },
-    { key: 'users', label: 'Users' },
-  ],
-  companies: [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }, { key: 'users', label: 'Users' }],
-  statuslabels: [{ key: 'name', label: 'Name' }, { key: 'type', label: 'Type', cell: (r) => capital(r.type) }, { key: 'assets', label: 'Assets' }],
+// What a List shows in a cell instead of its text (LIST_COLUMNS' text, which Export writes): the status as a chip, a note set off.
+const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K]) => ReactNode } } = {
+  assets: { status: (a) => <StatusChip asset={a} /> },
+  activity: { note: (r) => r.note && <span className="note">{r.note}</span> },
 }
-
 // Stored per computer and per List: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
 function readColumns(kind: ListKind): string[] {
   try { return shownColumns(kind, JSON.parse(localStorage.getItem(columnsKey(kind)) ?? 'null')) }
   catch { return shownColumns(kind, null) }
-}
-// Which of a List's columns show, from a stored list of keys (the first column always, ones it no longer has dropped);
-// its default ones when there's none.
-export function shownColumns(kind: ListKind, stored: unknown): string[] {
-  const all: AnyColumn[] = COLUMNS[kind]
-  if (Array.isArray(stored)) return all.filter((c, i) => i === 0 || stored.includes(c.key)).map((c) => c.key)
-  return all.filter((c) => !c.hidden).map((c) => c.key)
-}
-
-// A List as Export saves it: its visible Columns in the order shown, each cell the text the List shows (a status chip's
-// status, an Assignee's name), empty where the List shows a dash.
-export function exportTable(kind: ListKind, shown: string[], rows: Row[]) {
-  const columns = (COLUMNS[kind] as AnyColumn[]).filter((c) => shown.includes(c.key))
-  const text = (c: AnyColumn, row: Row) => {
-    const v = [c.cell?.(row as never), (row as Record<string, unknown>)[c.key]].find((x) => typeof x === 'string' || typeof x === 'number')
-    return v === undefined ? '' : String(v)
-  }
-  return { columns: columns.map((c) => c.label), rows: rows.map((row) => columns.map((c) => text(c, row))) }
 }
 // Lists whose rows hold Users or Assignees (an Asset's, a History entry's, a Department's manager): exporting one asks for
 // the FERPA confirmation first.
@@ -138,7 +34,6 @@ type Option = { value: string; label: string }
 type Filter = { key: string; label: string; options: Option[] }
 type Names = Partial<Record<'models' | 'categories' | 'departments', StatusLabel[]>>
 const toOptions = (list: StatusLabel[] = []): Option[] => list.map((l) => ({ value: String(l.id), label: l.name }))
-const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const namesNeeded: Partial<Record<ListKind, (keyof Names)[]>> = { assets: ['models', 'categories'], users: ['departments'], models: ['categories'] }
 
 function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], locations: StatusLabel[]): Filter[] {
@@ -331,7 +226,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   // A Saved Report's Columns are its own; they don't change the List's usual ones.
   useEffect(() => { if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(shown)) }, [kind, shown])
 
-  const all: AnyColumn[] = COLUMNS[kind]
+  const all: AnyColumn[] = LIST_COLUMNS[kind]
   const columns = all.filter((c) => shown.includes(c.key))
   const sortable: Record<string, string> = LIST_SORTS[kind]
   const setFilter = (key: string, value: string) => (setFilters((f) => ({ ...f, [key]: value })), setOffset(0))
@@ -405,7 +300,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   }
 
   function cell(c: AnyColumn, row: Row, first: boolean) {
-    const value = c.cell ? c.cell(row as never) : (row as Record<string, unknown>)[c.key] as ReactNode
+    const custom = (CELLS[kind] as Record<string, (row: Row) => ReactNode> | undefined)?.[c.key]
+    const value = custom ? custom(row) : cellText(c, row)
     const shownValue = value === '' || value == null ? '—' : value
     // The row's way in: the first column, or for the Activity Report the Asset it names.
     const go = (first && kind !== 'activity') || (kind === 'activity' && c.key === 'item') ? open(row) : undefined

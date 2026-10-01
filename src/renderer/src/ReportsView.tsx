@@ -1,28 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SavedReport } from '../../main/config'
+import type { ReportRef } from '../../main/scheduler'
 import { listName } from './ListView'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
+import { csvName, rowCount, toCsv } from '../../main/export'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, REPORT_NAMES, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
 
-const reportName: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
 // What the date range bounds in each report.
 const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends' }
-
-// Every cell quoted, so commas, quotes and line breaks survive. A cell a spreadsheet would run as a formula
-// (=, +, -, @ first) gets a leading ' so a note can't become one. The byte-order mark lets Excel read it as UTF-8.
-export function toCsv(columns: string[], rows: string[][]): string {
-  const cell = (v: string) => `"${(/^[=+\-@\t\r]/.test(v) ? `'${v}` : v).replace(/"/g, '""')}"`
-  return '\uFEFF' + [columns, ...rows].map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n'
-}
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
   const url = URL.createObjectURL(new Blob([toCsv(columns, rows)], { type: 'text/csv;charset=utf-8' }))
   const a = document.createElement('a')
   a.href = url
-  // Local date, so a late-evening export isn't stamped with tomorrow (UTC).
-  const d = new Date()
-  const stamp = [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-')
-  a.download = `${name.toLowerCase().replace(/ /g, '-')}-${stamp}.csv`
+  a.download = csvName(name, new Date())
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -41,6 +32,23 @@ export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExp
   )
 }
 
+type Notice = { text: string; error?: true }
+// Emails the Report to the Operator now (the main process runs it afresh); what happened shows as the page's notice.
+function EmailNow({ report, name, onDone }: { report: ReportRef; name: string; onDone: (notice: Notice) => void }) {
+  const [busy, setBusy] = useState(false)
+  async function send() {
+    setBusy(true)
+    try {
+      const { to, rows } = await window.reports.emailNow(report)
+      onDone({ text: `Emailed ${name} (${rowCount(rows)}) to ${to}` })
+    } catch (e) {
+      onDone({ text: `${name} wasn't emailed. ${(e as Error).message}`, error: true })
+    }
+    setBusy(false)
+  }
+  return <button className="quiet" disabled={busy} onClick={send}>{busy ? 'Emailing…' : 'Email me now'}</button>
+}
+
 // Runs when asked (a report can page through a lot), not on every change of a filter. A Saved Report opens as its List.
 export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport) => void }) {
   const [kind, setKind] = useState<ReportKind>('activity')
@@ -50,6 +58,9 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [notice, setNotice] = useState<Notice | null>(null)
+  // The filters the chosen report has: only the Activity Report narrows by record type and action.
+  const sent = kind === 'activity' ? query : { from: query.from, to: query.to }
   // Bumped by every run and every change of report or filter; a result for an older one is dropped, so what shows
   // (and what exports) always matches the filters on screen.
   const latest = useRef(0)
@@ -63,7 +74,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     setError('')
     setExporting(false)
     try {
-      const r = await window.snipeIt.report(kind, kind === 'activity' ? query : { from: query.from, to: query.to })
+      const r = await window.snipeIt.report(kind, sent)
       if (mine !== latest.current) return
       setReport(r)
       setRan({ kind, query })
@@ -77,7 +88,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   }
 
   function download(r: Report, what: ReportKind) {
-    saveCsv(reportName[what], r.columns, r.rows)
+    saveCsv(REPORT_NAMES[what], r.columns, r.rows)
     setExporting(false)
   }
 
@@ -88,10 +99,11 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
         <span className="dim mono">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
           <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
+          <EmailNow report={{ builtIn: kind, query: sent }} name={REPORT_NAMES[kind]} onDone={setNotice} />
         </div>
         <form className="actions" onSubmit={run}>
           <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), stale())} aria-label="Report">
-            {(Object.keys(reportName) as ReportKind[]).map((k) => <option key={k} value={k}>{reportName[k]}</option>)}
+            {(Object.keys(REPORT_NAMES) as ReportKind[]).map((k) => <option key={k} value={k}>{REPORT_NAMES[k]}</option>)}
           </select>
           <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
           <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
@@ -114,7 +126,8 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
         <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
-      <SavedReports onOpen={onOpenSaved} />
+      {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
+      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} />
       {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
@@ -128,8 +141,8 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   )
 }
 
-// The Operator's Saved Reports, each opening as its List, renamed in place, or deleted after asking.
-function SavedReports({ onOpen }: { onOpen: (report: SavedReport) => void }) {
+// The Operator's Saved Reports, each opening as its List, emailed now, renamed in place, or deleted after asking.
+function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void }) {
   const [reports, setReports] = useState<SavedReport[] | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -175,6 +188,7 @@ function SavedReports({ onOpen }: { onOpen: (report: SavedReport) => void }) {
                     </span>
                   ) : (
                     <>
+                      <EmailNow report={{ saved: r.id }} name={r.name} onDone={onEmailed} />
                       <button className="quiet" onClick={() => (setDeleting(null), setRenaming({ id: r.id, name: r.name }))}>Rename</button>
                       <button className="quiet danger" onClick={() => (setRenaming(null), setDeleting(r.id))}>Delete…</button>
                     </>

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSettingsStore, type MailInput, type SavedReportInput, type SettingsInput } from './config'
 import { sendMail } from './mail'
+import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt } from './snipeit'
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
@@ -54,6 +55,13 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
   ipcMain.handle('settings:renameReport', (_e, id: string, name: string) => store.renameReport(id, name))
   ipcMain.handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
+  const scheduler = createReportScheduler({
+    now: () => new Date(),
+    run: (ref) => reportRunner(client(), store.savedReports)(ref),
+    recipient: () => client().operatorEmail(),
+    send: (mail) => sendMail(store.mailServer(), mail),
+  })
+  ipcMain.handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
   ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
   for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)

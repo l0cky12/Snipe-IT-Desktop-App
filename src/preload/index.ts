@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import type { SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
+import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message.
 // ponytail: matches Electron's current wording; if it changes, the Operator sees the wrapper text too, nothing is lost.
@@ -54,3 +55,6 @@ const settings: SettingsApi = { get: call('settings:get'), save: call('settings:
   saveMail: call('settings:saveMail'), testMail: call('settings:testMail'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport') }
 contextBridge.exposeInMainWorld('settings', settings)
+
+const reports: ReportsApi = { emailNow: call('reports:emailNow') }
+contextBridge.exposeInMainWorld('reports', reports)
