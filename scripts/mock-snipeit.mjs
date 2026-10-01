@@ -121,7 +121,8 @@ for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
 const fieldset = { id: 1, name: 'Chromebooks', fields: [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1', type: 'text', format: 'MAC', required: 0, field_values_array: null }] }
 for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fieldset.id, name: fieldset.name } : null
-const store = { hardware: assets, users, locations, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
+// The kinds the app only deletes are kept here too, so a delete takes them out of their List.
+const store = { hardware: assets, users, locations, models, categories, manufacturers, suppliers, departments, companies, statuslabels: statuses, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
 const required = { hardware: ['asset_tag', 'model_id', 'status_id'], users: ['first_name', 'username'], locations: ['name'], licenses: ['name', 'seats', 'category_id'],
   accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'] }
@@ -158,7 +159,7 @@ const groups = [
 const groupsOf = (ids) => ({ total: ids.length, rows: ids.map((id) => ({ id, name: groups.find((g) => g.id === id)?.name ?? '' })) })
 for (const u of users) Object.assign(u, { groups: groupsOf(u.id % 3 ? [2] : [1]), permissions: u.id === 1 ? { 'reports.view': '1', 'assets.delete': '-1' } : {} })
 const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true }
-for (const r of [...assets, ...users, ...locations]) r.available_actions = actions
+for (const r of [...assets, ...users, ...locations, ...models, ...categories, ...manufacturers, ...suppliers, ...departments, ...companies, ...statuses]) r.available_actions = actions
 // Labels. The label endpoint answers with a one-page PDF naming the Asset Tags, standing in for Snipe-IT's label engine.
 // MOCK_LABELS=legacy answers as a Snipe-IT on the legacy label engine does; MOCK_LABELS=none as one without the endpoint.
 const labelEngine = process.env.MOCK_LABELS
@@ -227,6 +228,7 @@ createServer(async (req, res) => {
     if (!row) return send({ status: 'error', messages: 'Not found' }, 404)
     if (req.method === 'PATCH' || req.method === 'PUT') return send(saveRecord(m[1], body, row))
     if (m[1] === 'hardware' && row.assigned_to) return fail('This asset is currently checked out, and cannot be deleted. Check it in first.')
+    if (m[1] === 'users' && assets.some((x) => x.assigned_to?.type === 'user' && x.assigned_to.id === row.id)) return fail('This user has items assigned and could not be deleted.')
     store[m[1]].splice(store[m[1]].indexOf(row), 1)
     return send({ status: 'success', messages: 'Deleted.', payload: null })
   }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, DELETE_KINDS, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
+import { OutcomeText, type Outcome } from './BatchView'
 
 export const listName: Record<ListKind, string> = {
   assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report',
@@ -149,6 +150,7 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
   kind === 'users' ? { filters: { user_id: String(id) }, label: drillLabel(kind, name) } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
 
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
+type Row = ListPage<ListKind>['rows'][number]
 
 /** The Records ticked in the open List, by id, across its pages; kept with their rows so a Bulk Action has what it needs. */
 export type Selection<T extends { id: number } = { id: number }> = Map<number, T>
@@ -183,10 +185,37 @@ export async function allMatching<T extends { id: number }>(page: (offset: numbe
   }
 }
 
+/** A Bulk Action's run: each Record by name with how it fared, and the ones this run (or a retry) goes over. stopping: Stop was pressed. */
+export type BulkRun = { records: { id: number; name: string; outcome?: Outcome }[]; ids: number[]; busy: boolean; stopping?: true }
+const finished = (o?: Outcome) => o?.state === 'done' || o?.state === 'failed'
+// How many of this run's Records are done or failed so far, of how many.
+function counts({ records, ids }: BulkRun) {
+  const run = new Set(ids)
+  return { finished: records.filter((r) => run.has(r.id) && finished(r.outcome)).length, of: ids.length }
+}
+// "14 of 30"
+export const progress = (run: BulkRun) => { const c = counts(run); return `${c.finished.toLocaleString()} of ${c.of.toLocaleString()}` }
+// The same run again over only the ones that failed, their results cleared.
+export function retrying({ records, busy }: BulkRun): BulkRun {
+  const ids = records.filter((r) => r.outcome?.state === 'failed').map((r) => r.id)
+  const again = new Set(ids)
+  return { busy, ids, records: records.map((r) => (again.has(r.id) ? { id: r.id, name: r.name } : r)) }
+}
+export const deleteQuestion = (kind: ListKind, n: number) => `Delete ${n.toLocaleString()} ${n === 1 ? singular(kind) : listName[kind]}?`
+export const deletable = (kind: ListKind): kind is DeleteKind => (DELETE_KINDS as readonly string[]).includes(kind)
+// Offered when Snipe-IT lets the Operator delete any of them. Its available_actions also says no to one it won't let go
+// (a User with items checked out); that one is still tried, so Snipe-IT's reason shows beside it.
+export const mayDelete = (kind: ListKind, rows: { can: Can }[]) => deletable(kind) && rows.some((r) => r.can.delete)
+
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew }: {
+export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onDelete, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
+  // App runs a bulk delete, so leaving the List mid-run loses nothing; its panel shows on the List it deletes from.
+  bulk: (BulkRun & { kind: DeleteKind }) | null
+  onDelete: (kind: DeleteKind, run: BulkRun) => void
+  onStopBulk: () => void
+  onCloseBulk: () => void
   kind: ListKind
   batch: AssetSummary[]
   onBatch: (a: AssetSummary[]) => void
@@ -211,10 +240,24 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   const [quick, setQuick] = useState<Quick | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   // The Selection lives with this List; leaving it (or opening another) starts the next one empty.
-  const [selection, setSelection] = useState<Selection<ListRows[ListKind]>>(new Map())
+  const [selection, setSelection] = useState<Selection<Row>>(new Map())
   // "Select all N matching": asking to confirm, or fetching; a newer query or Clear makes a fetch still going stale.
   const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
   const selectEpoch = useRef(0)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const mine = bulk?.kind === kind ? bulk : null
+  // A deleted Record leaves the Selection; one that failed stays ticked.
+  useEffect(() => {
+    const gone = new Set(mine?.records.filter((r) => r.outcome?.state === 'done').map((r) => r.id))
+    if (gone.size) setSelection((s) => ([...gone].some((id) => s.has(id)) ? new Map([...s].filter(([id]) => !gone.has(id))) : s))
+  }, [mine])
+  // The List refreshes when its run ends (finished or stopped).
+  const running = !!mine?.busy
+  const wasRunning = useRef(running)
+  useEffect(() => {
+    if (wasRunning.current && !running) setReloads((n) => n + 1)
+    wasRunning.current = running
+  }, [running])
   // One page of this List as searched, filtered and sorted now; "select all" pages it in id order instead.
   const fetchPage = (offset: number, order = sort) => window.snipeIt.list(kind, { search, filters, sort: order?.key, order: order?.order, offset })
 
@@ -270,14 +313,21 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
   const checkin = (a: Asset) => (id: number, o: CheckinOptions) => act(`Checked in ${a.assetTag}`, window.snipeIt.checkin(id, o))
   const checkout = (a: Asset) => (o: CheckoutOptions) => act(`Checked out ${a.assetTag}`, window.snipeIt.checkout(a.id, o))
 
-  function open(row: ListRows[ListKind]): (() => void) | undefined {
+  const deleteSelection = () => {
+    setConfirmingDelete(false)
+    const records = [...selection.values()].map((r) => ({ id: r.id, name: rowName(r) }))
+    if (deletable(kind)) onDelete(kind, { records, ids: records.map((r) => r.id), busy: true })
+  }
+  const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
+
+  function open(row: Row): (() => void) | undefined {
     if (kind === 'assets') return () => onOpenAsset(row.id)
     if (kind !== 'activity') return () => onOpenRecord(kind, row.id)
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
   }
 
-  function cell(c: AnyColumn, row: ListRows[ListKind], first: boolean) {
+  function cell(c: AnyColumn, row: Row, first: boolean) {
     const value = c.cell ? c.cell(row as never) : (row as Record<string, unknown>)[c.key] as ReactNode
     const shownValue = value === '' || value == null ? '—' : value
     // The row's way in: the first column, or for the Activity Report the Asset it names.
@@ -353,14 +403,22 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
               <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
             </span>
           ) : total > rows.length && (
-            <button className="quiet" disabled={selectingAll === 'fetching'} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
+            <button className="quiet" disabled={selectingAll === 'fetching' || bulk?.busy} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
               {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
             </button>
           )}
           {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+          {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
+            <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
+              <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
+              <button className="danger" autoFocus onClick={deleteSelection}>Delete</button>
+              <button className="quiet" onClick={() => setConfirmingDelete(false)}>Cancel</button>
+            </span>
+          ) : <button className="quiet danger" disabled={bulk?.busy || !!selectingAll} onClick={() => setConfirmingDelete(true)}>Delete…</button>)}
           <button className="quiet" onClick={clear}>Clear</button>
         </div>
       )}
+      {mine && <BulkResults title={`Delete ${listName[kind]}`} run={mine} onStop={onStopBulk} onRetry={() => onDelete(mine.kind, retrying(mine))} onClose={onCloseBulk} />}
       <table className="history list-table">
         <thead>
           <tr>
@@ -391,7 +449,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
                 {selectable && (
                   <td className="tick">
                     <input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
-                      aria-label={`Select ${kind === 'assets' ? a.assetTag : (row as { name?: string }).name ?? `#${row.id}`}`} />
+                      aria-label={`Select ${rowName(row)}`} />
                   </td>
                 )}
                 {columns.map((c, i) => cell(c, row, i === 0))}
@@ -428,6 +486,39 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
         </div>
       )}
     </>
+  )
+}
+
+// A Bulk Action's progress and each Record's result; Stop halts it before the next Record. Nothing is rolled back.
+export function BulkResults({ title, run, onStop, onRetry, onClose }: { title: string; run: BulkRun; onStop: () => void; onRetry: () => void; onClose: () => void }) {
+  const failed = run.records.filter((r) => r.outcome?.state === 'failed').length
+  const inRun = new Set(run.ids)
+  const c = counts(run)
+  return (
+    <section className="selection bulk" aria-label={title}>
+      <div className="actions">
+        <b>{title}</b>
+        <span className="dim mono" role="status">{progress(run)}{run.busy ? '' : c.finished < c.of ? ', stopped' : ' finished'}</span>
+        {run.busy
+          ? <button disabled={run.stopping} onClick={onStop}>{run.stopping ? 'Stopping…' : 'Stop'}</button>
+          : <>
+            {failed > 0 && <button onClick={onRetry}>Retry failed ({failed.toLocaleString()})</button>}
+            <button className="quiet" onClick={onClose}>Close</button>
+          </>}
+      </div>
+      <div className="bulk-rows">
+        <table className="history batch">
+          <tbody>
+            {run.records.map((r) => (
+              <tr key={r.id}>
+                <td>{r.name}</td>
+                <td>{r.outcome ? <OutcomeText outcome={r.outcome} /> : <span className="dim">{run.busy && inRun.has(r.id) ? 'Waiting' : 'Not done: stopped before this one'}</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 

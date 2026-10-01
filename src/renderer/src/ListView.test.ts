@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, filterPick, pageTicks, refreshed, tick } from './ListView'
+import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, mayDelete, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -95,5 +95,44 @@ describe('Selection', () => {
 
   it('"select all" gives up when the List changes meanwhile', async () => {
     expect(await allMatching(async () => ({ total: 9, rows: [row(1)] }), () => true)).toBeNull()
+  })
+})
+
+describe('Bulk delete', () => {
+  const allowed = { checkout: true, checkin: true, update: true, delete: true }
+  const row = (id: number, del = true) => ({ id, can: { ...allowed, delete: del } })
+
+  it('the confirmation names the count and kind', () => {
+    expect(deleteQuestion('suppliers', 12)).toBe('Delete 12 Suppliers?')
+    expect(deleteQuestion('categories', 1)).toBe('Delete 1 Category?')
+    expect(deleteQuestion('assets', 1200)).toBe('Delete 1,200 Assets?')
+  })
+
+  it("is offered when Snipe-IT lets the Operator delete what's selected, on every List of Records", () => {
+    expect(mayDelete('suppliers', [row(1), row(2)])).toBe(true)
+    expect(mayDelete('statuslabels', [row(1)])).toBe(true)
+    expect(mayDelete('suppliers', [row(1, false)])).toBe(false)
+    expect(mayDelete('activity', [row(1)])).toBe(false)
+  })
+
+  it("a Record Snipe-IT won't let go (a User with items checked out) still goes to Snipe-IT, which says why", () => {
+    expect(mayDelete('users', [row(1), row(2, false)])).toBe(true)
+  })
+
+  const run: BulkRun = {
+    busy: false, ids: [1, 2, 3, 4],
+    records: [{ id: 1, name: 'CDW', outcome: { state: 'done', text: 'Deleted' } }, { id: 2, name: 'Dell', outcome: { state: 'failed', reason: 'Has Assets' } },
+      { id: 3, name: 'HP', outcome: { state: 'working' } }, { id: 4, name: 'Lenovo' }],
+  }
+
+  it('progress counts the Records done or failed so far in this run', () => {
+    expect(progress(run)).toBe('2 of 4')
+  })
+
+  it('"Retry failed" reruns only the failed Records, counting from 0 of them', () => {
+    const again = retrying(run)
+    expect(again.ids).toEqual([2])
+    expect(again.records.map((r) => r.outcome?.state)).toEqual(['done', undefined, 'working', undefined])
+    expect(progress(again)).toBe('0 of 1')
   })
 })

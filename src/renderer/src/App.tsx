@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type DeleteKind, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
-import { ListView, drillTo, listName, type Drill } from './ListView'
+import { ListView, drillTo, listName, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 import { ReportsView } from './ReportsView'
 import { FieldGrid, RecordView } from './RecordView'
@@ -80,6 +80,10 @@ export function App() {
   const batchEpoch = useRef(0)
   // One run at a time: a second would act on the same Assets and overwrite the first's results.
   const batchBusy = useRef(false)
+  // The last bulk delete over a List's Selection, kept here like the batch's run so leaving the List mid-run loses nothing.
+  const [bulk, setBulk] = useState<(BulkRun & { kind: DeleteKind }) | null>(null)
+  const bulkBusy = useRef(false)
+  const bulkStop = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -130,7 +134,7 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null)
+    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -189,6 +193,25 @@ export function App() {
     setBatchRun((r) => ({ ...r, busy: false }))
   }
 
+  // Deletes each Record in turn with the usual single delete, so History credits the Operator for each; a failure doesn't stop
+  // the rest, Stop halts before the next one. Like the batch, it stops when Settings point at another server.
+  async function runBulk(kind: DeleteKind, run: BulkRun) {
+    if (bulkBusy.current) return
+    bulkBusy.current = true
+    bulkStop.current = false
+    const epoch = batchEpoch.current
+    const stale = () => epoch !== batchEpoch.current
+    setBulk({ ...run, kind, busy: true })
+    await eachInTurn(run.ids, (id) => window.snipeIt.remove(kind, id), 'Deleted', (id, outcome) => {
+      if (stale()) return
+      setBulk((b) => b && { ...b, records: b.records.map((r) => (r.id === id ? { ...r, outcome } : r)) })
+      if (kind === 'assets' && outcome.state === 'done') forget(id)
+    }, () => stale() || bulkStop.current)
+    if (stale()) return
+    bulkBusy.current = false
+    setBulk((b) => b && { ...b, busy: false })
+  }
+
   // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
   const act = (id: number, done: string, work: Promise<void>) =>
     run(async (isStale) => {
@@ -231,11 +254,13 @@ export function App() {
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
   const shown = (kind: EditKind, id: number) => (kind === 'assets' ? pick(id) : openRecord(kind, id))
+  // A deleted Asset leaves the rail.
+  function forget(id: number) {
+    setRecent((r) => r.filter((a) => a.id !== id))
+    setMatches((m) => ({ ...m, assets: m.assets.filter((a) => a.id !== id) }))
+  }
   function deleted(kind: EditKind, id: number, name: string) {
-    if (kind === 'assets') {
-      setRecent((r) => r.filter((a) => a.id !== id))
-      setMatches((m) => ({ ...m, assets: m.assets.filter((a) => a.id !== id) }))
-    }
+    if (kind === 'assets') forget(id)
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
@@ -324,7 +349,8 @@ export function App() {
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)} />
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+          bulk={bulk} onDelete={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
             onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>

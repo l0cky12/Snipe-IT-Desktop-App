@@ -21,6 +21,11 @@ export async function eachInTurn(ids: number[], work: (id: number) => Promise<vo
   }
 }
 
+// What a run's result cell says for one Record.
+export function OutcomeText({ outcome: o }: { outcome: Outcome }) {
+  return o.state === 'working' ? <span className="dim">Working…</span> : o.state === 'done' ? <span className="chip c-green">{o.text}</span> : <span className="late">{o.reason}</span>
+}
+
 /** An Asset in the batch, with how it fared in the last run (none until then, or after it's added again). */
 export type BatchItem = AssetSummary & { outcome?: Outcome }
 export type BatchAction = { done: string; work: (id: number) => Promise<void> }
@@ -96,11 +101,7 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
                 <td><button className="link mono" onClick={() => onOpenAsset(a.id)}>{a.assetTag}</button></td>
                 <td>{a.name || '—'}</td>
                 <td><StatusChip asset={a} /> <span className="dim">{a.assignee?.name ?? 'Unassigned'}</span></td>
-                <td role="status">
-                  {o?.state === 'working' && <span className="dim">Working…</span>}
-                  {o?.state === 'done' && <span className="chip c-green">{o.text}</span>}
-                  {o?.state === 'failed' && <span className="late">{o.reason}</span>}
-                </td>
+                <td role="status">{o && <OutcomeText outcome={o} />}</td>
                 <td><button className="link" disabled={busy} onClick={() => onRemove([a.id])} aria-label={`Remove ${a.assetTag} from the batch`}>Remove</button></td>
               </tr>
             )

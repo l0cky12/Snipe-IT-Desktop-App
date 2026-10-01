@@ -804,6 +804,9 @@ it('loads every page of Locations for the default dropdown', async () => {
   expect(fetch).toHaveBeenCalledTimes(2)
 })
 
+// A List row whose available_actions say nothing: every action is allowed.
+const can = { checkout: true, checkin: true, update: true, delete: true }
+
 describe('list', () => {
   it('asks for one page of 50 from the offset, with the search, and returns the total and rows in app vocabulary', async () => {
     const raw = { id: 311, name: 'Jordan Reyes', username: 'jreyes', email: null, department: { id: 2, name: 'Science' }, location: null, assets_count: 2 }
@@ -811,7 +814,7 @@ describe('list', () => {
     const page = await createSnipeIt(config, fetch).list('users', { search: ' rey ', offset: 50 })
     expect(calls).toEqual(['/users'])
     expect(queries[0]).toEqual({ limit: '50', offset: '50', search: 'rey' })
-    expect(page).toEqual({ total: 120, rows: [{ id: 311, name: 'Jordan Reyes', username: 'jreyes', email: '', department: 'Science', location: '', assets: 2 }] })
+    expect(page).toEqual({ total: 120, rows: [{ id: 311, name: 'Jordan Reyes', username: 'jreyes', email: '', department: 'Science', location: '', assets: 2, can }] })
   })
 
   it('Assets rows are full Assets, so Quick Actions know what is allowed', async () => {
@@ -864,7 +867,7 @@ describe('list', () => {
     expect(queries[0]).toMatchObject({ action_type: 'checkin from' })
     expect(page.rows[1]).toEqual({
       id: 7, when: '2026-08-17 15:40', action: 'Checkin', operator: 'E. Caldwell', detail: 'from Sam Whitaker', note: '"keyboard sticky"',
-      item: { type: 'asset', id: 4812, name: 'CB-LIB-012' },
+      item: { type: 'asset', id: 4812, name: 'CB-LIB-012' }, can,
     })
   })
 
@@ -957,10 +960,10 @@ describe('the other record kinds', () => {
       '/departments': { body: { total: 1, rows: [{ id: 2, name: 'Science', company: null, manager: { id: 7, name: 'Morgan Lee' }, location: { id: 9, name: 'Library' }, users_count: 13 }] } },
     })
     const snipeIt = createSnipeIt(config, fetch)
-    expect((await snipeIt.list('licenses')).rows).toEqual([{ id: 3, name: 'Office Suite', manufacturer: 'Contoso', category: '', seats: 300, free: 42, expires: '2027-06-30' }])
-    expect((await snipeIt.list('accessories')).rows).toEqual([{ id: 5, name: 'USB-C Charger', category: 'Chargers', manufacturer: '', location: 'Library', qty: 80, remaining: 23 }])
-    expect((await snipeIt.list('components')).rows).toEqual([{ id: 6, name: 'SSD', category: '', manufacturer: '', location: '', qty: 0, remaining: 0 }])
-    expect((await snipeIt.list('departments')).rows).toEqual([{ id: 2, name: 'Science', company: '', manager: 'Morgan Lee', location: 'Library', users: 13 }])
+    expect((await snipeIt.list('licenses')).rows).toEqual([{ id: 3, name: 'Office Suite', manufacturer: 'Contoso', category: '', seats: 300, free: 42, expires: '2027-06-30', can }])
+    expect((await snipeIt.list('accessories')).rows).toEqual([{ id: 5, name: 'USB-C Charger', category: 'Chargers', manufacturer: '', location: 'Library', qty: 80, remaining: 23, can }])
+    expect((await snipeIt.list('components')).rows).toEqual([{ id: 6, name: 'SSD', category: '', manufacturer: '', location: '', qty: 0, remaining: 0, can }])
+    expect((await snipeIt.list('departments')).rows).toEqual([{ id: 2, name: 'Science', company: '', manager: 'Morgan Lee', location: 'Library', users: 13, can }])
     expect(calls).toEqual(['/licenses', '/accessories', '/components', '/departments'])
   })
 
@@ -1113,7 +1116,28 @@ describe('create, edit and delete', () => {
     await snipeIt.remove('locations', 12)
     expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/locations/12' })
     await expect(snipeIt.remove('assets', 4812)).rejects.toThrow('currently checked out')
-    await expect(snipeIt.remove('categories' as 'assets', 1)).rejects.toThrow('Unknown record')
+    await expect(snipeIt.remove('activity' as 'assets', 1)).rejects.toThrow('Unknown record')
+  })
+
+  it('a Bulk Action deletes with one DELETE per Record, the kinds the app does not edit too', async () => {
+    const { fetch, requests } = fakeFetch(Object.fromEntries(
+      ['/suppliers/3', '/suppliers/4', '/models/7', '/categories/2', '/manufacturers/5', '/departments/6', '/companies/8', '/statuslabels/9']
+        .map((p) => [`DELETE ${p}`, { body: { status: 'success', messages: 'Deleted.' } }])))
+    const snipeIt = createSnipeIt(config, fetch)
+    for (const [kind, id] of [['suppliers', 3], ['suppliers', 4], ['models', 7], ['categories', 2], ['manufacturers', 5], ['departments', 6], ['companies', 8], ['statuslabels', 9]] as const)
+      await snipeIt.remove(kind, id)
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual(['DELETE /suppliers/3', 'DELETE /suppliers/4', 'DELETE /models/7', 'DELETE /categories/2', 'DELETE /manufacturers/5', 'DELETE /departments/6', 'DELETE /companies/8', 'DELETE /statuslabels/9'])
+  })
+
+  it("a User with items checked out isn't deleted: Snipe-IT's refusal is thrown as its reason", async () => {
+    const { fetch } = fakeFetch({ 'DELETE /users/311': { body: { status: 'error', messages: 'This user has items assigned and could not be deleted.' } } })
+    await expect(createSnipeIt(config, fetch).remove('users', 311)).rejects.toThrow('This user has items assigned and could not be deleted.')
+  })
+
+  it("every List row says whether the Operator may delete it, from Snipe-IT's available_actions", async () => {
+    const { fetch } = fakeFetch({ '/suppliers': { body: { total: 2, rows: [{ id: 3, name: 'CDW', available_actions: { update: true, delete: false } }, { id: 4, name: 'Dell' }] } } })
+    const page = await createSnipeIt(config, fetch).list('suppliers')
+    expect(page.rows.map((r) => r.can.delete)).toEqual([false, true])
   })
 })
 

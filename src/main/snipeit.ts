@@ -122,7 +122,8 @@ export const PERMISSIONS: [area: string, keys: string[]][] = [
 ]
 /** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
-export type ListPage<K extends ListKind> = { total: number; rows: ListRows[K][] }
+/** Each row carries what the Operator may do to it (its available_actions), so a Bulk Action is offered only when allowed. */
+export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[] }
 
 /** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
@@ -165,6 +166,9 @@ export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 /** The kinds the app can create, edit and delete. */
 export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
+/** The kinds the app can delete: every List of Records, including the kinds it doesn't edit. */
+export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies', 'statuslabels'] as const
+export type DeleteKind = (typeof DELETE_KINDS)[number]
 /** Where a choice's options come from (see names()). */
 export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels' | 'locations' | 'suppliers' | 'companies' | 'manufacturers'
   | 'categories:license' | 'categories:accessory' | 'categories:consumable' | 'categories:component'
@@ -612,9 +616,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   const checkId = (id: number, what = 'Asset') => {
     if (!Number.isInteger(id)) throw new Error(`Invalid ${what} id: ${id}`)
   }
-  // kind arrives from the screen over IPC; only a kind the app edits reaches the URL.
-  const checkKind = (kind: EditKind) => {
-    if (!EDIT_KINDS.includes(kind)) throw new Error(`Unknown record: ${kind}`)
+  // kind arrives from the screen over IPC; only a kind the app edits (or, to delete, a kind it deletes) reaches the URL.
+  const checkKind = (kind: string, kinds: readonly string[] = EDIT_KINDS) => {
+    if (!kinds.includes(kind)) throw new Error(`Unknown record: ${kind}`)
   }
 
   // ponytail: first 20 matches; the Operator types more of the name to narrow it.
@@ -743,7 +747,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`)
       if (isError(page)) throw new Error(reason(page.messages))
       const now = today()
-      return { total: page.total, rows: page.rows.map((r) => spec.row(r as never, now)) as ListRows[K][] }
+      return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
     },
 
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
@@ -855,8 +859,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     customFields,
 
     // Deletes a record; Snipe-IT refuses (e.g. an Asset still checked out) with its reason.
-    async remove(kind: EditKind, id: number): Promise<void> {
-      checkKind(kind)
+    async remove(kind: DeleteKind, id: number): Promise<void> {
+      checkKind(kind, DELETE_KINDS)
       checkId(id, 'record')
       const result = await request(`${LISTS[kind].path}/${id}`, {}, 'DELETE')
       if (isError(result)) throw new Error(reason(result.messages))
