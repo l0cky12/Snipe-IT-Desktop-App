@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SavedReport } from '../../main/config'
+import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
 import { listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, REPORT_NAMES, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, REPORT_NAMES, REPORTS, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
 
 // What the date range bounds in each report.
 const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends' }
@@ -29,6 +29,89 @@ export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExp
         <button className="quiet" onClick={onCancel}>Cancel</button>
       </div>
     </div>
+  )
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const ordinal = (n: number) => n + ((n % 100 >= 11 && n % 100 <= 13) ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
+const RANGE_NAMES = { 1: 'the previous day', 7: 'the previous 7 days', 30: 'the previous 30 days', since: 'since the last send' } as const
+/** When a Report emails itself, e.g. "Weekly on Mondays at 07:00 · the previous 7 days". */
+export function scheduleText({ every, day = 1, time, range }: Schedule) {
+  const when = every === 'day' ? 'Daily' : every === 'week' ? `Weekly on ${WEEKDAYS[day]}s`
+    : `Monthly on the ${ordinal(day)}${day > 28 ? " (or the month's last day)" : ''}`
+  return `${when} at ${time}${range === undefined ? '' : ` · ${RANGE_NAMES[range]}`}`
+}
+/** How a scheduled send went, e.g. "Last sent Oct 5, 7:00 AM: 3 rows". */
+export function lastSendText(last: LastSend) {
+  const at = new Date(last.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return 'rows' in last ? `Last sent ${at}: ${rowCount(last.rows)}` : `Last send failed ${at}: ${last.error}`
+}
+const keyOf = (r: ScheduleKey) => ('saved' in r ? `saved:${r.saved}` : r.builtIn)
+
+// A Report's schedule and its last send, changed in place. range: the schedule sets the Report's dates (see Schedule).
+function ScheduleCell({ report, schedule, name, range, onChange }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; range: boolean; onChange: (all: Scheduled[]) => void }) {
+  const [editing, setEditing] = useState(false)
+  if (editing) return <ScheduleForm report={report} schedule={schedule} name={name} range={range} onDone={(all) => (all && onChange(all), setEditing(false))} />
+  return (
+    <div className="schedule">
+      <span>{schedule ? scheduleText(schedule) : <span className="dim">Not scheduled</span>}</span>
+      {schedule && <span className={schedule.last && 'error' in schedule.last ? 'field-error' : 'dim'}>{schedule.last ? lastSendText(schedule.last) : 'Not sent yet'}</span>}
+      <div className="actions"><button className="quiet" onClick={() => setEditing(true)}>{schedule ? 'Change schedule…' : 'Schedule…'}</button></div>
+    </div>
+  )
+}
+
+// onDone: the schedules after saving or stopping, or nothing when cancelled.
+function ScheduleForm({ report, schedule, name, range, onDone }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; range: boolean; onDone: (all?: Scheduled[]) => void }) {
+  const [s, setS] = useState<Schedule>(schedule ?? { every: 'week', day: 1, time: '07:00', ...(range && { range: 7 }) })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function save(next: Schedule | null) {
+    setBusy(true)
+    try {
+      onDone(await window.settings.setSchedule(report, next))
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  function setRange(v: string) {
+    const { range: _, ...rest } = s
+    setS(v ? { ...rest, range: v === 'since' ? 'since' : Number(v) as 1 | 7 | 30 } : rest)
+  }
+  return (
+    <form className="schedule" onSubmit={(e) => (e.preventDefault(), save(s))} aria-label={`Schedule ${name}`}>
+      <div className="actions">
+        <select value={s.every} onChange={(e) => setS({ ...s, every: e.target.value as Schedule['every'], day: 1 })} aria-label="How often">
+          <option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option>
+        </select>
+        {s.every === 'week' && (
+          <select value={s.day} onChange={(e) => setS({ ...s, day: Number(e.target.value) })} aria-label="Day of the week">
+            {WEEKDAYS.map((d, i) => <option key={d} value={i}>on {d}s</option>)}
+          </select>
+        )}
+        {s.every === 'month' && (
+          <select value={s.day} onChange={(e) => setS({ ...s, day: Number(e.target.value) })} aria-label="Date">
+            {Array.from({ length: 31 }, (_, i) => <option key={i} value={i + 1}>on the {ordinal(i + 1)}</option>)}
+          </select>
+        )}
+        <label className="range">at <input type="time" required value={s.time} onChange={(e) => setS({ ...s, time: e.target.value })} /></label>
+        {range && (
+          <select value={s.range ?? ''} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
+            <option value="">All dates</option>
+            <option value="1">Previous day</option><option value="7">Previous 7 days</option><option value="30">Previous 30 days</option><option value="since">Since the last send</option>
+          </select>
+        )}
+      </div>
+      {s.every === 'month' && s.day! > 28 && <span className="dim">In a shorter month it sends on the month's last day.</span>}
+      {'builtIn' in report && report.builtIn === 'activity' && <span className="dim">It sends every record type and action.</span>}
+      <div className="actions">
+        <button disabled={busy}>Save schedule</button>
+        {schedule && <button type="button" className="quiet danger" disabled={busy} onClick={() => save(null)}>Stop schedule</button>}
+        <button type="button" className="quiet" onClick={() => onDone()}>Cancel</button>
+      </div>
+      {error && <p className="field-error" role="alert">{error}</p>}
+    </form>
   )
 }
 
@@ -59,6 +142,15 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
+  // Every schedule, read again each minute so a send the scheduler just made (or failed) shows.
+  const [schedules, setSchedules] = useState<Scheduled[]>([])
+  useEffect(() => {
+    const load = () => window.settings.schedules().then(setSchedules, (e: Error) => setNotice({ text: e.message, error: true }))
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  const scheduleOf = (r: ScheduleKey) => schedules.find((s) => keyOf(s.report) === keyOf(r))?.schedule
   // The filters the chosen report has: only the Activity Report narrows by record type and action.
   const sent = kind === 'activity' ? query : { from: query.from, to: query.to }
   // Bumped by every run and every change of report or filter; a result for an older one is dropped, so what shows
@@ -127,7 +219,20 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
-      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} />
+      <section className="saved-reports" aria-label="Built-in Reports">
+        <h2>Built-in Reports</h2>
+        <table className="history">
+          <tbody>
+            {REPORTS.map((k) => (
+              <tr key={k}>
+                <td>{REPORT_NAMES[k]}</td>
+                <td><ScheduleCell report={{ builtIn: k }} schedule={scheduleOf({ builtIn: k })} name={REPORT_NAMES[k]} range={k !== 'expiring'} onChange={setSchedules} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} scheduleOf={scheduleOf} onScheduled={setSchedules} />
       {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
@@ -141,8 +246,9 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   )
 }
 
-// The Operator's Saved Reports, each opening as its List, emailed now, renamed in place, or deleted after asking.
-function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void }) {
+// The Operator's Saved Reports, each opening as its List, emailed now or on a schedule, renamed in place, or deleted after asking.
+function SavedReports({ onOpen, onEmailed, scheduleOf, onScheduled }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void
+  scheduleOf: (r: ScheduleKey) => KeptSchedule | undefined; onScheduled: (all: Scheduled[]) => void }) {
   const [reports, setReports] = useState<SavedReport[] | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -179,6 +285,7 @@ function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => 
                   ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
                 </td>
                 <td className="dim">{listName[r.kind]}</td>
+                <td><ScheduleCell report={{ saved: r.id }} schedule={scheduleOf({ saved: r.id })} name={r.name} range={false} onChange={onScheduled} /></td>
                 <td><div className="actions">
                   {deleting === r.id ? (
                     <span className="confirm" role="alertdialog" aria-label={`Delete ${r.name}?`}>

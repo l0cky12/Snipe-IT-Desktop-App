@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
-import { LIST_SORTS, type Config, type ListKind, type StatusLabel } from './snipeit'
+import { LIST_SORTS, REPORT_NAMES, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
@@ -24,15 +24,31 @@ export type SettingsApi = {
   saveReport(report: SavedReportInput): Promise<SavedReport>
   renameReport(id: string, name: string): Promise<SavedReport[]>
   deleteReport(id: string): Promise<SavedReport[]>
+  schedules(): Promise<Scheduled[]>
+  /** null stops the schedule. */
+  setSchedule(report: ScheduleKey, schedule: Schedule | null): Promise<Scheduled[]>
 }
 /** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …"). */
 export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[] }
-// The scheduler will keep a Saved Report's schedule and last send beside these; re-saving and renaming leave them be.
-export type SavedReport = SavedReportQuery & { id: string; name: string }
+// Re-saving and renaming leave its schedule be.
+export type SavedReport = SavedReportQuery & { id: string; name: string; schedule?: KeptSchedule }
 /** No id: a new Saved Report. An id: re-saves that one. */
 export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
+/**
+ * When a Report emails itself: every day, week (day: 0 Sunday to 6 Saturday) or month (day: 1 to 31, the month's last
+ * day in a shorter month) at time ("HH:MM", local). range: a built-in Report's dates: the 1, 7 or 30 whole days before
+ * the day it sends (so daily and weekly sends neither miss a day nor repeat one), or from the day of the last send. None
+ * (and always for Warranty expiring, which looks ahead, and a Saved Report, whose List has no dates): all of it.
+ */
+export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since' }
+/** A scheduled send: when, and the rows it sent or why it failed. */
+export type LastSend = { at: string; rows: number } | { at: string; error: string }
+/** A Schedule as kept. since: when it was set; last: the last send; sentAt: the last send that went out. */
+export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?: string }
+export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
+export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string }
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -61,6 +77,16 @@ function checkMail(m: MailInput): MailServer {
   return { host, port: m.port, security: m.security, username, sender }
 }
 
+// What comes from the screen, checked, keeping only what its frequency and Report use. ranged: the Report has past dates to narrow.
+function checkSchedule(s: Schedule, ranged: boolean): Schedule {
+  if (!['day', 'week', 'month'].includes(s?.every)) throw new Error('Choose daily, weekly or monthly.')
+  if (s.every === 'week' && !(Number.isInteger(s.day) && s.day! >= 0 && s.day! <= 6)) throw new Error('Choose the day of the week.')
+  if (s.every === 'month' && !(Number.isInteger(s.day) && s.day! >= 1 && s.day! <= 31)) throw new Error('Choose a date from 1 to 31.')
+  if (typeof s.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) throw new Error('Choose the time to send it.')
+  if (s.range !== undefined && ![1, 7, 30, 'since'].includes(s.range)) throw new Error('Choose the date range.')
+  return { every: s.every, ...(s.every !== 'day' && { day: s.day }), time: s.time, ...(ranged && s.range !== undefined && { range: s.range }) }
+}
+
 export function createSettingsStore(path: string, storage: Pick<typeof safeStorage, 'isEncryptionAvailable' | 'getSelectedStorageBackend' | 'encryptString' | 'decryptString'>, appVersion: string) {
   function read(): Stored {
     try { return JSON.parse(readFileSync(path, 'utf8')) }
@@ -82,6 +108,28 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
   const withoutMailPassword = ({ encryptedMailPassword: _, plainMailPassword: __, ...rest }: Stored): Stored => rest
   const savedReports = () => read().savedReports ?? []
   const gone = (): never => { throw new Error('That Saved Report no longer exists.') }
+  function schedules(): Scheduled[] {
+    const value = read()
+    return [...Object.entries(value.builtInSchedules ?? {}).map(([builtIn, schedule]) => ({ report: { builtIn: builtIn as ReportKind }, schedule })),
+      ...(value.savedReports ?? []).flatMap((r) => (r.schedule ? [{ report: { saved: r.id }, schedule: r.schedule }] : []))]
+  }
+  // Gives a Report the schedule change() makes of the one it has (undefined: none). A Saved Report that's gone: missing().
+  function reschedule(key: ScheduleKey, change: (old?: KeptSchedule) => KeptSchedule | undefined, missing: () => void) {
+    const saved = read()
+    if (!key || typeof key !== 'object') throw new Error(`Unknown report: ${key}`)
+    if ('builtIn' in key && Object.hasOwn(REPORT_NAMES, key.builtIn)) {
+      const { [key.builtIn]: old, ...rest } = saved.builtInSchedules ?? {}
+      const schedule = change(old)
+      return write({ ...saved, builtInSchedules: { ...rest, ...(schedule && { [key.builtIn]: schedule }) } })
+    }
+    if (!('saved' in key)) throw new Error(`Unknown report: ${(key as { builtIn?: string }).builtIn}`)
+    const reports = saved.savedReports ?? []
+    const old = reports.find((r) => r.id === key.saved)
+    if (!old) return missing()
+    const { schedule: was, ...rest } = old
+    const schedule = change(was)
+    write({ ...saved, savedReports: reports.map((r) => (r === old ? { ...rest, ...(schedule && { schedule }) } : r)) })
+  }
   function get(): Settings {
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
@@ -174,6 +222,24 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       const { name: named } = reportQuery({ ...old, name })
       write({ ...saved, savedReports: reports.map((r) => (r === old ? { ...r, name: named } : r)) })
       return savedReports()
+    },
+    schedules,
+    /**
+     * since: now, so a time that passed before it was set doesn't send; a change of only the range keeps the old one, so
+     * it can't skip a send that's just come due. Changing a schedule keeps its last send.
+     */
+    setSchedule(key: ScheduleKey, input: Schedule | null, since: Date) {
+      const schedule = input && checkSchedule(input, !!key && typeof key === 'object' && 'builtIn' in key && key.builtIn !== 'expiring')
+      reschedule(key, (old) => schedule ? {
+        ...schedule,
+        since: old && old.every === schedule.every && old.day === schedule.day && old.time === schedule.time ? old.since : since.toISOString(),
+        ...(old?.last && { last: old.last }), ...(old?.sentAt && { sentAt: old.sentAt }),
+      } : undefined, gone)
+      return schedules()
+    },
+    /** A send finishing after its schedule was stopped, or its Saved Report deleted, isn't recorded. */
+    recordSend(key: ScheduleKey, last: LastSend) {
+      reschedule(key, (old) => old && { ...old, last, ...('rows' in last && { sentAt: last.at }) }, () => {})
     },
     deleteReport(id: string) {
       const saved = read()

@@ -66,7 +66,7 @@ The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, a
 _Avoid_: audit log
 
 **Report**:
-A table over the whole inventory the Operator runs on request and can export as CSV: the Activity Report, Overdue, Expiring Warranty (each optionally narrowed to a date range), or a Saved Report.
+A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, each optionally narrowed to a date range) or a Saved Report.
 _Avoid_: export (the export is the file a Report is saved to)
 
 **Record type**:
@@ -127,6 +127,9 @@ _Avoid_: upload, sync
 A List with its filters and Columns saved under a name by the Operator, which can be emailed to the Operator.
 _Avoid_: custom report, saved search
 
+**Schedule**:
+When a Saved Report or built-in Report emails itself to the Operator: daily, weekly or monthly at a set time. An Activity Report or Overdue Schedule also sets its dates relative to each send (the previous 1, 7 or 30 days, or since the last send). A send missed while the app was closed goes out once at the next launch; a failed send tries again each hour.
+
 **License**:
 A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise.
 
@@ -159,7 +162,7 @@ _Avoid_: stats, widgets
 - An Asset can only be **Overdue** if it was given an **Expected Checkin**
 - Only Assets have a status; the other kinds are counted by quantity
 - A **Selection** belongs to one **List**; a **Bulk Action** acts on one **Selection**
-- A **Saved Report** is emailed only to the **Operator's** own address
+- A **Report** is emailed only to the **Operator's** own address
 
 ## Flagged ambiguities
 

@@ -156,3 +156,55 @@ it('refuses mail settings it could not send with', () => {
   expect(() => store.saveMail({ ...mail, sender: 'not an address' })).toThrow('sender')
   expect(store.get().mail.hasPassword).toBe(false)
 })
+
+const weekly = { every: 'week' as const, day: 1, time: '07:00', range: 7 as const }
+const since = new Date(2026, 9, 1, 12)
+
+it('keeps built-in and Saved Report schedules across a restart; changing one keeps its last send, and they can be stopped', () => {
+  const { path, storage, store } = setup()
+  expect(store.schedules()).toEqual([])
+  const saved = store.saveReport(report)
+  store.setSchedule({ builtIn: 'overdue' }, weekly, since)
+  // A Saved Report's List has no dates, so its schedule has no range.
+  expect(store.setSchedule({ saved: saved.id }, { every: 'month', day: 31, time: '18:30', range: 30 }, since)).toEqual([
+    { report: { builtIn: 'overdue' }, schedule: { ...weekly, since: since.toISOString() } },
+    { report: { saved: saved.id }, schedule: { every: 'month', day: 31, time: '18:30', since: since.toISOString() } },
+  ])
+  store.recordSend({ builtIn: 'overdue' }, { at: '2026-10-05T12:00:00.000Z', rows: 3 })
+  store.recordSend({ saved: saved.id }, { at: '2026-10-05T12:00:00.000Z', error: 'Wrong password' })
+  store.save(input)
+  store.renameReport(saved.id, 'Renamed')
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.schedules()).toEqual([
+    { report: { builtIn: 'overdue' }, schedule: { ...weekly, since: since.toISOString(), last: { at: '2026-10-05T12:00:00.000Z', rows: 3 }, sentAt: '2026-10-05T12:00:00.000Z' } },
+    { report: { saved: saved.id }, schedule: { every: 'month', day: 31, time: '18:30', since: since.toISOString(), last: { at: '2026-10-05T12:00:00.000Z', error: 'Wrong password' } } },
+  ])
+  const later = new Date(2026, 9, 6)
+  expect(relaunched.setSchedule({ builtIn: 'overdue' }, { every: 'day', day: 3, time: '06:00' }, later)[0]).toEqual(
+    { report: { builtIn: 'overdue' }, schedule: { every: 'day', time: '06:00', since: later.toISOString(), last: { at: '2026-10-05T12:00:00.000Z', rows: 3 }, sentAt: '2026-10-05T12:00:00.000Z' } })
+  // Changing only the range keeps when it was set, so the edit can't skip a send that's just come due.
+  expect(relaunched.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '06:00', range: 'since' }, new Date(2026, 9, 7))[0].schedule.since).toBe(later.toISOString())
+  relaunched.setSchedule({ builtIn: 'overdue' }, null, later)
+  relaunched.deleteReport(saved.id)
+  expect(createSettingsStore(path, storage, '0.1.0').schedules()).toEqual([])
+  // A send finishing after its Saved Report was deleted, or its schedule stopped, records nothing.
+  relaunched.recordSend({ saved: saved.id }, { at: '2026-10-06T12:00:00.000Z', rows: 1 })
+  relaunched.recordSend({ builtIn: 'overdue' }, { at: '2026-10-06T12:00:00.000Z', rows: 1 })
+  expect(relaunched.schedules()).toEqual([])
+})
+
+it('refuses a schedule it could not keep', () => {
+  const { store } = setup()
+  for (const [schedule, message] of [
+    [{ ...weekly, every: 'hour' }, 'daily, weekly or monthly'],
+    [{ ...weekly, day: 7 }, 'day of the week'],
+    [{ ...weekly, every: 'month', day: 0 }, 'date from 1 to 31'],
+    [{ ...weekly, time: '24:00' }, 'time'],
+    [{ ...weekly, time: '7:00' }, 'time'],
+    [{ ...weekly, range: 2 }, 'date range'],
+  ] as const) expect(() => store.setSchedule({ builtIn: 'overdue' }, schedule as never, since)).toThrow(message)
+  expect(() => store.setSchedule({ builtIn: '__proto__' as 'overdue' }, weekly, since)).toThrow('Unknown report')
+  expect(() => store.setSchedule({ saved: 'missing' }, weekly, since)).toThrow('no longer exists')
+  for (const key of [null, 'overdue', 7]) expect(() => store.setSchedule(key as never, weekly, since)).toThrow('Unknown report')
+  expect(store.schedules()).toEqual([])
+})
