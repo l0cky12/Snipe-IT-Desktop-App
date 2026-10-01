@@ -44,7 +44,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -74,7 +74,7 @@ const lists = {
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
-  locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location.id === l.id).length })),
+  locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
   models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model.id === m.id).length, remaining: assets.filter((a) => a.model.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
@@ -110,11 +110,42 @@ Object.assign(lists, {
   companies: { rows: () => companies.map((c) => ({ ...c, assets_count: assets.length, users_count: users.length })), search: (c) => text(c.name) },
 })
 lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
-lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department.id === d.id) }))
+lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department?.id === d.id) }))
 lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
 Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
-lists.users.filters.company_id = () => true
+// A User made in the app may have no Location or department.
+Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
+
+// Creating, editing and deleting records, checked the way Snipe-IT checks them (a few of its rules).
+// Chromebook Asset Models have a custom fieldset with a MAC Address.
+const fieldset = { id: 1, name: 'Chromebooks', fields: [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1', type: 'text', format: 'MAC', required: 0, field_values_array: null }] }
+for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fieldset.id, name: fieldset.name } : null
+const store = { hardware: assets, users, locations, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
+for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
+const required = { hardware: ['asset_tag', 'model_id', 'status_id'], users: ['first_name', 'username'], locations: ['name'], licenses: ['name', 'seats', 'category_id'],
+  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'] }
+const refs = { model_id: ['model', models], status_id: ['status_label', statuses], location_id: ['location', locations], rtd_location_id: ['rtd_location', locations], parent_id: ['parent', locations],
+  category_id: ['category', categories], manufacturer_id: ['manufacturer', manufacturers], supplier_id: ['supplier', suppliers], company_id: ['company', companies], department_id: ['department', departments] }
+function saveRecord(kind, body, row) {
+  const errors = {}
+  for (const f of required[kind]) if ((body[f] ?? row?.[f] ?? '') === '' && !(row && !(f in body))) errors[f] = [`The ${f.replace(/_id$/, '').replace(/_/g, ' ')} field is required.`]
+  if (kind === 'hardware' && body.asset_tag && assets.some((a) => a.asset_tag === body.asset_tag && a !== row)) errors.asset_tag = ['The asset tag must be unique.']
+  if (kind === 'users' && !row && body.password !== body.password_confirmation) errors.password = ['The password confirmation does not match.']
+  if (Object.keys(errors).length) return { status: 'error', messages: errors, payload: null }
+  const target = row ?? { id: Math.max(0, ...store[kind].map((r) => r.id)) + 1 }
+  for (const [k, v] of Object.entries(body)) {
+    if (k.startsWith('password')) continue
+    if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
+    else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
+    else if (/date$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
+    else target[k] = v
+  }
+  if (kind === 'users') target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
+  if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
+  if (!row) store[kind].push(target)
+  return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
+}
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
@@ -127,6 +158,18 @@ createServer(async (req, res) => {
   if (path === 'users/me') return send({ id: 900, name: 'Demo Operator' })
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
   if ((m = path.match(/^hardware\/bytag\/(.+)$/))) return send(assets.find((a) => a.asset_tag.toLowerCase() === decodeURIComponent(m[1]).toLowerCase()) ?? { status: 'error', messages: 'Asset does not exist.' })
+  if ((m = path.match(/^fieldsets\/(\d+)\/fields$/))) return send({ total: fieldset.fields.length, rows: fieldset.fields })
+  if (req.method === 'POST' && store[path]) return send(saveRecord(path, body))
+  // A status-only PATCH is the Quick Action, handled with the other Asset actions below.
+  const statusOnly = req.method === 'PATCH' && Object.keys(body).every((k) => k === 'status_id')
+  if ((m = path.match(/^([a-z]+)\/(\d+)$/)) && store[m[1]] && req.method !== 'GET' && !(m[1] === 'hardware' && statusOnly)) {
+    const row = store[m[1]].find((r) => r.id === +m[2])
+    if (!row) return send({ status: 'error', messages: 'Not found' }, 404)
+    if (req.method === 'PATCH' || req.method === 'PUT') return send(saveRecord(m[1], body, row))
+    if (m[1] === 'hardware' && row.assigned_to) return fail('This asset is currently checked out, and cannot be deleted. Check it in first.')
+    store[m[1]].splice(store[m[1]].indexOf(row), 1)
+    return send({ status: 'success', messages: 'Deleted.', payload: null })
+  }
   if ((m = path.match(/^hardware\/(\d+)(?:\/(checkin|checkout))?$/))) {
     const a = assets.find((x) => x.id === +m[1])
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)

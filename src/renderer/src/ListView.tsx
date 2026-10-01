@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, LIST_PAGE, LIST_SORTS, toSummary, type Asset, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, StatusChip, statusChoices } from './App'
 
 export const listName: Record<ListKind, string> = {
@@ -151,7 +152,8 @@ type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch }: {
+export function ListView({ kind, drill, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew }: {
+  onNew: (kind: EditKind) => void
   kind: ListKind
   batch: AssetSummary[]
   onBatch: (a: AssetSummary) => void
@@ -250,6 +252,7 @@ export function ListView({ kind, drill, statusLabels, locations, defaultLocation
         <span className="dim mono">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
+          {editable(kind) && <button className="quiet" onClick={() => onNew(kind)}>New {singular(kind)}</button>}
           <button onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
         </div>
       </header>

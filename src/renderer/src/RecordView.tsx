@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { Field, ListKind, RecordDetail, RecordKind } from '../../main/snipeit'
+import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind } from '../../main/snipeit'
 import { drillLabel, singular, type Drill } from './ListView'
+import { DeleteButton } from './RecordForm'
+
+export const editable = (kind: ListKind): kind is EditKind => (EDIT_KINDS as readonly string[]).includes(kind)
 
 // The Lists filtered to one record: a User's checked-out Assets, a Location's Assets and Users, and so on.
 const RELATED: Partial<Record<RecordKind, [label: string, list: ListKind, filter: string][]>> = {
@@ -23,7 +26,9 @@ const CATEGORY_LISTS: Record<string, [label: string, list: ListKind, filter: str
 }
 
 // Every field of one record. A related record links to its own page; what belongs to it is a List away.
-export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill }: {
+export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdit, onDeleted }: {
+  onEdit: (kind: EditKind, id: number) => void
+  onDeleted: (kind: EditKind, id: number, name: string) => void
   kind: RecordKind
   id: number
   onOpenRecord: (kind: RecordKind, id: number) => void
@@ -56,6 +61,12 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill }: {
               {label}
             </button>
           ))}
+          {editable(kind) && (
+            <>
+              <button className="quiet" onClick={() => onEdit(kind, id)}>Edit</button>
+              <DeleteButton kind={kind} id={id} name={record.name} onDeleted={() => onDeleted(kind, id, record.name)} />
+            </>
+          )}
         </div>
       </header>
       <FieldGrid fields={record.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
