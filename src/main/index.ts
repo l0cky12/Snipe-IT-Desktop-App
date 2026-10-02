@@ -69,8 +69,16 @@ app.whenReady().then(() => {
   app.on('second-instance', show)
 
   ipcMain.handle('settings:get', () => store.get())
-  ipcMain.handle('settings:save', (_e, input: SettingsInput) => store.save(input))
-  ipcMain.handle('settings:clearToken', () => store.clearToken())
+  ipcMain.handle('settings:save', (_e, input: SettingsInput) => {
+    const saved = store.save(input)
+    scheduler.cancelPending()
+    return saved
+  })
+  ipcMain.handle('settings:clearToken', () => {
+    const saved = store.clearToken()
+    scheduler.cancelPending()
+    return saved
+  })
   ipcMain.handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
   ipcMain.handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
@@ -87,9 +95,16 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:setSchedule', (_e, report: ScheduleKey, schedule: Schedule | null) => store.setSchedule(report, schedule, new Date()))
   const scheduler = createReportScheduler({
     now: () => new Date(),
-    run: (ref) => reportRunner(client(), store.savedReports)(ref),
-    recipient: () => client().operatorEmail(),
-    send: (mail) => sendMail(store.mailServer(), mail),
+    session: () => {
+      const connection = client()
+      const reports = store.savedReports()
+      const server = store.mailServer()
+      return {
+        run: reportRunner(connection, () => reports),
+        recipient: () => connection.operatorEmail(),
+        send: (mail) => sendMail(server, mail),
+      }
+    },
     schedules: store.schedules,
     recordSend: store.recordSend,
     // Only while the window is hidden; open, the Reports page shows the failure. No Report name: an Operator's name for a

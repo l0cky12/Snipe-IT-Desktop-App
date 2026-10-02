@@ -13,9 +13,11 @@ function scheduler({ email = 'ecaldwell@nomma.net', report = overdue } = {}) {
   const ran: unknown[] = []
   const s = createReportScheduler({
     now: () => new Date(2026, 9, 1, 23, 30),
-    recipient: async () => email,
-    run: async (ref) => (ran.push(ref), report),
-    send: async (mail) => void sent.push(mail),
+    session: () => ({
+      recipient: async () => email,
+      run: async (ref) => (ran.push(ref), report),
+      send: async (mail) => void sent.push(mail),
+    }),
     schedules: () => [],
     recordSend: () => {},
     failed: () => {},
@@ -105,9 +107,11 @@ function scheduled(schedules: [ScheduleKey, Schedule][], { setAt = at(1, 6), fai
     const store = createSettingsStore(path, storage, '0.1.0')
     return { store, scheduler: createReportScheduler({
       now: () => t.clock,
-      recipient: async () => 'ecaldwell@nomma.net',
-      run: async (ref) => (t.ran.push(ref), overdue),
-      send: async (mail) => { if (t.fail) throw new Error(t.fail); t.sent.push(`${mail.subject} @ ${t.clock.toString().slice(4, 21)}`) },
+      session: () => ({
+        recipient: async () => 'ecaldwell@nomma.net',
+        run: async (ref) => (t.ran.push(ref), overdue),
+        send: async (mail) => { if (t.fail) throw new Error(t.fail); t.sent.push(`${mail.subject} @ ${t.clock.toString().slice(4, 21)}`) },
+      }),
       schedules: store.schedules,
       recordSend: store.recordSend,
       failed: (error) => void t.failed.push(error),
@@ -124,6 +128,42 @@ function scheduled(schedules: [ScheduleKey, Schedule][], { setAt = at(1, 6), fai
 }
 
 describe('scheduled Reports', () => {
+  it.each(['recipient', 'report', 'SMTP'] as const)('a connection change during %s stops the old queue and discards its results', async (stage) => {
+    let resume!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => { resume = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const pause = async (at: typeof stage) => { if (at === stage) { entered(); await waiting } }
+    const sent: Mail[] = []
+    const recorded: unknown[] = []
+    const failures: string[] = []
+    const recipients: string[] = []
+    const s = createReportScheduler({
+      now: () => at(2, 7),
+      session: () => ({
+        recipient: async () => { recipients.push('operator@nomma.net'); await pause('recipient'); return 'operator@nomma.net' },
+        run: async () => { await pause('report'); return overdue },
+        send: async (mail) => { sent.push(mail); await pause('SMTP') },
+      }),
+      schedules: () => ['overdue', 'expiring'].map((builtIn) => ({ report: { builtIn: builtIn as 'overdue' | 'expiring' }, schedule: { every: 'day', time: '07:00', since: at(1, 6).toISOString() } })),
+      recordSend: (...args) => { recorded.push(args) },
+      failed: (error) => { failures.push(error) },
+    })
+    const pending = s.tick()
+    await started
+    s.cancelPending()
+    resume()
+    await pending
+    // SMTP handoff cannot be recalled, but the remaining Report must not start with new credentials.
+    expect(sent).toHaveLength(stage === 'SMTP' ? 1 : 0)
+    expect(recipients).toHaveLength(1)
+    expect(recorded).toEqual([])
+    expect(failures).toEqual([])
+    // Cancellation releases the tick guard; subsequent ticks can send normally.
+    await s.tick()
+    expect(recorded).toHaveLength(2)
+  })
+
   it('daily: sends at the time each day, once', async () => {
     const t = scheduled([[{ builtIn: 'overdue' }, { every: 'day', time: '07:00' }]])
     await t.tick(at(1, 6, 59), at(1, 7), at(1, 7, 1), at(1, 23, 59), at(2, 6, 59), at(2, 7, 0), at(2, 7, 1))
