@@ -745,7 +745,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const intakeOf = async (id: number) => {
       const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=intake&sort=created_at&order=desc&limit=20`)
       if (isError(body)) throw new Error(reason(body.messages))
-      const oldestFirst = [...body.rows].sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
+      // item_id also matches entries that only target the Asset, such as its Maintenance's; only the Asset's own count.
+      const oldestFirst = body.rows.filter((r) => r.item?.type === 'asset' && r.item.id === id).sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
       const live = liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))
         .flatMap((e) => { const n = parseWorkflowNote(e.note); return n?.workflow === 'Repair intake' && !n.undo ? [{ ...e, text: n.text ?? '' }] : [] })
       return live.at(-1)

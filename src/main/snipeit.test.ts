@@ -1131,7 +1131,13 @@ describe('report', () => {
         maintenance(11, 2, '2026-08-01', 'Upgrade'),
         maintenance(12, 99, '2026-07-01'),
       ], {
-        1: [intake(100, 1, '2026-09-01 10:00:00', '[Repair intake] cracked screen', 'Avery Testwell')],
+        1: [
+          // Opening the Maintenance logs the same note on the Maintenance, with the Asset as its target; Snipe-IT's item_id
+          // filter matches targets too.
+          { ...intake(101, 1, '2026-09-01 10:01:00', '[Repair intake] cracked screen', null, 'create'), created_by: { id: 901, name: 'Other Operator' },
+            item: { id: 10, name: 'NOMMA-1 damaged', type: 'maintenance' }, target: { id: 1, name: 'NOMMA-1', type: 'asset' } },
+          intake(100, 1, '2026-09-01 10:00:00', '[Repair intake] cracked screen', 'Avery Testwell'),
+        ],
         // Newest first, as Snipe-IT sends it; an Asset that wasn't checked out has no one it was taken in from.
         2: [intake(201, 2, '2026-09-20 13:00:00', 'Repair intake form signed', null), intake(200, 2, '2026-09-20 12:30:00', '[Repair intake] won’t power on', null)],
         // The search also matched something that isn't a Workflow note: Damaged by hand in the web UI.
