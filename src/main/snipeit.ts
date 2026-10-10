@@ -250,7 +250,8 @@ type RawAsset = {
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
-  expected_checkin: { date: string } | null
+  // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
+  expected_checkin: { date?: string; datetime?: string } | null
   available_actions?: unknown
 }
 type RawActivity = {
@@ -373,10 +374,25 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
 export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
   ({ id, assetTag, name, status, statusMeta, assignee, can })
 
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day (00:00 means date-only).
+function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
+  const when = v?.datetime ?? v?.date
+  if (!when) return null
+  const time = when.slice(11, 16)
+  return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
+}
+
+// Whole days an Expected Checkin is late, or null when it isn't yet: from its time of day when it has one, else from the next day.
+function overdueDaysOf(today: Date, due: string): number | null {
+  const late = -daysFrom(today, due.slice(0, 10)) || 0 // not -0
+  const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
+  const past = due.length > 10 ? new Date(y, mo - 1, d, h, mi) < today : late > 0
+  return past ? late : null
+}
+
 function toAsset(raw: RawAsset, today: Date): Asset {
-  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
-  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
   const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
@@ -394,7 +410,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     purchaseDate: raw.purchase_date?.date ?? null,
     warrantyEnd,
     expectedCheckin,
-    overdueDays: overdue > 0 ? overdue : null,
+    overdueDays: expectedCheckin && raw.assigned_to ? overdueDaysOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
@@ -559,11 +575,14 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
-// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
-  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
+  if (typeof v === 'object') {
+    const o = v as { id?: unknown; date?: unknown; datetime?: unknown }
+    return String(o.id ?? o.date ?? (typeof o.datetime === 'string' ? o.datetime.slice(0, 10) : ''))
+  }
   // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
   // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
   if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
@@ -896,7 +915,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (kind === 'overdue')
         return {
           columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
+          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!.slice(0, 10))).sort((a, b) => b.overdueDays! - a.overdueDays!)
             .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
           capped: false,
         }
