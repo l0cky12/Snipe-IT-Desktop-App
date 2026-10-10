@@ -290,7 +290,7 @@ export function App() {
       <aside className="rail">
         <nav className="sidebar" aria-label="Pages">
           <div className="brand"><span className="logo" aria-hidden="true">S</span>Snipe-IT Desktop</div>
-          <button aria-label="Search or scan" aria-expanded={panelOpen} aria-controls={panelOpen ? 'scan-panel' : undefined} className="find" onClick={openPanel}>
+          <button aria-label="Search or scan" aria-controls={panelOpen ? 'scan-panel' : undefined} className="find" onClick={openPanel}>
             <Search size={14} />Search or scan<kbd>Ctrl K</kbd>
           </button>
           <button aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
@@ -329,7 +329,7 @@ export function App() {
               placeholder="Scan / search…"
               aria-label="Scan an Asset Tag, or search everything"
             />
-            <button type="button" className="close" aria-label="Close Scan/Search" onClick={() => setPanelOpen(false)}><X size={16} /></button>
+            <button type="button" className="panel-close" aria-label="Close Scan/Search" onClick={() => setPanelOpen(false)}><X size={16} /></button>
           </form>
           {railMessage}
           <div className="list">

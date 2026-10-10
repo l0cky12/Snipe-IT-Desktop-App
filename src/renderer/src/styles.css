@@ -38,7 +38,7 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 var(--sans); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
 button, input, select { font-family: inherit; }
-/* Important: the all: unset buttons (.find, .nav, .close, .row, .link, .sort) would otherwise wipe it. */
+/* Important: the all: unset buttons (.find, .nav, .panel-close, .row, .link, .sort) would otherwise wipe it. */
 :focus-visible { outline: 2px solid var(--mark) !important; outline-offset: 2px !important; }
 .mono { font-family: var(--mono); font-size: .93em; }
 .dim { color: var(--dim); font-weight: 400; }
@@ -59,8 +59,8 @@ button, input, select { font-family: inherit; }
 .nav.sel { background: var(--hover); color: var(--text); font-weight: 600; }
 .nav.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
 .nav:disabled { opacity: .45; cursor: default; }
-/* Key hints: Ctrl+K only for now. */
-.find kbd, .nav kbd { margin-left: auto; }
+/* Key hints. */
+.find kbd { margin-left: auto; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
 .settings-nav { margin-top: auto; }
@@ -74,8 +74,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .search::placeholder { color: var(--dim); }
 .search:focus { border-color: var(--mark); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 30%, transparent); }
 .search:disabled { opacity: .5; }
-.close { all: unset; box-sizing: border-box; display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 6px; color: var(--dim); cursor: pointer; }
-.close:hover, .close:focus-visible { background: var(--hover); color: var(--text); }
+.panel-close { all: unset; box-sizing: border-box; display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 6px; color: var(--dim); cursor: pointer; }
+.panel-close:hover, .panel-close:focus-visible { background: var(--hover); color: var(--text); }
 .rail .message { margin: 0 14px 8px; }
 .rail .section { padding: 14px 22px 6px; }
 .list { overflow: auto; flex: 1; padding-bottom: 12px; }
