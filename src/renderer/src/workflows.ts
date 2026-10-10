@@ -49,7 +49,6 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     const mine = generation
     for (let row = queue.shift(); row; row = queue.shift()) {
       update(row.key, { result: { state: 'working' } })
-      let found: Partial<Row<C>> = {}
       try {
         const asset = await bridge.assetByTag(row.tag)
         if (mine !== generation) return
@@ -57,8 +56,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
           settle(row, { state: 'failed', reason: `No Asset with tag ${row.tag}` })
           continue
         }
-        found = { assetId: asset.id, name: asset.name || asset.model }
-        update(row.key, found)
+        update(row.key, { assetId: asset.id, name: asset.name || asset.model })
         const { text, what = '' } = await act(asset, row.ctx)
         if (mine !== generation) return
         settle(row, { state: 'done', text }, { what })
@@ -97,6 +95,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     },
     reset() {
       generation++
+      // The old drain() returns at its next generation check without touching running, so a new one can start now.
       running = false
       rows = []
       queue = []
@@ -109,8 +108,6 @@ export type Runner<C = unknown> = ReturnType<typeof createRunner<C>>
 
 export type BulkReturnStep = { step: 'location' } | { step: 'scan'; location: StatusLabel }
 export const READY = 'Ready to Deploy'
-// Status Labels of the deployable type: Snipe-IT reports a checked-out one as 'deployed'.
-const deployable = (a: Asset) => a.statusMeta === 'deployable' || a.statusMeta === 'deployed'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
 // once, set to Ready to Deploy and sent there. No confirm; Undo last (a later ticket) fixes mistakes.
@@ -129,7 +126,7 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
       throw new Error(earlier ? `Already checked in at ${earlier.time}` : `${a.assetTag} isn't checked out (status: ${a.status || 'none'}). Nothing changed.`)
     }
     // A label someone set on purpose while it was out (Pending, Broken…) is kept, never silently cleared.
-    const keep = !deployable(a)
+    const keep = a.statusType !== 'deployable'
     const what = `From ${a.assignee.type === 'asset' ? 'Asset ' : ''}${a.assignee.name}`
     await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
     return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what }

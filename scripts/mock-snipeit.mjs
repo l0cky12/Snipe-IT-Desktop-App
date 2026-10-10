@@ -16,7 +16,7 @@ const pick = (list, n) => list[n % list.length]
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
   ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
-].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
+].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
 const categories = named(['Chromebook', 'Laptop', 'Projector', 'Tablet'])
@@ -50,7 +50,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   }
 })
 // A checked-out Asset someone set to Pending while it was out: Bulk return checks it in but keeps the label.
-assets[1].status_label = statuses[4]
+// Snipe-IT's status_meta says 'deployed' for any checked-out Asset; status_type keeps the label's own type.
+assets[1].status_label = { ...statuses[4], status_meta: 'deployed' }
 // The stocked kinds, a few of each.
 const stock = (list) => list.map((r, i) => ({ id: i + 1, notes: null, manufacturer: null, category: null, ...r }))
 const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, notes: 'Renews each July' }])

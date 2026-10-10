@@ -12,6 +12,9 @@ export type Asset = {
   statusId: number | null
   /** Snipe-IT's status_meta: deployed, deployable, pending, archived, undeployable */
   statusMeta: string
+  /** The Status Label's own type (status_type): deployable, pending, archived, undeployable. Unlike status_meta, which
+   *  says 'deployed' for any checked-out Asset, it still shows a Pending or Broken label on one that's out. */
+  statusType: string
   assignee: Assignee | null
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
@@ -244,7 +247,7 @@ type RawAsset = {
   name: string | null
   serial: string | null
   model: Named
-  status_label: { id: number; name: string; status_meta: string } | null
+  status_label: { id: number; name: string; status_meta: string; status_type?: string } | null
   category: Named
   location: Named
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
@@ -386,6 +389,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     status: raw.status_label?.name ?? '',
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
+    statusType: raw.status_label?.status_type ?? '',
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',

@@ -28,7 +28,7 @@ export function errorSound() {
 }
 
 // One card per built Workflow, like All records.
-export function WorkflowsPage({ done, onOpen }: { done: (w: Workflow) => number; onOpen: (w: Workflow) => void }) {
+export function WorkflowsPage({ doneCount, onOpen }: { doneCount: (w: Workflow) => number; onOpen: (w: Workflow) => void }) {
   return (
     <>
       <header className="head"><h1>Workflows</h1></header>
@@ -39,7 +39,7 @@ export function WorkflowsPage({ done, onOpen }: { done: (w: Workflow) => number;
             <button key={w} className="workflow-card" onClick={() => onOpen(w)}>
               <span className="card-title"><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></span>
               <span className="dim">{about[w]}</span>
-              {done(w) > 0 && <span className="dim">{done(w)} done this session</span>}
+              {doneCount(w) > 0 && <span className="dim">{doneCount(w)} done this session</span>}
             </button>
           )
         })}
@@ -114,7 +114,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
   // The first match is highlighted as the Operator types; with nothing typed, the last Location (none the first time).
   // Worked out while rendering, not in an effect, so an Enter typed straight after the text sees the right one.
   const [moved, setMoved] = useState<{ q: string; i: number } | null>(null)
-  const hi = moved?.q === q ? moved.i : q ? 0 : shown.findIndex((l) => l.id === flow.last?.id)
+  const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : q ? 0 : shown.findIndex((l) => l.id === flow.last?.id)
   useEffect(() => { setText(''); setMoved(null); field.current?.focus() }, [step])
   useEffect(() => {
     const back = () => document.activeElement === document.body && field.current?.focus()
@@ -130,7 +130,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
     e.preventDefault()
     if (step.step === 'scan') return setStatus(flow.scan(text)), setText('')
     if (shown[hi]) return pick(shown[hi])
-    setStatus(q ? `No Location matches '${text.trim()}'. Pick the Location first.` : 'Pick the Location returns go to.')
+    setStatus(q ? 'Pick the Location first.' : 'Pick the Location returns go to.')
   }
   function onKeyDown(e: React.KeyboardEvent) {
     if (step.step !== 'location' || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !shown.length) return

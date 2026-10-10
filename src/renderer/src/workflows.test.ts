@@ -4,7 +4,7 @@ import { cleanTag, createBulkReturn, createRunner, NOT_ALLOWED } from './workflo
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
-  id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed',
+  id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed', statusType: 'deployable',
   assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', category: 'Chromebook', serial: '', purchaseDate: null,
   warrantyEnd: null, expectedCheckin: null, overdueDays: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
 })
@@ -133,7 +133,7 @@ describe('Bulk return', () => {
   })
 
   it("keeps a Status Label that isn't deployable, and flags the row", async () => {
-    const { flow, checkins } = await started([asset('NOMMA-1', { status: 'Pending', statusId: 5, statusMeta: 'pending' })])
+    const { flow, checkins } = await started([asset('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
     flow.scan('NOMMA-1')
     await vi.waitFor(() => expect(flow.runner.pending).toBe(0))
     expect(checkins).toEqual([[1, { statusId: undefined, locationId: 8, note: '[Bulk return]' }]])
@@ -142,7 +142,7 @@ describe('Bulk return', () => {
 
   it("refuses an Asset that isn't checked out, or that the key can't check in, and changes nothing", async () => {
     const { flow, checkins } = await started([
-      asset('NOMMA-1', { assignee: null, status: 'Broken', statusMeta: 'undeployable' }), asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true } }),
+      asset('NOMMA-1', { assignee: null, status: 'Broken', statusMeta: 'undeployable', statusType: 'undeployable' }), asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true } }),
     ])
     flow.scan('NOMMA-1')
     flow.scan('NOMMA-2')
