@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { Appearance, Background, MailInput, Settings, SettingsInput } from '../../main/config'
 
-export function SettingsPage({ settings, onSaved }: { settings: Settings; onSaved: (value: Settings) => void }) {
+// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
+export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -108,7 +109,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
       <label htmlFor="appearance">Theme</label>
       <select id="appearance" value={settings.appearance} onChange={(e) => {
         const appearance = e.target.value as Appearance
-        run(async () => onSaved(await window.settings.saveAppearance(appearance)), 'appearance')
+        run(async () => onAppearance(await window.settings.saveAppearance(appearance)), 'appearance')
       }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </section>
     {place === 'appearance' && notes}
