@@ -11,6 +11,7 @@ export type WorkflowNote = { workflow: Workflow; undo: boolean; text?: string; m
 export type WorkflowFields = { text?: string; move?: boolean; due?: string; supplier?: string; cost?: string }
 
 const DUE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
+const COST = /^\d+(\.\d{1,2})?$/
 
 /** One line of free text as Snipe-IT will show it: no markup characters, no links. Throws with a message on a link. */
 export function cleanText(s: string): string {
@@ -22,7 +23,7 @@ export function cleanText(s: string): string {
 /** A Repair cost as typed (`$45`, `45`, `45.5`) written as Snipe-IT's `45.00`. */
 export function repairCost(s: string): string {
   const v = s.trim().replace(/^\$\s*/, '')
-  if (!/^\d+(\.\d{1,2})?$/.test(v)) throw new Error('Repair cost must be a number like 45 or 45.00.')
+  if (!COST.test(v)) throw new Error('Repair cost must be a number like 45 or 45.00.')
   return Number(v).toFixed(2)
 }
 
@@ -54,11 +55,11 @@ export const userNotesLine = (date: string, assetTag: string, text: string, oper
 
 // The parser is #63 §5's reference: case and spacing read loosely, unknown keys and malformed values ignored.
 // A run of spaces inside a name reads as one; canon() puts the name back as written here.
-const names = (list: readonly string[]) => list.map((w) => w.replace(/ /g, '\\s+')).join('|')
-const NAME = names(WORKFLOWS)
+const loosely = (list: readonly string[]) => list.map((w) => w.replace(/ /g, '\\s+')).join('|')
+const NAME = loosely(WORKFLOWS)
 const TAG = new RegExp(`^\\[\\s*(${NAME})\\s*((?:\\|[^|\\]]*)*)\\]\\s*(.*)$`, 'is')
 const UNDO = new RegExp(`^\\[\\s*undo\\s*\\]\\s*(${NAME})\\s*(.*)$`, 'is')
-const APP = new RegExp(`^\\[\\s*(${names(APP_TAGS)})\\s*\\]\\s*(.*)$`, 'is')
+const APP = new RegExp(`^\\[\\s*(${loosely(APP_TAGS)})\\s*\\]\\s*(.*)$`, 'is')
 const canon = <T extends string>(list: readonly T[], s: string) => list.find((w) => w.toLowerCase() === s.toLowerCase().replace(/\s+/g, ' '))!
 
 function fields(raw: string, out: WorkflowNote) {
@@ -69,7 +70,7 @@ function fields(raw: string, out: WorkflowNote) {
     const k = f.slice(0, i).trim().toLowerCase(), v = f.slice(i + 1).trim()
     if (k === 'due' && DUE.test(v)) out.due = v
     else if (k === 'supplier' && v) out.supplier = v
-    else if (k === 'cost' && /^\d+(\.\d{1,2})?$/.test(v)) out.cost = v
+    else if (k === 'cost' && COST.test(v)) out.cost = v
   }
   return out
 }
@@ -101,13 +102,13 @@ export function parseAppNote(note: string | null): { tag: AppTag; text: string }
  * the Checkout, then the move Checkin; if its second call failed, the move Checkin stays live, as happened in Snipe-IT.
  */
 export function liveEntries<T extends { note: string | null }>(entries: readonly T[]): T[] {
+  const notes = entries.map((e) => parseWorkflowNote(e.note))
   const cancelled = new Set<number>()
-  entries.forEach((e, i) => {
-    const n = parseWorkflowNote(e.note)
+  notes.forEach((n, i) => {
     if (!n?.undo) return
     cancelled.add(i)
     for (let j = i - 1; j >= 0; j--) {
-      const m = parseWorkflowNote(entries[j].note)
+      const m = notes[j]
       if (!cancelled.has(j) && m && !m.undo && m.workflow === n.workflow) { cancelled.add(j); break }
     }
   })
