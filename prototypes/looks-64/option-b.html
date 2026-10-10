@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- PROTOTYPE (#64), throwaway. Option B "Index": labelled sidebar with shortcut hints, neutral greys, navy/gold kept only as accents. ?screen=workflow|assets&theme=light|dark -->
+<!-- PROTOTYPE (#64), throwaway. Shortcuts match #56's resolution (Ctrl+1-5, Ctrl+K, Enter, Esc, Ctrl+Z); undecided keys removed. Option B "Index": labelled sidebar with shortcut hints, neutral greys, navy/gold kept only as accents. ?screen=workflow|assets&theme=light|dark -->
 <html lang="en"><head><meta charset="utf-8"><title>Option B: Index</title>
 <style>
 @font-face { font-family: Figtree; font-weight: 300 900; src: url(../../src/renderer/src/fonts/figtree-latin.woff2) format('woff2'); }
@@ -93,30 +93,30 @@ th { color: var(--faint); font-weight: 500; font-size: 12px; height: 30px; borde
 const C = { blue: 'var(--blue)', green: 'var(--green)', amber: 'var(--amber)', red: 'var(--red)', grey: 'var(--grey)' }
 const side = (sel) => `<aside class="side"><div class="brand"><i>S</i>NOMMA IT</div>
   <div class="find">${ic('Search', 14)}Search or scan<kbd>Ctrl K</kbd></div>
-  ${[['LayoutGrid', 'Dashboard', 'G D'], ['Laptop', 'Assets', 'G A'], ['Users', 'Users', 'G U'], ['MapPin', 'Locations', 'G L'], ['Package', 'Inventory', 'G I'], ['Activity', 'Activity', 'G Y'], ['FileSpreadsheet', 'Reports', 'G R']]
-    .map(([i, l, k]) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i, 15)}${l}<kbd>${k}</kbd></div>`).join('')}
+  ${[['LayoutGrid', 'Dashboard'], ['Laptop', 'Assets'], ['Users', 'Users'], ['MapPin', 'Locations'], ['Package', 'Inventory'], ['Activity', 'Activity'], ['FileSpreadsheet', 'Reports']]
+    .map(([i, l]) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i, 15)}${l}</div>`).join('')}
   <div class="group">Workflows</div>
-  ${['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout'].map((l, i) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i ? 'Workflow' : 'ScanBarcode', 15)}${l}<kbd>F${i + 2}</kbd></div>`).join('')}
-  <div class="item foot">${ic('Settings', 15)}Settings<kbd>Ctrl ,</kbd></div></aside>`
+  ${['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout'].map((l, i) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i ? 'Workflow' : 'ScanBarcode', 15)}${l}<kbd>Ctrl ${i + 1}</kbd></div>`).join('')}
+  <div class="item foot">${ic('Settings', 15)}Settings</div></aside>`
 const st = (r) => `<span class="st" style="--c:${C[r.color]}">${r.status}</span>`
 if (SCREEN === 'workflow') show(`<div class="layout">${side('Bulk checkout')}<main class="main">
   <div class="bar"><span class="crumb">Workflows / <b>Bulk checkout</b></span><span class="sp"></span><button>${ic('Undo2', 13)}Undo last <kbd>Ctrl Z</kbd></button><button class="primary">Done <kbd>Esc</kbd></button></div>
   <div class="wf"><div class="wf-main">
-    <div class="who"><div class="av">SU</div><div><b>${USER.name}</b><div class="meta"><span>${USER.email}</span><span class="mono">#${USER.emp}</span><span>${USER.loc}</span><span>Already has ${USER.holds} Asset</span></div></div><button>Change User <kbd>F2</kbd></button></div>
+    <div class="who"><div class="av">SU</div><div><b>${USER.name}</b><div class="meta"><span>${USER.email}</span><span class="mono">#${USER.emp}</span><span>${USER.loc}</span><span>Already has ${USER.holds} Asset</span></div></div></div>
     <div class="field"><label>Asset Tag</label><div class="in">${ic('ScanBarcode', 18)}<input autofocus placeholder="Scan or type, then Enter"><kbd>Enter</kbd></div></div>
     <div class="log"><h2>Checked out this session <span class="dim" style="font-weight:400">4</span></h2>
       <table><tr><th>Asset Tag</th><th>Asset Model</th><th>Result</th><th>Time</th><th></th></tr>
       ${DONE.map((d, i) => `<tr class="${i ? '' : 'new'}"><td class="mono">${d.tag}</td><td>${d.model}</td><td><span class="ok">${ic('Check', 13)}Checked out</span></td><td class="dim">${d.time}</td><td style="text-align:right">${i ? '' : '<button>Undo <kbd>Ctrl Z</kbd></button>'}</td></tr>`).join('')}</table></div>
   </div>
   <aside class="keys"><h3>Keys</h3>
-    <div><span>Check out</span><kbd>Enter</kbd></div><div><span>Undo last</span><kbd>Ctrl Z</kbd></div><div><span>Change User</span><kbd>F2</kbd></div><div><span>Done</span><kbd>Esc</kbd></div><div><span>Open Asset</span><kbd>Ctrl Enter</kbd></div>
+    <div><span>Confirm (or rescan)</span><kbd>Enter</kbd></div><div><span>Cancel / Stop</span><kbd>Esc</kbd></div><div><span>Done for this User</span><kbd>Esc</kbd></div><div><span>Undo last</span><kbd>Ctrl Z</kbd></div><div><span>Lookup</span><kbd>Ctrl K</kbd></div><div><span>Other Workflows</span><kbd>Ctrl 1–5</kbd></div>
     <p>The field keeps focus. A scanner and the keyboard type into it the same way.</p></aside></div>
 </main></div>`)
 else show(`<div class="layout">${side('Assets')}<main class="main">
-  <div class="bar"><span class="crumb"><b>Assets</b> <span class="count">240</span></span><span class="sp"></span><button>Columns</button><button class="primary">New Asset <kbd>N</kbd></button></div>
+  <div class="bar"><span class="crumb"><b>Assets</b> <span class="count">240</span></span><span class="sp"></span><button>Columns</button><button class="primary">New Asset</button></div>
   <div class="tabs"><span class="on">All <b>240</b></span><span>Damaged <b>7</b></span><span>Out on temp <b>12</b></span><span>Audit due <b>31</b></span><span>Ready to Deploy <b>58</b></span><span>+ Save view</span></div>
-  <div class="tools"><div class="filter">${ic('Search', 13)}Filter<kbd style="margin-left:auto">/</kbd></div><span class="chipf">+ Status</span><span class="chipf">+ Location</span><span class="chipf">+ Asset Model</span>
-    <span class="sel">3 selected <button>Check out</button><button>Edit</button><button>Print labels</button><button>Clear <kbd>Esc</kbd></button></span></div>
+  <div class="tools"><div class="filter">${ic('Search', 13)}Filter</div><span class="chipf">+ Status</span><span class="chipf">+ Location</span><span class="chipf">+ Asset Model</span>
+    <span class="sel">3 selected <button>Check out</button><button>Edit</button><button>Print labels</button><button>Clear</button></span></div>
   <div class="list"><table><tr><th style="width:1%"></th><th>Asset Tag</th><th>Name</th><th>Status</th><th>Asset Model</th><th>Category</th><th>Location</th><th>Checked out to</th><th>Expected checkin</th><th>Last audit</th></tr>
   ${ROWS.map(r => `<tr class="${r.sel ? 'sel' : ''} ${r.ticked ? 'ticked' : ''}"><td><input type="checkbox" ${r.ticked ? 'checked' : ''}></td><td class="mono">${r.tag}</td><td>${r.name}</td><td>${st(r)}</td><td>${r.model}</td><td class="dim">${r.cat}</td><td>${r.loc}</td><td>${r.to}</td><td>${r.due}${r.temp ? '<span class="flag" style="--c:var(--amber)">Temp</span>' : ''}</td><td class="dim">${r.audited}${r.audit ? `<span class="flag" style="--c:${r.audit === 'late' ? 'var(--red)' : 'var(--amber)'}">${r.audit === 'late' ? 'Audit late' : 'Audit due'}</span>` : ''}</td></tr>`).join('')}</table></div>
 </main></div>`)
