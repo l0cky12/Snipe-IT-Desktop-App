@@ -923,22 +923,24 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
         // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
         const assets = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
-        const shown = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
-        const audits = (a: Asset) => [a.lastAudited ?? 'Never', a.nextAudit ?? '']
+        // Every audit Report starts with these columns; the to-do ones add the Assignee before the audit dates.
+        const assetColumns = ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location']
+        const assetCells = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
+        const auditCells = (a: Asset) => [a.lastAudited ?? 'Never', a.nextAudit ?? '']
         if (kind === 'lastAudited')
           return {
-            columns: ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location', 'Last audited', 'Next audit'],
+            columns: [...assetColumns, 'Last audited', 'Next audit'],
             // A blank From includes Assets never Audited; they're the oldest, so they come first.
             rows: assets.filter((a) => (a.lastAudited ? inRange(a.lastAudited) : !from)).sort((a, b) => (a.lastAudited ?? '').localeCompare(b.lastAudited ?? ''))
-              .map((a) => [...shown(a), ...audits(a)]),
+              .map((a) => [...assetCells(a), ...auditCells(a)]),
             capped: false,
           }
         // Soonest first is most days late first too.
         const listed = assets.filter((a) => a.nextAudit && inRange(a.nextAudit)).sort((a, b) => a.nextAudit!.localeCompare(b.nextAudit!))
         const due = kind === 'auditDue'
         return {
-          columns: ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location', 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
-          rows: listed.map((a) => [...shown(a), a.assignee?.name ?? '', ...audits(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
+          columns: [...assetColumns, 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
+          rows: listed.map((a) => [...assetCells(a), a.assignee?.name ?? '', ...auditCells(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
           capped: false,
         }
       }

@@ -153,18 +153,21 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     return () => clearInterval(timer)
   }, [])
   const scheduleOf = (r: ScheduleKey) => schedules.find((s) => keyOf(s.report) === keyOf(r))?.schedule
-  // The audit Reports' Location and Category choices; a list that doesn't load just leaves fewer choices.
-  const [places, setPlaces] = useState<{ locations: StatusLabel[]; categories: StatusLabel[] }>({ locations: [], categories: [] })
+  // Whether the chosen report narrows to a Location and a Category, and their choices, loaded the first time one is chosen;
+  // a list that doesn't load just leaves fewer choices.
+  const placeFilters = AUDIT_REPORTS.includes(kind)
+  const [choices, setChoices] = useState<{ locations: StatusLabel[]; categories: StatusLabel[] } | null>(null)
   useEffect(() => {
-    window.snipeIt.locations().then((locations) => setPlaces((p) => ({ ...p, locations })), () => {})
-    window.snipeIt.names('categories').then((categories) => setPlaces((p) => ({ ...p, categories })), () => {})
-  }, [])
-  const located = AUDIT_REPORTS.includes(kind)
+    if (!placeFilters || choices) return
+    setChoices({ locations: [], categories: [] })
+    window.snipeIt.locations().then((locations) => setChoices((c) => ({ categories: [], ...c, locations })), () => {})
+    window.snipeIt.names('categories').then((categories) => setChoices((c) => ({ locations: [], ...c, categories })), () => {})
+  }, [placeFilters, choices])
   // The filters the chosen report has: only the Activity Report narrows by record type and action, only the audit Reports by Location and Category.
   const sent: ReportQuery = {
     from: query.from, to: query.to,
     ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
-    ...(located && { locationId: query.locationId, categoryId: query.categoryId }),
+    ...(placeFilters && { locationId: query.locationId, categoryId: query.categoryId }),
   }
   // Bumped by every run and every change of report or filter; a result for an older one is dropped, so what shows
   // (and what exports) always matches the filters on screen.
@@ -224,15 +227,15 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
               </select>
             </>
           )}
-          {located && (
+          {placeFilters && (
             <>
               <select value={query.locationId ?? ''} onChange={(e) => set({ locationId: e.target.value })} aria-label="Location">
                 <option value="">Any Location</option>
-                {places.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {choices?.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
               <select value={query.categoryId ?? ''} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
                 <option value="">Any Category</option>
-                {places.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {choices?.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </>
           )}
