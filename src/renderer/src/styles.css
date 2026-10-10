@@ -38,35 +38,44 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 var(--sans); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
 button, input, select { font-family: inherit; }
-/* Important: the all: unset buttons (.nav, .row, .link, .sort) would otherwise wipe it. */
+/* Important: the all: unset buttons (.find, .nav, .close, .row, .link, .sort) would otherwise wipe it. */
 :focus-visible { outline: 2px solid var(--mark) !important; outline-offset: 2px !important; }
 .mono { font-family: var(--mono); font-size: .93em; }
 .dim { color: var(--dim); font-weight: 400; }
 
-/* Shell: an icon strip, the scan panel, and the sheet. */
-/* The panel can be closed (the strip stays), giving the sheet the full width. */
+/* Shell: the labelled sidebar, the scan panel, and the sheet. */
+/* The panel can be closed (the sidebar stays), giving the sheet the full width. */
 .layout { display: grid; grid-template-columns: auto 1fr; height: 100%; }
 .rail { display: flex; min-height: 0; }
-.strip { width: 68px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 16px 10px 14px; background: var(--side); box-shadow: inset -1px 0 0 var(--line); }
-.logo { display: grid; place-items: center; width: 40px; height: 40px; margin: 0 auto 12px; border-radius: 12px; background: var(--navy); color: var(--gold); font: 700 22px var(--sans); }
-.nav { all: unset; box-sizing: border-box; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: var(--dim); cursor: pointer; transition: background var(--fast), color var(--fast); }
-.nav:hover, .nav:focus-visible { background: var(--hover); color: var(--text); }
-.nav.sel { background: var(--hover); color: var(--text); box-shadow: inset 3px 0 0 var(--mark); }
-.nav:disabled { opacity: .4; cursor: default; }
-.nav { position: relative; }
-.badge { position: absolute; top: 2px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/18px var(--sans); text-align: center; }
+.sidebar { width: 212px; flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 8px; overflow-y: auto; background: var(--side); border-right: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 10px; font-weight: 700; font-size: 13.5px; }
+.logo { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--navy); color: var(--gold); font: 800 12px var(--sans); }
+.find, .nav { all: unset; box-sizing: border-box; display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
+.find { gap: 8px; flex: none; margin-bottom: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--dim); }
+.find:hover { border-color: var(--dim); }
+.nav { position: relative; flex: none; gap: 9px; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
+.nav svg { flex: none; }
+.nav:hover:not(:disabled), .nav:focus-visible { background: var(--hover); color: var(--text); }
+.nav.sel { background: var(--hover); color: var(--text); font-weight: 600; }
+.nav.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
+.nav:disabled { opacity: .45; cursor: default; }
+/* Key hints: Ctrl+K only for now. */
+.find kbd, .nav kbd { margin-left: auto; }
+kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
+.badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
 .settings-nav { margin-top: auto; }
-.panel-nav[aria-expanded="true"] { color: var(--mark); }
-.panel { width: 336px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
-.panel form { position: relative; padding: 16px 14px 10px; }
-.panel form svg { position: absolute; left: 30px; top: 31px; width: 20px; height: 20px; color: var(--dim); pointer-events: none; }
-.search { width: 100%; height: 50px; background: var(--bg); border: 2px solid var(--line); color: var(--text);
-          font: 15px var(--mono); padding: 0 14px 0 48px; border-radius: 14px; outline: none; transition: border-color var(--fast); }
+.panel { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
+.panel form { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px; }
+.panel form > svg { position: absolute; left: 22px; top: 23px; color: var(--dim); pointer-events: none; }
+.search { flex: 1; min-width: 0; height: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+          font: 15px var(--mono); padding: 0 12px 0 40px; border-radius: 8px; outline: none; transition: border-color var(--fast); }
 /* A scan field's ring is its --mark border and gold glow. */
 .search:focus-visible { outline: none !important; }
 .search::placeholder { color: var(--dim); }
 .search:focus { border-color: var(--mark); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 30%, transparent); }
 .search:disabled { opacity: .5; }
+.close { all: unset; box-sizing: border-box; display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 6px; color: var(--dim); cursor: pointer; }
+.close:hover, .close:focus-visible { background: var(--hover); color: var(--text); }
 .rail .message { margin: 0 14px 8px; }
 .rail .section { padding: 14px 22px 6px; }
 .list { overflow: auto; flex: 1; padding-bottom: 12px; }
