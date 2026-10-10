@@ -1058,6 +1058,30 @@ describe('report', () => {
     expect((await snipeIt.report('lastAudited', { from: '2026-03-01' })).rows.map((row) => row[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
   })
 
+  it('End of life lists Assets past it or reaching it within 365 days, past first, in the Location and Category, Archived left out', async () => {
+    const eol = (id: number, date: string | null, fields: object = {}) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, asset_eol_date: date && { date, formatted: date }, ...fields })
+    const archived = { status_label: { id: 6, name: 'Archived', status_type: 'archived', status_meta: 'archived' } }
+    const hardware = [eol(1, '2027-03-01'), eol(2, '2026-06-01'), eol(3, '2027-09-25'), eol(4, null), eol(5, '2026-09-24'), eol(6, '2025-01-01', archived), eol(7, '2027-09-24')]
+    const { fetch, calls, queries } = auditFetch('/hardware', hardware)
+    const snipeIt = createSnipeIt(config, fetch, today)
+    const r = await snipeIt.report('endOfLife', { locationId: '9', categoryId: '3' })
+    expect(calls).toEqual(['/hardware'])
+    expect(queries[0]).toMatchObject({ location_id: '9', category_id: '3' })
+    expect(r).toEqual({
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Status Label', 'Assignee', 'Location', 'Purchase date', 'End of life', 'Days left'],
+      rows: [
+        ['NOMMA-2', 'CB-2', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2026-06-01', '-115'],
+        ['NOMMA-5', 'CB-5', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2026-09-24', '0'],
+        ['NOMMA-1', 'CB-1', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2027-03-01', '158'],
+        ['NOMMA-7', 'CB-7', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2027-09-24', '365'],
+      ],
+      capped: false,
+    })
+    // From/To narrow the End of life date within that window.
+    expect((await snipeIt.report('endOfLife', { from: '2026-09-01', to: '2027-12-31' })).rows.map((row) => row[0])).toEqual(['NOMMA-5', 'NOMMA-1', 'NOMMA-7'])
+    expect(queries[1]).not.toHaveProperty('location_id')
+  })
+
   it('a Location or Category that is not an id is refused without asking Snipe-IT', async () => {
     const { fetch, calls } = fakeFetch({})
     const snipeIt = createSnipeIt(config, fetch)
@@ -1068,11 +1092,16 @@ describe('report', () => {
   })
 })
 
-describe('audit dates', () => {
+describe('audit, End of life and cost', () => {
   it('an Asset reads its last audited and next audit dates from the v8.7+ shape', async () => {
     const asset = await snipeItWith({ ...chromebook, last_audit_date: { datetime: '2026-03-02 09:15:00', formatted: '03/02/2026 9:15AM' }, next_audit_date: { date: '2027-03-02', formatted: '03/02/2027' } }).getAsset(4812)
     expect(asset).toMatchObject({ lastAudited: '2026-03-02', nextAudit: '2027-03-02' })
     expect(await snipeItWith({ ...chromebook, last_audit_date: null, next_audit_date: null }).getAsset(4812)).toMatchObject({ lastAudited: null, nextAudit: null })
+  })
+  it('an Asset reads its End of life date and its purchase cost as a plain number', async () => {
+    expect(await snipeItWith({ ...chromebook, asset_eol_date: { date: '2029-08-01', formatted: '08/01/2029' }, purchase_cost: '1,234.56' }).getAsset(4812))
+      .toMatchObject({ endOfLife: '2029-08-01', purchaseCost: '1234.56' })
+    expect(await snipeItWith({ ...chromebook, asset_eol_date: null, purchase_cost: null }).getAsset(4812)).toMatchObject({ endOfLife: null, purchaseCost: null })
   })
 })
 
