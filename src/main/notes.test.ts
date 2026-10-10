@@ -82,7 +82,7 @@ describe('Reading notes loosely', () => {
   })
 
   it('returns nothing for a note that doesn\'t start with a known tag', () => {
-    for (const note of [null, '', 'checked out for the year', 'see [Bulk checkout]', '[Batch] old note', '[Undo] Batch', '[Undo]', '[Bulk checkout(link)']) {
+    for (const note of [null, '', 'checked out for the year', 'see [Bulk checkout]', '[Batch] old note', '[Undo] Batch', '[Undo] Bulk checkouts', '[Undo]', '[Bulk checkout(link)']) {
       expect(parseWorkflowNote(note)).toBeNull()
       expect(parseAppNote(note)).toBeNull()
     }
@@ -122,6 +122,8 @@ describe('Cleaning what the Operator typed', () => {
     expect(() => cleanText('see https://example.com')).toThrow('links')
     expect(() => workflowNote('Repair intake', { text: 'photo at HTTP://example.com' })).toThrow('links')
     expect(() => appNote('Audit', 'http://x')).toThrow('links')
+    expect(() => cleanText('see https*://example.com')).toThrow('links')
+    expect(() => cleanText('see http\\://example.com')).toThrow('links')
   })
 
   it('writes a Repair cost typed as $45 or 45 as 45.00', () => {
