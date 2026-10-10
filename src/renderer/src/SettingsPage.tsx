@@ -18,13 +18,16 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   // Default Location is no longer offered; saving clears any previously stored one.
   const input: SettingsInput = { baseUrl, apiKey, defaultLocation: null }
 
+  // Checked on opening and after each connection save, not when other settings (Appearance, Email) change, so a
+  // Test connection result stays put.
+  const [connectionSaves, setConnectionSaves] = useState(0)
   useEffect(() => {
     if (!settings.hasToken) return
     let stale = false
     window.settings.test({ ...settings, apiKey: '' }).then((r) => !stale && setVersion(r.version), () => !stale && setVersion('Unavailable'))
     window.snipeIt.operatorEmail().then((to) => !stale && setRecipient({ to }), (e: Error) => !stale && setRecipient({ error: e.message }))
     return () => { stale = true }
-  }, [settings])
+  }, [connectionSaves, settings.hasToken])
 
   async function run(work: () => Promise<void>, where: typeof place = 'connection') {
     setBusy(true); setMessage(''); setError(''); setPlace(where)
@@ -40,7 +43,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     <header><h1>Settings</h1><p className="dim">Connect to Snipe-IT with your API token.</p></header>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
-      setApiKey(''); onSaved(saved); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
+      setApiKey(''); onSaved(saved); setConnectionSaves((n) => n + 1); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
     }) }}>
       <fieldset disabled={busy}>
         <section className="settings-section">
