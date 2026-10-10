@@ -1,3 +1,5 @@
+import { liveEntries, parseWorkflowNote } from './notes'
+
 export type Config = { baseUrl: string; apiKey: string }
 
 export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string }
@@ -155,11 +157,11 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, and Damaged. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'damaged'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
-  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited',
+  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', damaged: 'Damaged',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
@@ -271,6 +273,13 @@ type RawAsset = {
   last_audit_date?: { date?: string; datetime?: string } | null
   next_audit_date?: { date?: string; datetime?: string } | null
   available_actions?: unknown
+}
+// Snipe-IT v8.6+ names a Maintenance's type in maintenance_type; earlier versions kept it in asset_maintenance_type.
+type RawMaintenance = {
+  asset: { id: number } | null
+  start_date: { date: string } | null
+  maintenance_type?: string | null
+  asset_maintenance_type?: string | null
 }
 type RawActivity = {
   id: number
@@ -707,6 +716,45 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return rows
   }
 
+  // The Damaged Report (#69 §3): Assets whose Status Label is Damaged (by name, as Repair intake finds it), when they became
+  // Damaged, and what their newest live Repair intake recorded. Damaged since is the open Repair Maintenance's start, else
+  // that Repair intake's date, else not recorded (set Damaged by hand). Each Asset's Activity is searched PAGE_BATCH at a time.
+  async function damaged(now: Date): Promise<Report> {
+    const label = (await allRows<StatusLabel>('/statuslabels')).find((l) => l.name.trim().toLowerCase() === 'damaged')
+    if (!label) throw new Error('Snipe-IT has no Status Label named Damaged.')
+    const [assets, open] = await Promise.all([allRows<RawAsset>(`/hardware?status_id=${label.id}`), allRows<RawMaintenance>('/maintenances?completed=false')])
+    // Repair intake opens one Repair Maintenance; should an Asset have more, the newest start is the one Incoming repair closes.
+    const started = new Map<number, string>()
+    for (const m of open) {
+      const start = dayOf(m.start_date)
+      if (m.asset && start && (m.maintenance_type || m.asset_maintenance_type || '').trim().toLowerCase() === 'repair' && start > (started.get(m.asset.id) ?? ''))
+        started.set(m.asset.id, start)
+    }
+    // The Workflow name without brackets also finds its undos; ponytail: the newest 20 hits, far more than one Asset's repairs.
+    const intakeOf = async (id: number) => {
+      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=${encodeURIComponent('Repair intake')}&sort=created_at&order=desc&limit=20`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      const oldestFirst = [...body.rows].sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
+      const live = liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))
+        .flatMap((e) => { const n = parseWorkflowNote(e.note); return n?.workflow === 'Repair intake' && !n.undo ? [{ ...e, text: n.text ?? '' }] : [] })
+      return live.at(-1)
+    }
+    const intakes: Awaited<ReturnType<typeof intakeOf>>[] = []
+    for (let i = 0; i < assets.length; i += PAGE_BATCH) intakes.push(...await Promise.all(assets.slice(i, i + PAGE_BATCH).map((a) => intakeOf(a.id))))
+    const rows = assets.map((raw, i) => {
+      const a = toAsset(raw, now), intake = intakes[i]
+      const since = started.get(a.id) ?? (intake?.when.slice(0, 10) || null)
+      return { since, cells: [a.assetTag, a.name, a.model, since ?? 'Not recorded', since ? String(-daysFrom(now, since)) : 'Not recorded',
+        intake?.from ?? '', intake?.operator ?? '', intake?.text ?? '', started.has(a.id) ? 'Open' : 'None'] }
+    })
+    return {
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Damaged since', 'Days Damaged', 'Taken in from', 'Operator', 'What happened', 'Maintenance'],
+      // Oldest since is longest Damaged; not recorded goes last.
+      rows: rows.sort((x, y) => (x.since ?? '9').localeCompare(y.since ?? '9')).map((r) => r.cells),
+      capped: false,
+    }
+  }
+
   // A page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
   async function listPage<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery, limit: number, timeout?: number): Promise<ListPage<K>> {
     if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
@@ -944,6 +992,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           capped: false,
         }
       }
+      if (kind === 'damaged') return damaged(now)
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {

@@ -5,8 +5,8 @@ import { listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, AUDIT_REPORTS, itemTypeName, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
-// What the date range bounds in each report.
-const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited' }
+// What the date range bounds in each report; Damaged is a snapshot with no filters.
+const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited' }
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
@@ -164,8 +164,9 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     window.snipeIt.names('categories').then((categories) => setChoices((c) => ({ locations: [], ...c, categories })), () => {})
   }, [placeFilters, choices])
   // The filters the chosen report has: only the Activity Report narrows by record type and action, only the audit Reports by Location and Category.
+  const dated = !!rangeName[kind]
   const sent: ReportQuery = {
-    from: query.from, to: query.to,
+    ...(dated && { from: query.from, to: query.to }),
     ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
     ...(placeFilters && { locationId: query.locationId, categoryId: query.categoryId }),
   }
@@ -213,8 +214,12 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
           <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), stale())} aria-label="Report">
             {(Object.keys(REPORT_NAMES) as ReportKind[]).map((k) => <option key={k} value={k}>{REPORT_NAMES[k]}</option>)}
           </select>
-          <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
-          <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
+          {dated && (
+            <>
+              <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
+              <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
+            </>
+          )}
           {kind === 'activity' && (
             <>
               <select value={query.itemType ?? ''} onChange={(e) => set({ itemType: e.target.value })} aria-label="Record type">

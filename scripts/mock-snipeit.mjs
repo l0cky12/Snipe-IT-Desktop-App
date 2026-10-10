@@ -14,7 +14,7 @@ const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
 const statuses = [
-  ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
+  ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['Damaged', 'undeployable', '#d29922'],
   ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
 ].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
@@ -68,6 +68,28 @@ for (const a of assets.slice(0, 90).reverse()) {
   const action = a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
   act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', new Date(Date.now() - a.id * 36e5))
 }
+// Damaged Assets, three ways: taken in by Repair intake with its Repair Maintenance open, taken in without one (its
+// Maintenance step failed, or an Asset that wasn't checked out), or set Damaged by hand in the web UI with neither.
+// One also had a second Repair intake that was undone.
+const maintenances = []
+const maintain = (asset, start, type = 'Repair', completed = null) => maintenances.push({ id: maintenances.length + 1, asset: { id: asset.id, name: asset.name, asset_tag: asset.asset_tag },
+  name: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
+const at = (offset, hour) => new Date(`${day(offset)}T${String(hour).padStart(2, '0')}:00:00Z`)
+const repairs = ['cracked screen', 'won’t power on', 'keyboard missing keys', 'hinge broken', 'water damage', 'charging port loose']
+assets.filter((a) => a.status_label.name === 'Damaged').forEach((a, k) => {
+  const since = -(k * 4 + 2)
+  if (k % 3 === 0) {
+    act('checkin from', a, pick(users, a.id), `[Repair intake] ${pick(repairs, k)}`, at(since, 14))
+    maintain(a, since)
+  } else if (k % 3 === 1) {
+    act('note added', a, null, `[Repair intake] ${pick(repairs, k)}`, at(since, 15))
+    if (k === 1) act('note added', a, null, '[Repair intake] wrong Asset scanned', at(since + 1, 9)), act('note added', a, null, '[Undo] Repair intake', at(since + 1, 10))
+  }
+})
+// Not Damaged-since sources: a finished repair, and an open Maintenance that isn't a repair.
+maintain(assets[1], -60, 'Repair', -50)
+maintain(assets[4], -6, 'Upgrade')
+log.sort((x, y) => y.created_at.datetime.localeCompare(x.created_at.datetime))
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
 const lists = {
@@ -84,7 +106,9 @@ const lists = {
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
   models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model.id === m.id).length, remaining: assets.filter((a) => a.model.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
-  'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: () => true }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
+  'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: (r, v) => r.item?.id === +v }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
+  // Snipe-IT's completed filter: true for completed Maintenances, anything else for open ones.
+  maintenances: { rows: () => maintenances, filters: { completed: (m, v) => !!m.completed_at === (v === 'true'), asset_id: (m, v) => m.asset.id === +v } },
   statuslabels: { rows: () => statuses }, categories: { rows: () => categories }, departments: { rows: () => departments },
   licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes) }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
   consumables: { rows: () => consumables, search: (r) => text(r.name, r.item_no, r.notes) }, components: { rows: () => components, search: (r) => text(r.name, r.notes) },
