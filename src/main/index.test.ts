@@ -52,7 +52,12 @@ beforeEach(async () => {
         }
       },
     },
-    contextBridge: { exposeInMainWorld: (key: string, api: unknown) => (exposed[key] = api) },
+    // The bridge copies what a function throws, an Error's message only; structuredClone drops its other fields alike.
+    contextBridge: {
+      exposeInMainWorld: (key: string, api: Record<string, (...args: unknown[]) => Promise<unknown>>) =>
+        (exposed[key] = Object.fromEntries(Object.entries(api).map(([name, fn]) =>
+          [name, (...args: unknown[]) => fn(...args).catch((e) => { throw structuredClone(e) })]))),
+    },
     safeStorage: { isEncryptionAvailable: () => false },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))

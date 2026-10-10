@@ -234,21 +234,24 @@ export type ImportResult = { ok: true } | { ok: false; errors: Record<string, un
 
 /**
  * What kind of failure a call hit, so the window can tell one every following request would hit too (Snipe-IT
- * unreachable or too slow, the API key rejected, a refusal, or a request limit) from Snipe-IT refusing this request.
+ * unreachable or too slow, the API key rejected, a refusal, or a request limit) from one about this request alone (refused).
  */
 export type FailureKind = 'unreachable' | 'timeout' | 'key' | 'forbidden' | 'rateLimited' | 'refused'
-/** A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait. */
-export type Failure = Error & { kind: FailureKind; retryAfter?: number }
+/**
+ * A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait.
+ * A plain object, not an Error: the bridge to the window copies an Error's message only, but an object's every field.
+ */
+export type Failure = { message: string; kind: FailureKind; retryAfter?: number }
 
-// Electron passes only an error's message to the window, so the main process writes the kind into it ("[rateLimited 23] …")
-// and the preload reads it back out. An error with no kind is a refusal.
+// Electron passes only an error's message from the main process, so it writes the kind into it ("[rateLimited 23] …")
+// and the preload reads it back out. An error with no kind is about this request alone.
 export function toWire(e: unknown): Error {
   const { kind = 'refused', retryAfter } = e as Partial<Failure>
   return new Error(`[${kind}${retryAfter === undefined ? '' : ` ${retryAfter}`}] ${e instanceof Error ? e.message : String(e)}`)
 }
 export function fromWire(message: string): Failure {
   const [, kind = 'refused', seconds, text = message] = /^\[(\w+)(?: (\d+))?\] ([\s\S]*)$/.exec(message) ?? []
-  return Object.assign(new Error(text), { kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) })
+  return { message: text, kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) }
 }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
@@ -637,7 +640,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Each thrown Error carries its FailureKind, and an HTTP error its status.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
     const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
-    const unreachable = () => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+    const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
       ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
@@ -663,7 +666,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
     }
     // The proxy in front of Snipe-IT can't reach it.
-    if ([502, 503, 504].includes(res.status)) throw Object.assign(unreachable(), { status: res.status })
+    if ([502, 503, 504].includes(res.status)) throw unreachable({ status: res.status })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     // The timeout covers the body too: a slow server can stall after the headers.
     try {
