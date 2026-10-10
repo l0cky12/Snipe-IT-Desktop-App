@@ -10,8 +10,9 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'appearance'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background'>('connection')
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
+  const [appearanceError, setAppearanceError] = useState('')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
   // Default Location is no longer offered; saving clears any previously stored one.
@@ -109,10 +110,12 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       <label htmlFor="appearance">Theme</label>
       <select id="appearance" value={settings.appearance} onChange={(e) => {
         const appearance = e.target.value as Appearance
-        run(async () => onAppearance(await window.settings.saveAppearance(appearance)), 'appearance')
+        // Not through run(): it stays usable (and keeps focus) while a test or save runs, without ending that one's busy state.
+        setAppearanceError('')
+        window.settings.saveAppearance(appearance).then(onAppearance, (err: Error) => setAppearanceError(err.message))
       }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </section>
-    {place === 'appearance' && notes}
+    {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}
     <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
       <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
     </section>
