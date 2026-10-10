@@ -42,25 +42,30 @@ function rangeOf({ range, since, sentAt }: KeptSchedule, when: Date): ReportQuer
 }
 
 // The Report scheduler: emails a Report to the Operator, and only to them at REPORT_DOMAIN, now or when its schedule
-// comes due (tick, every minute while the app runs). now, run, recipient, send, the schedules and failed are passed in
-// so it can be tested on a fake clock and sender.
-export function createReportScheduler({ now, run, recipient, send, schedules, recordSend, failed }: {
+// comes due (tick, every minute while the app runs). Each send captures its connection and Report definitions before
+// any async work. Saving the connection or logging out cancels pending sends and the rest of the current tick.
+export function createReportScheduler({ now, session, schedules, recordSend, failed }: {
   now: () => Date
-  run: (ref: ReportRef) => Promise<ReportRun>
-  /** The Operator's Snipe-IT email address. */
-  recipient: () => Promise<string>
-  send: (mail: Mail) => Promise<void>
+  session: () => {
+    run: (ref: ReportRef) => Promise<ReportRun>
+    /** The Operator's Snipe-IT email address. */
+    recipient: () => Promise<string>
+    send: (mail: Mail) => Promise<void>
+  }
   schedules: () => Scheduled[]
   recordSend: (report: ScheduleKey, last: LastSend) => void
   /** A scheduled send failed (each try), with why. */
   failed: (error: string) => void
-}): ReportsApi & { tick(): Promise<void> } {
+}): ReportsApi & { tick(): Promise<void>; cancelPending(): void } {
   let ticking = false
+  let generation = 0
   const api = {
+    cancelPending() { generation++ },
     /** Sends every Report that's due, one at a time, recording each result. A tick still sending makes the next do nothing. */
     async tick() {
       if (ticking) return
       ticking = true
+      const started = generation
       try {
         const when = now()
         const at = when.toISOString()
@@ -68,6 +73,8 @@ export function createReportScheduler({ now, run, recipient, send, schedules, re
           if (!isDue(schedule, when)) continue
           const ref = 'saved' in report ? report : { builtIn: report.builtIn, query: rangeOf(schedule, when) }
           const last: LastSend = await api.emailNow(ref).then(({ rows }) => ({ at, rows }), (e: Error) => ({ at, error: e.message }))
+          // Neither the old queue nor its result belongs to the new connection.
+          if (started !== generation) return
           recordSend(report, last)
           if ('error' in last) failed(last.error)
         }
@@ -76,11 +83,19 @@ export function createReportScheduler({ now, run, recipient, send, schedules, re
       }
     },
     async emailNow(ref: ReportRef) {
+      const started = generation
+      const { recipient, run, send } = session()
+      const check = () => {
+        if (started !== generation) throw new Error('Report email cancelled because the connection was saved or you logged out. Run it again after connecting.')
+      }
       const to = await recipient()
+      check()
       if (!to.toLowerCase().endsWith(`@${REPORT_DOMAIN}`))
         throw new Error(`Reports are emailed only to @${REPORT_DOMAIN} addresses, and your Snipe-IT email is ${to}. Student information mustn't leave the district; ask a Snipe-IT Superuser to change your email.`)
       const report = await run(ref)
+      check()
       const when = now()
+      // No await between the check and SMTP handoff. A message already handed to SMTP cannot be recalled.
       await send({
         to,
         subject: `${report.name}, ${localDate(when)}`,
