@@ -16,8 +16,10 @@ const COST = /^\d+(\.\d{1,2})?$/
 /** One line of free text as Snipe-IT will show it: no markup characters, no links. Throws with a message on a link. */
 export function cleanText(s: string): string {
   // Snipe-IT turns a link into an anchor, and strips <…>; the rest is Markdown.
-  if (/https?:\/\//i.test(s)) throw new Error('Notes can’t contain links (http:// or https://).')
-  return s.replace(/[<>*_`~\\[\]|]/g, '').replace(/\s+/g, ' ').trim()
+  // Checked after cleaning: dropping a character can join a link back together (https*://).
+  const t = s.replace(/[<>*_`~\\[\]|]/g, '').replace(/\s+/g, ' ').trim()
+  if (/https?:\/\//i.test(t)) throw new Error('Notes can’t contain links (http:// or https://).')
+  return t
 }
 
 /** A Repair cost as typed (`$45`, `45`, `45.5`) written as Snipe-IT's `45.00`. */

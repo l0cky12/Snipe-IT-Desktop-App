@@ -122,6 +122,8 @@ describe('Cleaning what the Operator typed', () => {
     expect(() => cleanText('see https://example.com')).toThrow('links')
     expect(() => workflowNote('Repair intake', { text: 'photo at HTTP://example.com' })).toThrow('links')
     expect(() => appNote('Audit', 'http://x')).toThrow('links')
+    // A link that only appears once the markup characters are dropped is still a link.
+    expect(() => workflowNote('Repair intake', { text: 'https*://example.com' })).toThrow('links')
   })
 
   it('writes a Repair cost typed as $45 or 45 as 45.00', () => {
