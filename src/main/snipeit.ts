@@ -171,14 +171,14 @@ export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'la
 export const takesRange = (report: unknown) =>
   !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
 /** The Reports narrowed to a Location and a Category. */
-export const PLACE_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited', 'endOfLife']
+export const LOCATION_CATEGORY_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited', 'endOfLife']
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit, End of life). locationId/categoryId: Snipe-IT ids, for PLACE_REPORTS.
+ * end, next audit, last audit, End of life). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS.
  */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -932,7 +932,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const now = today()
-      if (PLACE_REPORTS.includes(kind)) {
+      if (LOCATION_CATEGORY_REPORTS.includes(kind)) {
         const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
         const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
         // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
