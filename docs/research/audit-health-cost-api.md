@@ -101,7 +101,7 @@ The rate limit is 120 requests per minute per user, set by `API_THROTTLE_PER_MIN
   the same in v7.1.17).
 - `?assets_count=N` is an **equality** test (`has('assets','=',N)`), so it can't express "more than 0"
   ([L304-L306](https://github.com/grokability/snipe-it/blob/v8.8.0/app/Http/Controllers/Api/UsersController.php#L304-L306)).
-  Instead use **`GET /users?activated=0&sort=assets_count&order=desc&limit=500`** (`assets_count` can be sorted on)
+  Instead use **`GET /users?activated=0&sort=assets_count&order=desc&limit=500`** (`assets_count` can be sorted on, [UsersController L108-L128](https://github.com/grokability/snipe-it/blob/v8.8.0/app/Http/Controllers/Api/UsersController.php#L108-L128))
   and keep rows until `assets_count` reaches 0. That is usually a single request. Do the same with
   `licenses_count`/`accessories_count` to match the glossary's **Holding**.
 
@@ -222,7 +222,7 @@ The rate limit is 120 requests per minute per user, set by `API_THROTTLE_PER_MIN
   - In v8.8 only, `/calendar/events?event_type=asset.warranty_expiration&start=…&end=…` lists warranty ends in a
     window. It is capped at 500.
 - **End of life.**
-  - `asset_eol_date` (a stored date column since v6.0.x): a date object, or null. It can be sorted and filtered.
+  - `asset_eol_date` (a stored date column, added by a 2023 migration in v6): a date object, or null. It can be sorted and filtered.
   - `eol`: the months from `purchase_date` to `asset_eol_date`, as a string.
   - The Asset Model's `eol`: the model default, `"N months"` or `"None"`
     ([AssetsTransformer L46-L47](https://github.com/grokability/snipe-it/blob/v8.8.0/app/Http/Transformers/AssetsTransformer.php#L46-L47),
