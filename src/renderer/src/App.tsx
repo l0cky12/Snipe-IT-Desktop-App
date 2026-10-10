@@ -335,7 +335,7 @@ export function App() {
           <div className="list">
             {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={choose} />}
             {others.map((m) => 'error' in m
-              ? <p key={m.kind} className="message">{kindName[m.kind]}: {m.error}</p>
+              ? <p key={m.kind} className="message error">{kindName[m.kind]}: {m.error}</p>
               : m.rows.length > 0 && (
                 <div key={m.kind}>
                   <div className="section">{kindName[m.kind]} ({m.rows.length})</div>

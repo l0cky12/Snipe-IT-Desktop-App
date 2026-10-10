@@ -209,7 +209,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .c-blue  { --dot: var(--blue); }
 .c-red   { --dot: var(--red); }
 .c-grey  { --dot: var(--grey); }
-/* Flags (Overdue, Warranty) and group tags: the word in the text color inside an outline in the status color. */
+/* Flags (Overdue, Warranty) and Permission Groups: the word in the text color inside an outline in the status color. */
 .flag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--dot, var(--grey)); border-radius: 4px;
         color: var(--text); font: 600 11.5px/1 var(--sans); white-space: nowrap; }
 
@@ -258,7 +258,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table tr.ticked td { background: var(--selrow); }
 .list-table tr.sel td { background: var(--hover); }
 .list-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
-.list-table .tick { width: 1%; padding: 0; }
+.list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }
 .list-table .tick label { display: flex; align-items: center; height: 28px; padding: 0 6px 0 16px; cursor: pointer; }
 .list-table .tick input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); cursor: pointer; }
 /* The Selection bar: the count, select-all, its Bulk Actions and Clear, above the List. */
@@ -298,8 +298,8 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .form-field textarea { padding: 5px 10px; }
 .form-field input[aria-invalid], .form-field select[aria-invalid], .form-field textarea[aria-invalid] { border-color: var(--red); }
 /* A field's error: the text color, after a red icon. */
-.field-error { --edge: var(--red); position: relative; margin: 0; padding-left: 20px; color: var(--text); font-size: 12px; font-weight: 500; }
-.field-error::before { left: 0; top: 1px; width: 14px; height: 14px; }
+.field-error { --edge: var(--red); margin: 0; color: var(--text); font-size: 12px; font-weight: 500; }
+.field-error::before { position: static; display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -3px; }
 .record-form .message.error { margin: 14px 28px 0; }
 .confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Red as an outline, not text: no red passes 4.5:1 for text in both themes. The confirm's is heavier. */
@@ -309,9 +309,10 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .choices label { display: flex; align-items: center; gap: 6px; min-height: 24px; font: 13px var(--sans); color: var(--text); }
 .access-body { padding: 4px 28px 20px; display: grid; gap: 10px; }
 .access .message { margin: 6px 28px; }
-/* 24×24 to click, without making the tag taller. */
+/* 24×24 to click, without making the outline taller. */
 .flag .chip-x { all: unset; display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -2px -6px -2px 0; border-radius: 4px; cursor: pointer; font-weight: 700; }
-.flag .chip-x:hover { background: var(--hover); }
+.flag .chip-x:hover:not(:disabled) { background: var(--hover); }
+.flag .chip-x:disabled { opacity: .45; cursor: default; }
 .permissions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .permission-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 0 28px 28px; }
 .permission-areas fieldset { border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 16px; display: grid; gap: 6px; }

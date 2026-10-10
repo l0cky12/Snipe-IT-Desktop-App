@@ -19,6 +19,9 @@ const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K])
   assets: { status: (a) => <StatusChip asset={a} /> },
   activity: { note: (r) => r.note && <span className="note">{r.note}</span> },
 }
+/** The keys of the columns that hold numbers (counts like Assets, Seats, Remaining), which right-align. */
+export const numericColumns = (columns: AnyColumn[], rows: object[]) =>
+  new Set(columns.filter((c) => rows.some((r) => typeof (r as Record<string, unknown>)[c.key] === 'number')).map((c) => c.key))
 // Stored per computer and per List: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
 function readColumns(kind: ListKind): string[] {
@@ -311,8 +314,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
 
   const rows = page?.rows ?? []
   const total = page?.total ?? 0
-  // A count column (Assets, Seats, Remaining) holds numbers.
-  const numeric = new Set(columns.filter((c) => rows.some((r) => typeof (r as Record<string, unknown>)[c.key] === 'number')).map((c) => c.key))
+  const numeric = numericColumns(columns, rows)
   // Activity Report rows are log entries, not Records: nothing to select.
   const selectable = kind !== 'activity'
   const ticks = pageTicks(selection, rows)
