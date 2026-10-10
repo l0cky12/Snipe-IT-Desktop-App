@@ -295,6 +295,21 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, offline).getAsset(4812)).rejects.toThrow(/Can't reach Snipe-IT/)
   })
 
+  it('a request Snipe-IT throttles is sent again after the wait it asks for', async () => {
+    const sent: string[] = []
+    const throttled = (async (input: string | URL | Request) => {
+      sent.push(String(input))
+      return sent.length < 3
+        ? new Response(JSON.stringify({ message: 'Too Many Attempts.' }), { status: 429, headers: { 'Retry-After': '0' } })
+        : new Response(JSON.stringify(chromebook))
+    }) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, throttled).lookup('NOMMA-004812')).resolves.toMatchObject({ exact: true })
+    expect(sent).toHaveLength(3)
+    // Not for ever: still throttled after three more tries, it fails with Snipe-IT's reason.
+    const always = (async () => new Response(JSON.stringify({ message: 'Too Many Attempts.' }), { status: 429, headers: { 'Retry-After': '0' } })) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, always).lookup('NOMMA-004812')).rejects.toThrow('HTTP 429: Too Many Attempts.')
+  })
+
   it('a Snipe-IT too slow to answer says so, rather than blaming the network', async () => {
     const slow = (async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
@@ -1101,7 +1116,8 @@ describe('report', () => {
         most = Math.max(most, ++open)
         if (hold) await new Promise<void>((done) => waiting.push(done))
         open--
-        const rows = logs[Number(q.item_id)] ?? []
+        // Snipe-IT's search is a case-insensitive substring match, here on the note.
+        const rows = (logs[Number(q.item_id)] ?? []).filter((r) => String((r as { note: unknown }).note).toLowerCase().includes(q.search.toLowerCase()))
         return new Response(JSON.stringify({ total: rows.length, rows }))
       }
       const release = () => waiting.splice(0).forEach((done) => done())
@@ -1143,7 +1159,15 @@ describe('report', () => {
       expect(queries[1]).toMatchObject({ status_id: '6' })
       expect(queries[2]).toMatchObject({ completed: 'false' })
       expect(activity.map((q) => q.item_id)).toEqual(['1', '2', '3', '4'])
-      expect(activity[0]).toMatchObject({ item_type: 'asset', search: 'Repair intake', order: 'desc', limit: '20' })
+      expect(activity[0]).toMatchObject({ item_type: 'asset', search: 'intake', order: 'desc', limit: '20' })
+    })
+
+    it('an undo typed by hand with odd spacing still cancels its Repair intake', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1)], [], { 1: [
+        intake(101, 1, '2026-09-12 10:05:00', '[undo]  Repair   intake', null),
+        intake(100, 1, '2026-09-12 10:00:00', '[Repair intake] wrong Asset scanned', null),
+      ] })
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3)).toEqual(['Not recorded', 'Not recorded', '', '', '', 'None'])
     })
 
     it('the open Repair Maintenance’s start date wins over the Repair intake’s date', async () => {

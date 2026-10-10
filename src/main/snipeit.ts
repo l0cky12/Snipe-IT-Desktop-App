@@ -653,16 +653,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
       ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
       : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
-    let res: Response, text: string
-    try {
-      res = await fetch(api + path, {
-        signal: AbortSignal.timeout(timeout),
-        redirect: 'error',
-        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && !(post instanceof FormData) && { 'Content-Type': 'application/json' }) },
-        ...(post && { method, body: post instanceof FormData ? post : JSON.stringify(post) }),
-      })
-    } catch (e) {
-      throw failed(e)
+    const send = async () => {
+      try {
+        return await fetch(api + path, {
+          signal: AbortSignal.timeout(timeout),
+          redirect: 'error',
+          headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && !(post instanceof FormData) && { 'Content-Type': 'application/json' }) },
+          ...(post && { method, body: post instanceof FormData ? post : JSON.stringify(post) }),
+        })
+      } catch (e) {
+        throw failed(e)
+      }
+    }
+    let res = await send(), text: string
+    // Snipe-IT throttles its API (120 requests a minute by default) and refuses the rest before doing anything, so a refused
+    // request is safe to send again once the wait it names (Retry-After, in seconds) is over. A Report reads one Asset at a time.
+    for (let tries = 0; res.status === 429 && tries < 3; tries++) {
+      const wait = Number(res.headers.get('Retry-After') ?? 5)
+      await new Promise((done) => setTimeout(done, Math.min(Number.isNaN(wait) ? 5 : wait, 60) * 1000))
+      res = await send()
     }
     if (res.status === 401)
       throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
@@ -730,10 +739,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (m.asset && start && (m.maintenance_type || m.asset_maintenance_type || '').trim().toLowerCase() === 'repair' && start > (started.get(m.asset.id) ?? ''))
         started.set(m.asset.id, start)
     }
-    // The Workflow name without brackets also finds its undos. ponytail: the newest 20 hits, far more than one Asset's repairs;
-    // an undo whose Repair intake is older than those would leave that Repair intake live. Page further if that ever happens.
+    // "intake" finds the Workflow notes however their spacing was typed, and their undos; the parser picks them out (#63 §5).
+    // ponytail: the newest 20 hits, far more than one Asset's repairs; an undo whose Repair intake is older than those would
+    // leave that Repair intake live. Page further if that ever happens.
     const intakeOf = async (id: number) => {
-      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=${encodeURIComponent('Repair intake')}&sort=created_at&order=desc&limit=20`)
+      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=intake&sort=created_at&order=desc&limit=20`)
       if (isError(body)) throw new Error(reason(body.messages))
       const oldestFirst = [...body.rows].sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
       const live = liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))
