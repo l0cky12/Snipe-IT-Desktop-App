@@ -37,7 +37,7 @@ Post the result as a PR comment headed `### Codex review (round N)` naming the r
 - If you think a finding is wrong, say why in the round's comment instead of changing code. It's settled if the next review doesn't raise it again.
 - Round limit: 1 for PRs labelled `small`, 3 for `large`. When the limit is hit and findings or red checks remain, add the `needs-human-review` label, comment a short summary of what is still open, and stop.
 - PRs labelled `security-sensitive` always end with a human merge. Finish the rounds, then stop.
-- Merge with `gh pr merge --squash` only when checks are green, every review thread is resolved, a Codex review comment names the PR's latest commit, and neither `needs-human-review` nor `security-sensitive` is set. `.claude/hooks/guard-merge.sh` enforces this for `gh pr merge`; don't route around it.
+- Merge with `gh pr merge <number> --squash` only when checks are green, every review thread is resolved, a Codex review comment names the PR's latest commit, and neither `needs-human-review` nor `security-sensitive` is set. `.claude/hooks/guard-merge.sh` enforces this for `gh pr merge`; don't route around it.
 
 ## Review guidelines
 
