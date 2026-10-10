@@ -342,7 +342,7 @@ export function App() {
                   {m.rows.map((t) => {
                     const text = <>
                       <span className="t">{t.name}</span>
-                      {t.detail && <span className="n mono">{t.detail}</span>}
+                      {t.detail && <span className="n">{t.detail}</span>}
                       {t.matched && <span className="n">Found in {t.matched}</span>}
                     </>
                     const kind = m.kind

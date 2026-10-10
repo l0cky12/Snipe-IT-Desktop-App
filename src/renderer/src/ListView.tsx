@@ -305,7 +305,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     const shownValue = value === '' || value == null ? '—' : value
     // The row's way in: the first column, or for the Activity Report the Asset it names.
     const go = (first && kind !== 'activity') || (kind === 'activity' && c.key === 'item') ? open(row) : undefined
-    return <td key={c.key}>{go ? <button className={`link${first ? ' mono' : ''}`} onClick={go}>{shownValue}</button> : shownValue}</td>
+    // Space Mono only for Asset Tags and Serials; the link inherits it.
+    return <td key={c.key} className={c.key === 'assetTag' || c.key === 'serial' ? 'mono' : undefined}>{go ? <button className="link" onClick={go}>{shownValue}</button> : shownValue}</td>
   }
 
   const rows = page?.rows ?? []

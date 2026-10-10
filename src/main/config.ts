@@ -10,7 +10,8 @@ export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plai
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
 /** Light or dark on this PC; system follows the OS. */
-export type Appearance = 'system' | 'light' | 'dark'
+export const APPEARANCES = ['system', 'light', 'dark'] as const
+export type Appearance = (typeof APPEARANCES)[number]
 /** ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted. */
 export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string }
 /** A blank password keeps the saved one, as long as the mail server's host and username are the same. */
@@ -212,7 +213,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       return get()
     },
     saveAppearance(appearance: Appearance) {
-      if (!['system', 'light', 'dark'].includes(appearance)) throw new Error('Invalid appearance')
+      if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
       return get()
     },

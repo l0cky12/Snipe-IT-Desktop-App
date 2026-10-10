@@ -10,6 +10,7 @@ import { createSnipeIt } from './snipeit'
 import trayIcon from './tray.png?asset'
 
 // The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
+// ponytail: copies --bg from styles.css; change both together.
 const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#ffffff')
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */

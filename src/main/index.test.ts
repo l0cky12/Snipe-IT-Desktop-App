@@ -13,6 +13,7 @@ const smtp: MailInput = { host: 'smtp.example.org', port: 465, security: 'ssl', 
 const send = vi.fn<(server: MailInput, mail: Mail) => Promise<void>>(async () => {})
 const request = vi.fn<typeof fetch>()
 let dir: string
+const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -29,6 +30,7 @@ beforeEach(async () => {
     String(url).endsWith('/users/me') ? { email: 'operator@nomma.net' } : { total: 0, rows: [] },
   )))
   vi.stubGlobal('fetch', request)
+  nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
     app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: () => {}, setAppUserModelId: () => {} },
@@ -40,7 +42,7 @@ beforeEach(async () => {
       isVisible() { return true }
     },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
-    nativeTheme: { themeSource: 'system', shouldUseDarkColors: false, on: () => {} },
+    nativeTheme,
     safeStorage: { isEncryptionAvailable: () => false },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))
@@ -128,4 +130,10 @@ it('keeps a Saved Report definition captured before looking up the recipient', a
   await pending
   expect(String(request.mock.calls[1][0])).toContain('search=original')
   expect(send.mock.calls[0][1].subject).toMatch(/^Original,/)
+})
+
+it('switches the theme when the Appearance setting is saved', () => {
+  expect(nativeTheme.themeSource).toBe('system')
+  call('settings:saveAppearance', 'dark')
+  expect(nativeTheme.themeSource).toBe('dark')
 })
