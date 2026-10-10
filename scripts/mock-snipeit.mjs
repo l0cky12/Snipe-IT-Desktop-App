@@ -16,7 +16,8 @@ const pick = (list, n) => list[n % list.length]
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
   ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
-].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
+// status_type is the label's own type; status_meta says 'deployed' for a deployable label on a checked-out Asset.
+].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
 const categories = named(['Chromebook', 'Laptop', 'Projector', 'Tablet'])
@@ -30,14 +31,15 @@ const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
 const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
-  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
+  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), employee_num: i % 10 === 9 ? null : `E-${2001 + i}`, email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
+const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), employee_number: pick(users, i).employee_num, type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
   const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40
   return {
@@ -50,6 +52,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
+    // Snipe-IT formats money as text ("1,149.99") and sends null for none.
+    purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    last_checkout: holder ? { datetime: `${day(-1 - (i % 60))} 08:15:00`, formatted: day(-1 - (i % 60)) } : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -289,7 +294,8 @@ createServer(async (req, res) => {
     } else if (m[2] === 'checkout') {
       const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
-      a.assigned_to = { ...target, type: body.checkout_to_type }
+      a.assigned_to = { ...target, ...(target.employee_num !== undefined && { employee_number: target.employee_num }), type: body.checkout_to_type }
+      a.last_checkout = { datetime: `${day(0)} ${new Date().toTimeString().slice(0, 8)}`, formatted: day(0) }
       a.status_label = statuses[1]
       a.expected_checkin = body.expected_checkin ? { date: body.expected_checkin } : null
       act('checkout', a, a.assigned_to, body.note)

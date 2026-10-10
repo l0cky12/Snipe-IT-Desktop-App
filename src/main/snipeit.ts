@@ -155,26 +155,29 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, and two snapshots. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'statusLocation', 'checkedOut'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited',
+  statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
 /** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
 export const takesRange = (report: unknown) =>
   !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
-/** The Reports narrowed to a Location and a Category. */
+/** The audit Reports, which ask Snipe-IT for its audit dates. */
 export const AUDIT_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited']
+/** The Reports narrowed to a Location and a Category. */
+export const PLACE_REPORTS: readonly ReportKind[] = [...AUDIT_REPORTS, 'statusLocation', 'checkedOut']
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for PLACE_REPORTS.
  */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -260,10 +263,14 @@ type RawAsset = {
   name: string | null
   serial: string | null
   model: Named
-  status_label: { id: number; name: string; status_meta: string } | null
+  status_label: { id: number; name: string; status_type?: string; status_meta: string } | null
   category: Named
   location: Named
-  assigned_to: { id: number; name: string; type: Assignee['type'] } | null
+  // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
+  assigned_to: { id: number; name: string; type: Assignee['type']; employee_number?: string | null } | null
+  // Formatted, e.g. "1,234.56"; null when none.
+  purchase_cost?: string | null
+  last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
   expected_checkin: { date: string } | null
@@ -583,6 +590,9 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
+// A number Snipe-IT formats ("1,200.50", "36 months") as plain text ("1200.50"); assumes "1,234.56", not "1.234,56".
+const plainNumber = (v: unknown) => String(v).replace(/[^\d.-]/g, '')
+
 // A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
@@ -590,7 +600,7 @@ function formValue(raw: RawRow, f: FormField): string {
   if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
   // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
   // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
-  if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
+  if (f.type === 'number') return plainNumber(v)
   return f.type === 'textarea' ? markdownOf(String(v)) : String(v)
 }
 
@@ -918,11 +928,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const now = today()
+      const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
+      const inPlace = (path: string) => (params.size ? `${path}?${params}` : path)
       if (AUDIT_REPORTS.includes(kind)) {
-        const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
         const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
         // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
-        const assets = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+        const assets = (await allRows<RawAsset>(inPlace(path))).map((r) => toAsset(r, now))
         // Every audit Report starts with these columns; the to-do ones add the Assignee before the audit dates.
         const assetColumns = ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location']
         const assetCells = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
@@ -941,6 +952,41 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         return {
           columns: [...assetColumns, 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
           rows: listed.map((a) => [...assetCells(a), a.assignee?.name ?? '', ...auditCells(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
+          capped: false,
+        }
+      }
+      if (kind === 'statusLocation') {
+        // One row per Location and Status Label pair. Archived Assets are left out, as Snipe-IT's own listing leaves them out by default.
+        const pairs = new Map<string, { location: string; status: string; type: string; assets: number; cost: number }>()
+        for (const r of await allRows<RawAsset>(inPlace('/hardware'))) {
+          const type = r.status_label?.status_type ?? r.status_label?.status_meta ?? ''
+          if (type === 'archived') continue
+          const location = r.location?.name || '(no Location)'
+          const status = r.status_label?.name ?? ''
+          // By id, so two Locations with the same name stay apart.
+          const key = `${r.location?.id ?? ''}:${r.status_label?.id ?? ''}`
+          const pair = pairs.get(key) ?? pairs.set(key, { location, status, type, assets: 0, cost: 0 }).get(key)!
+          pair.assets++
+          // In cents, so the total doesn't drift; a blank or unreadable cost adds nothing.
+          pair.cost += Math.round(Number(plainNumber(r.purchase_cost ?? '')) * 100) || 0
+        }
+        return {
+          columns: ['Location', 'Status Label', 'Status type', 'Assets', 'Purchase cost (total)'],
+          rows: [...pairs.values()].sort((a, b) => a.location.localeCompare(b.location) || b.assets - a.assets)
+            .map((p) => [p.location, p.status, p.type, String(p.assets), (p.cost / 100).toFixed(2)]),
+          capped: false,
+        }
+      }
+      if (kind === 'checkedOut') {
+        // Who holds what: Assets checked out to a Location are left out.
+        const held = (await allRows<RawAsset>(inPlace('/hardware'))).filter((r) => r.assigned_to?.type === 'user')
+        const byTag = (a: RawAsset, b: RawAsset) => a.asset_tag.localeCompare(b.asset_tag, undefined, { numeric: true })
+        return {
+          columns: ['User', 'Employee No.', 'Asset Tag', 'Name', 'Asset Model', 'Category', 'Checked out', 'Expected Checkin'],
+          rows: held.sort((a, b) => a.assigned_to!.name.localeCompare(b.assigned_to!.name) || a.assigned_to!.id - b.assigned_to!.id || byTag(a, b)).map((r) => {
+            const a = toAsset(r, now)
+            return [r.assigned_to!.name, r.assigned_to!.employee_number ?? '', a.assetTag, a.name, a.model, a.category, dayOf(r.last_checkout) ?? '', a.expectedCheckin ?? '']
+          }),
           capped: false,
         }
       }
