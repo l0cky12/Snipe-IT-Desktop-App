@@ -751,7 +751,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
       if (isError(page)) throw new Error(reason(page.messages))
       for (const r of page.rows) {
-        const day = r.created_at?.datetime.slice(0, 10) ?? ''
+        const day = dayOf(r.created_at)
         if (from && day && day < from) return
         yield r
       }
@@ -952,7 +952,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (kind === 'activity') {
         const rows: string[][] = []
         for await (const r of activitySince(from, actionType)) {
-          if (!inRange(r.created_at?.datetime.slice(0, 10) ?? '') || (itemType && r.item?.type !== itemType)) continue
+          if (!inRange(dayOf(r.created_at) ?? '') || (itemType && r.item?.type !== itemType)) continue
           // Full, and one more matches: it's cut short.
           if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
           const e = toHistoryEntry(r)
@@ -963,6 +963,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const now = today()
       if (kind === 'tempHistory') {
         // From now, not from `to`, so a Temp checkout returned after the range still gets its return (#69 §4).
+        // ponytail: without From it reads the whole log, with no row cap to stop early; pick a From on a big log.
         const byAsset = new Map<number, (HistoryEntry & { id: number; user: string; item: string })[]>()
         for await (const r of activitySince(from)) {
           if (r.item?.type !== 'asset') continue
