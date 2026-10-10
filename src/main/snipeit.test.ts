@@ -42,8 +42,8 @@ const activity = {
 }
 
 const today = () => new Date(2026, 8, 24) // 2026-09-24, local time
-const snipeItWith = (hardware: object, history: { status?: number; body: unknown } = { body: { total: 0, rows: [] } }) =>
-  createSnipeIt(config, fakeFetch({ '/hardware/4812': { body: hardware }, '/reports/activity': history }).fetch, today)
+const snipeItWith = (hardware: object, history: { status?: number; body: unknown } = { body: { total: 0, rows: [] } }, now = today) =>
+  createSnipeIt(config, fakeFetch({ '/hardware/4812': { body: hardware }, '/reports/activity': history }).fetch, now)
 
 const notFound = { status: 'error', messages: 'Asset does not exist.', payload: null }
 // What Snipe-IT's catch-all route sends for a path it has no route for under that method, e.g. a GET to a POST-only endpoint.
@@ -326,8 +326,7 @@ describe('connection errors', () => {
 
 describe('Overdue (today is 2026-09-24)', () => {
   const due = (datetime: string) => ({ ...chromebook, expected_checkin: { datetime, formatted: datetime } })
-  const at = (hardware: object, h: number, m: number) =>
-    createSnipeIt(config, fakeFetch({ '/hardware/4812': { body: hardware }, '/reports/activity': { body: { total: 0, rows: [] } } }).fetch, () => new Date(2026, 8, 24, h, m))
+  const atTime = (hardware: object, h: number, m: number) => snipeItWith(hardware, undefined, () => new Date(2026, 8, 24, h, m))
 
   it('an Asset whose Expected Checkin was yesterday is Overdue by 1 day', async () => {
     const asset = await snipeItWith(due('2026-09-23 00:00:00')).getAsset(4812)
@@ -340,14 +339,14 @@ describe('Overdue (today is 2026-09-24)', () => {
   })
 
   it('an Expected Checkin with a time of day keeps it, and is Overdue once that time has passed', async () => {
-    const before = await at(due('2026-09-24 14:50:00'), 14, 49).getAsset(4812)
+    const before = await atTime(due('2026-09-24 14:50:00'), 14, 49).getAsset(4812)
     expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdueDays: null })
-    expect((await at(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)).overdueDays).toBe(0)
-    expect((await at(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdueDays).toBe(1)
+    expect((await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)).overdueDays).toBe(0)
+    expect((await atTime(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdueDays).toBe(1)
   })
 
   it('a date-only Expected Checkin is Overdue from the next day, whatever the time', async () => {
-    expect((await at(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdueDays).toBeNull()
+    expect((await atTime(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdueDays).toBeNull()
   })
 
   it('a Snipe-IT before v8.7 sends Expected Checkin as a date, which still works', async () => {

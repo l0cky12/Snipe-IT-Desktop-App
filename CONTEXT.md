@@ -31,10 +31,10 @@ A person in Snipe-IT (staff or student) who can be an Assignee.
 A physical place in Snipe-IT (e.g. "Room 204") that can be an Assignee.
 
 **Expected Checkin**:
-The optional date, set at Checkout (or changed later by editing the Asset), by which the Asset should come back.
+The optional date, set at Checkout (or changed later by editing the Asset), by which the Asset should come back. On Snipe-IT v8.7+ it can also hold a time of day.
 
 **Overdue**:
-A checked-out Asset whose Expected Checkin date has passed. Means late *return* only.
+A checked-out Asset whose Expected Checkin has passed: from its time of day when it has one, else from the day after its date. Means late *return* only.
 _Avoid_: using "overdue" for audits
 
 **Audit**:

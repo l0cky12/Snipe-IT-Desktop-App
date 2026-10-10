@@ -20,8 +20,9 @@ export type Asset = {
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
-  /** Days past the Expected Checkin, or null when not Overdue */
+  /** Whole days past the Expected Checkin (0 on the day, once its time of day has passed), or null when not Overdue */
   overdueDays: number | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
@@ -374,7 +375,8 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
 export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
   ({ id, assetTag, name, status, statusMeta, assignee, can })
 
-// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day (00:00 means date-only).
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day.
+// ponytail: 00:00 means date-only, so a real midnight due time is Overdue only from the next day; no Workflow sets one.
 function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
   const when = v?.datetime ?? v?.date
   if (!when) return null
