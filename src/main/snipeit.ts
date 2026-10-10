@@ -959,7 +959,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         // One row per Location and Status Label pair. Archived Assets are left out, as Snipe-IT's own listing leaves them out by default.
         const pairs = new Map<string, { location: string; status: string; type: string; assets: number; cost: number }>()
         for (const r of await allRows<RawAsset>(inPlace('/hardware'))) {
-          const type = r.status_label?.status_type ?? r.status_label?.status_meta ?? ''
+          const type = r.status_label?.status_type ?? ''
           if (type === 'archived') continue
           const location = r.location?.name || '(no Location)'
           const status = r.status_label?.name ?? ''
@@ -972,7 +972,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
         return {
           columns: ['Location', 'Status Label', 'Status type', 'Assets', 'Purchase cost (total)'],
-          rows: [...pairs.values()].sort((a, b) => a.location.localeCompare(b.location) || b.assets - a.assets)
+          rows: [...pairs.values()].sort((a, b) => a.location.localeCompare(b.location) || b.assets - a.assets || a.status.localeCompare(b.status))
             .map((p) => [p.location, p.status, p.type, String(p.assets), (p.cost / 100).toFixed(2)]),
           capped: false,
         }

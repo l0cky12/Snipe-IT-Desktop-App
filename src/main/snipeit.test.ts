@@ -1060,20 +1060,20 @@ describe('report', () => {
   })
 
   // A /hardware row with its Location, Status Label and purchase cost as Snipe-IT formats them ("1,234.56", or null).
-  const held = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, purchase_cost: null, ...fields })
-  const status = (name: string, status_type: string) => ({ id: name.length, name, status_type, status_meta: status_type })
+  const hardwareRow = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, purchase_cost: null, ...fields })
+  const status = (id: number, name: string, status_type: string) => ({ id, name, status_type, status_meta: status_type })
 
   it('Assets by Status Label and Location counts each pair and totals its purchase cost from the formatted text, without Archived Assets', async () => {
-    const ready = status('Ready to Deploy', 'deployable')
+    const ready = status(1, 'Ready to Deploy', 'deployable')
     const hardware = [
-      held(1, { location: { id: 4, name: 'Room 204' }, status_label: ready, purchase_cost: '1,234.56' }),
-      held(2, { location: { id: 4, name: 'Room 204' }, status_label: ready, purchase_cost: '300.00' }),
-      held(3, { location: { id: 4, name: 'Room 204' }, status_label: ready }),
-      held(4, { location: { id: 9, name: 'Library' }, status_label: status('Broken', 'undeployable'), purchase_cost: '0.10' }),
-      held(5, { location: { id: 9, name: 'Library' }, status_label: status('Broken', 'undeployable'), purchase_cost: '0.20' }),
-      held(6, { location: { id: 9, name: 'Library' }, purchase_cost: '2,000.00' }),
-      held(7, { location: null, status_label: ready, purchase_cost: '' }),
-      held(8, { location: { id: 9, name: 'Library' }, status_label: status('Archived', 'archived'), purchase_cost: '9,999.00' }),
+      hardwareRow(1, { location: { id: 4, name: 'Room 204' }, status_label: ready, purchase_cost: '1,234.56' }),
+      hardwareRow(2, { location: { id: 4, name: 'Room 204' }, status_label: ready, purchase_cost: '300.00' }),
+      hardwareRow(3, { location: { id: 4, name: 'Room 204' }, status_label: ready }),
+      hardwareRow(4, { location: { id: 9, name: 'Library' }, status_label: status(4, 'Broken', 'undeployable'), purchase_cost: '0.10' }),
+      hardwareRow(5, { location: { id: 9, name: 'Library' }, status_label: status(4, 'Broken', 'undeployable'), purchase_cost: '0.20' }),
+      hardwareRow(6, { location: { id: 9, name: 'Library' }, purchase_cost: '2,000.00' }),
+      hardwareRow(7, { location: null, status_label: ready, purchase_cost: '' }),
+      hardwareRow(8, { location: { id: 9, name: 'Library' }, status_label: status(6, 'Archived', 'archived'), purchase_cost: '9,999.00' }),
     ]
     const { fetch, calls, queries } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
     const r = await createSnipeIt(config, fetch, today).report('statusLocation', { locationId: '9', categoryId: '3' })
@@ -1096,11 +1096,11 @@ describe('report', () => {
   it('Checked out per User lists what each User holds with their Employee No., leaving out Assets checked out to a Location', async () => {
     const user = (id: number, name: string, employee_number: string | null) => ({ id, name, username: name.toLowerCase(), employee_number, type: 'user' })
     const hardware = [
-      held(12, { assigned_to: user(2, 'Riley Testwell', 'E-2002'), last_checkout: { datetime: '2026-09-01 08:10:00', formatted: '09/01/2026 8:10AM' }, expected_checkin: null }),
-      held(9, { assigned_to: user(2, 'Riley Testwell', 'E-2002'), last_checkout: { datetime: '2026-08-20 14:00:00' } }),
-      held(3, { assigned_to: user(1, 'Avery Sampleton', null), last_checkout: null }),
-      held(4, { assigned_to: { id: 4, name: 'Room 204', type: 'location' } }),
-      held(5, { assigned_to: null }),
+      hardwareRow(12, { assigned_to: user(2, 'Riley Testwell', 'E-2002'), last_checkout: { datetime: '2026-09-01 08:10:00', formatted: '09/01/2026 8:10AM' }, expected_checkin: null }),
+      hardwareRow(9, { assigned_to: user(2, 'Riley Testwell', 'E-2002'), last_checkout: { datetime: '2026-08-20 14:00:00' } }),
+      hardwareRow(3, { assigned_to: user(1, 'Avery Sampleton', null), last_checkout: null }),
+      hardwareRow(4, { assigned_to: { id: 4, name: 'Room 204', type: 'location' } }),
+      hardwareRow(5, { assigned_to: null }),
     ]
     const { fetch, queries } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
     const r = await createSnipeIt(config, fetch, today).report('checkedOut', { categoryId: '3' })
