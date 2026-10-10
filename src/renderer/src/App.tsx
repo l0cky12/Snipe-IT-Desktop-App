@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
@@ -556,7 +556,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           <span className="sub">{a.model}</span>
         </h1>
         <StatusChip asset={a} />
-        {a.overdueDays !== null && <span className="chip c-red">Overdue {a.overdueDays}d</span>}
+        {a.overdue !== null && <span className="chip c-red">Overdue {lateness(a.overdue)}</span>}
         {a.warranty &&
           (a.warranty.expired ? (
             <span className="chip c-grey">Warranty expired</span>
@@ -759,7 +759,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th>How late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -767,7 +767,8 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   {tag(a)}
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late">{a.overdueDays}d</td>
+                  <td>{a.expectedCheckin}</td>
+                  <td className="late">{lateness(a.overdue)}</td>
                 </tr>
               ))}
             </tbody>
