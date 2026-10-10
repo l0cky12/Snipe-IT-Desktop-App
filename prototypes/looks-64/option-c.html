@@ -1,0 +1,108 @@
+<!doctype html>
+<!-- PROTOTYPE (#64), throwaway. Option C "Console": no side rail; navy tab bar on top, function-key bar at the bottom, gridded mono tables. ?screen=workflow|assets&theme=light|dark -->
+<html lang="en"><head><meta charset="utf-8"><title>Option C: Console</title>
+<style>
+@font-face { font-family: Figtree; font-weight: 300 900; src: url(../../src/renderer/src/fonts/figtree-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 400; src: url(../../src/renderer/src/fonts/space-mono-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 700; src: url(../../src/renderer/src/fonts/space-mono-bold-latin.woff2) format('woff2'); }
+:root {
+  --navy: #14285a; --gold: #f5b301; --topbar: var(--navy); --topfg: #b8c4e6;
+  --bg: #ffffff; --head: #eef1f7; --grid: #d6dce8; --zebra: #f7f8fb; --hi: #fff4d1;
+  --text: #121a30; --dim: #5a6684;
+  --blue: #1f6fd1; --green: #138a52; --amber: #c2610f; --red: #c9341f; --grey: #6b7590;
+  --sans: Figtree, sans-serif; --mono: 'Space Mono', monospace;
+}
+[data-theme=dark] {
+  --topbar: #0a1430; --topfg: #8d9cc6;
+  --bg: #0e1528; --head: #141e38; --grid: #24335a; --zebra: #111a30; --hi: #2b2a1c;
+  --text: #dfe6fb; --dim: #8492b8;
+  --blue: #6aaeff; --green: #4fd394; --amber: #ffa45c; --red: #ff7a66; --grey: #98a3bf;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 12.5px/1.35 var(--sans); -webkit-font-smoothing: antialiased; }
+.app { display: grid; grid-template-rows: 38px auto 1fr 28px; height: 100%; }
+.top { background: var(--topbar); display: flex; align-items: stretch; gap: 2px; padding: 0 0 0 10px; color: var(--topfg); }
+.top .logo { align-self: center; width: 22px; height: 22px; border-radius: 4px; background: var(--gold); color: var(--navy); font: 800 12px/22px var(--sans); text-align: center; margin-right: 10px; }
+.tab { display: flex; align-items: center; padding: 0 12px; font-weight: 600; border-bottom: 3px solid transparent; border-top: 3px solid transparent; }
+.tab u { text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.tab.on { color: #fff; border-bottom-color: var(--gold); }
+.cmd { margin-left: auto; align-self: center; display: flex; align-items: center; gap: 8px; width: 300px; height: 26px; margin-right: 10px; padding: 0 8px; border-radius: 4px; background: #ffffff14; color: var(--topfg); }
+.cmd span { margin-left: auto; font: 400 11px var(--mono); }
+.sub { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--grid); background: var(--head); }
+.sub h1 { font: 700 15px var(--sans); margin: 0; }
+.sub .sp { flex: 1; }
+.sub .dim { font-family: var(--mono); font-size: 11.5px; }
+button { font: 600 12px var(--sans); height: 26px; padding: 0 10px; border-radius: 3px; border: 1px solid var(--grid); background: var(--bg); color: var(--text); }
+button.primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+[data-theme=dark] button.primary { background: var(--gold); border-color: var(--gold); color: var(--navy); }
+button u { text-underline-offset: 2px; }
+.dim { color: var(--dim); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.body { overflow: hidden; min-height: 0; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border: 1px solid var(--grid); padding: 0 8px; height: 24px; white-space: nowrap; text-align: left; }
+tr > :first-child { border-left: 0; } tr > :last-child { border-right: 0; }
+th { background: var(--head); font-weight: 700; font-size: 11.5px; color: var(--dim); height: 26px; }
+tbody tr:nth-child(even) td { background: var(--zebra); }
+td.mono { font-size: 12px; }
+.st { font: 700 11px var(--mono); color: var(--c); }
+.st::before { content: ''; display: inline-block; width: 8px; height: 8px; background: var(--c); margin-right: 6px; vertical-align: -0px; }
+.flag { font: 700 10.5px var(--mono); color: var(--c); border: 1px solid var(--c); padding: 0 4px; margin-left: 6px; }
+.fkeys { background: var(--topbar); color: var(--topfg); display: flex; align-items: center; gap: 2px; padding: 0 6px; font-size: 12px; }
+.fkeys span { padding: 0 10px 0 0; display: flex; gap: 5px; align-items: center; }
+.fkeys b { font: 700 11px var(--mono); background: var(--gold); color: var(--navy); padding: 1px 5px; border-radius: 2px; }
+.fkeys .r { margin-left: auto; font: 400 11px var(--mono); }
+/* Workflow */
+.wf { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+.rec { border-right: 1px solid var(--grid); }
+.rec h2, .run h2 { font: 700 11.5px var(--sans); color: var(--dim); margin: 0; padding: 6px 12px; background: var(--head); border-bottom: 1px solid var(--grid); }
+.rec dl { margin: 0; display: grid; grid-template-columns: 110px 1fr; }
+.rec dt, .rec dd { margin: 0; padding: 5px 12px; border-bottom: 1px solid var(--grid); }
+.rec dt { color: var(--dim); } .rec dd { font-weight: 600; }
+.rec .chg { padding: 10px 12px; }
+.prompt { display: flex; align-items: center; gap: 12px; padding: 14px; border-bottom: 1px solid var(--grid); }
+.prompt label { font: 700 14px var(--sans); white-space: nowrap; }
+.prompt .in { flex: 1; display: flex; align-items: center; height: 48px; border: 2px solid var(--gold); background: var(--hi); padding: 0 12px; }
+.prompt input { all: unset; flex: 1; font: 700 22px var(--mono); color: var(--text); letter-spacing: .02em; }
+.prompt input::placeholder { color: var(--dim); font-weight: 400; font-size: 15px; }
+.prompt .hint { font: 400 11px var(--mono); color: var(--dim); }
+.run td:first-child { width: 36px; text-align: right; color: var(--dim); font-family: var(--mono); }
+.run tr.new td { background: var(--hi) !important; }
+/* Assets */
+.views { display: flex; gap: 0; border-bottom: 1px solid var(--grid); padding: 0 14px; background: var(--bg); }
+.views span { padding: 6px 12px; font-weight: 600; color: var(--dim); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.views .on { color: var(--text); border-bottom-color: var(--gold); }
+.views b { font: 400 11px var(--mono); margin-left: 4px; }
+.list input { width: 13px; height: 13px; margin: 0; vertical-align: middle; accent-color: var(--navy); }
+.list tr.ticked td { background: var(--hi) !important; }
+.list tr.sel td { box-shadow: inset 0 2px 0 var(--gold), inset 0 -2px 0 var(--gold); }
+.list tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--gold), inset 0 2px 0 var(--gold), inset 0 -2px 0 var(--gold); }
+.filterrow td { background: var(--bg) !important; height: 24px; color: var(--dim); font-size: 11.5px; font-style: italic; }
+</style><script src="shared.js"></script></head>
+<body><script>
+const C = { blue: 'var(--blue)', green: 'var(--green)', amber: 'var(--amber)', red: 'var(--red)', grey: 'var(--grey)' }
+const topbar = (on) => `<header class="top"><div class="logo">S</div>${[['D', 'ashboard'], ['A', 'ssets'], ['U', 'sers'], ['L', 'ocations'], ['I', 'nventory'], ['W', 'orkflows'], ['R', 'eports'], ['Y', ' Activity']]
+  .map(([k, rest]) => { const l = k === 'Y' ? 'Activity' : k + rest; return `<div class="tab ${l === on ? 'on' : ''}">${k === 'Y' ? 'Activit<u>y</u>' : `<u>${k}</u>${rest}`}</div>` }).join('')}
+  <div class="cmd">${ic('Search', 13)}Search or scan<span>Ctrl+K</span></div></header>`
+const keys = (ks) => `<footer class="fkeys">${ks.map(([k, l]) => `<span><b>${k}</b>${l}</span>`).join('')}<span class="r">Connected, Snipe-IT 8.7</span></footer>`
+const st = (r) => `<span class="st" style="--c:${C[r.color]}">${r.status}</span>`
+if (SCREEN === 'workflow') show(`<div class="app">${topbar('Workflows')}
+  <div class="sub"><h1>Bulk checkout</h1><span class="dim">Step 2 of 3, scan Assets</span><span class="sp"></span><button><u>U</u>ndo last</button><button class="primary">Done</button></div>
+  <div class="body"><div class="wf">
+    <section class="rec"><h2>User</h2><dl><dt>Name</dt><dd>${USER.name}</dd><dt>Email</dt><dd>${USER.email}</dd><dt>Employee no.</dt><dd class="mono">${USER.emp}</dd><dt>Location</dt><dd>${USER.loc}</dd><dt>Already has</dt><dd>${USER.holds} Asset</dd><dt>This session</dt><dd>4 Assets</dd></dl>
+      <div class="chg"><button>Change User (F2)</button></div></section>
+    <section class="run"><div class="prompt"><label>Asset Tag</label><div class="in"><input autofocus placeholder="scan or type, Enter to check out"></div><span class="hint">Enter</span></div>
+      <h2>Checked out this session</h2>
+      <table><thead><tr><th>#</th><th>Asset Tag</th><th>Asset Model</th><th>Result</th><th>Time</th><th>Undo</th></tr></thead><tbody>
+      ${DONE.map((d, i) => `<tr class="${i ? '' : 'new'}"><td>${4 - i}</td><td class="mono"><b>${d.tag}</b></td><td>${d.model}</td><td><span class="st" style="--c:var(--blue)">Checked out</span></td><td class="mono">${d.time}</td><td class="mono dim">${i ? '' : 'Ctrl+Z'}</td></tr>`).join('')}</tbody></table></section>
+  </div></div>
+  ${keys([['Enter', 'Check out'], ['F2', 'Change User'], ['Ctrl+Z', 'Undo last'], ['F9', 'Open Asset'], ['Esc', 'Done']])}</div>`)
+else show(`<div class="app">${topbar('Assets')}
+  <div class="sub"><h1>Assets</h1><span class="dim">240 rows</span><span class="sp"></span><span class="dim" style="font-family:var(--sans);font-size:12px">3 selected</span><button>Check out</button><button>Edit</button><button>Print labels</button><button>Columns</button><button class="primary"><u>N</u>ew Asset</button></div>
+  <div class="body list">
+  <div class="views"><span class="on">All<b>240</b></span><span>Damaged<b>7</b></span><span>Out on temp<b>12</b></span><span>Audit due<b>31</b></span><span>Ready to Deploy<b>58</b></span></div>
+  <table><thead><tr><th style="width:1%"></th><th>Asset Tag</th><th>Name</th><th>Status</th><th>Asset Model</th><th>Category</th><th>Location</th><th>Checked out to</th><th>Expected checkin</th><th>Last audit</th></tr>
+  <tr class="filterrow"><td></td><td>filter…</td><td></td><td>any</td><td>any</td><td>any</td><td>any</td><td></td><td></td><td></td></tr></thead><tbody>
+  ${ROWS.map(r => `<tr class="${r.sel ? 'sel' : ''} ${r.ticked ? 'ticked' : ''}"><td><input type="checkbox" ${r.ticked ? 'checked' : ''}></td><td class="mono"><b>${r.tag}</b></td><td class="mono">${r.name}</td><td>${st(r)}</td><td>${r.model}</td><td>${r.cat}</td><td>${r.loc}</td><td>${r.to}</td><td class="mono">${r.due}${r.temp ? '<span class="flag" style="--c:var(--amber)">Temp</span>' : ''}</td><td class="mono">${r.audited}${r.audit ? `<span class="flag" style="--c:${r.audit === 'late' ? 'var(--red)' : 'var(--amber)'}">${r.audit === 'late' ? 'Late' : 'Due'}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
+  ${keys([['/', 'Filter'], ['Space', 'Tick'], ['Enter', 'Open'], ['C', 'Check out'], ['V', 'Views'], ['Esc', 'Clear']])}</div>`)
+</script></body></html>

@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- PROTOTYPE (#64), throwaway. Option B "Index": labelled sidebar with shortcut hints, neutral greys, navy/gold kept only as accents. ?screen=workflow|assets&theme=light|dark -->
+<html lang="en"><head><meta charset="utf-8"><title>Option B: Index</title>
+<style>
+@font-face { font-family: Figtree; font-weight: 300 900; src: url(../../src/renderer/src/fonts/figtree-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 400; src: url(../../src/renderer/src/fonts/space-mono-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 700; src: url(../../src/renderer/src/fonts/space-mono-bold-latin.woff2) format('woff2'); }
+:root {
+  --navy: #14285a; --gold: #f5b301;
+  --bg: #ffffff; --side: #f3f4f7; --hover: #e9ebf1; --line: #e4e7ee; --line2: #eef0f4;
+  --text: #171b26; --dim: #636c7f; --faint: #8f97a8;
+  --primary: var(--navy); --on-primary: #fff; --mark: var(--gold); --selrow: #f4f6fb;
+  --blue: #2e7fd9; --green: #1f9e63; --amber: #d9731f; --red: #d9432c; --grey: #8a93a5;
+  --sans: Figtree, sans-serif; --mono: 'Space Mono', monospace;
+}
+[data-theme=dark] {
+  --bg: #16181d; --side: #111216; --hover: #1f2229; --line: #272a33; --line2: #1f2229;
+  --text: #e3e5ea; --dim: #8d94a3; --faint: #646b79;
+  --primary: var(--gold); --on-primary: #14285a; --selrow: #1c1f26;
+  --blue: #5aa2f0; --green: #3cc884; --amber: #f2964a; --red: #f2705c; --grey: #8a93a5;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 var(--sans); -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+.layout { display: grid; grid-template-columns: 212px 1fr; height: 100%; }
+.side { background: var(--side); border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 1px; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 10px; font-weight: 700; font-size: 13.5px; }
+.brand i { width: 22px; height: 22px; border-radius: 6px; background: var(--navy); color: var(--gold); display: grid; place-items: center; font: 800 12px var(--sans); font-style: normal; }
+.find { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--faint); }
+.find kbd { margin-left: auto; }
+.item { display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 6px; color: var(--dim); font-weight: 500; position: relative; }
+.item svg { flex: none; }
+.item.sel { background: var(--hover); color: var(--text); font-weight: 600; }
+.item.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
+.item kbd { margin-left: auto; }
+.group { padding: 14px 8px 4px; color: var(--faint); font-size: 12px; font-weight: 600; }
+.foot { margin-top: auto; }
+kbd { font: 400 10.5px/1 var(--mono); color: var(--faint); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
+.main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.bar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.crumb { color: var(--dim); } .crumb b { color: var(--text); font-weight: 600; }
+.bar .sp { flex: 1; }
+button { font: 500 12.5px var(--sans); height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+button.primary kbd { background: transparent; color: inherit; border-color: currentColor; opacity: .6; }
+.mono { font: 400 12px var(--mono); }
+.dim { color: var(--dim); }
+.st { display: inline-flex; align-items: center; gap: 6px; }
+.st::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+.flag { font-size: 11.5px; font-weight: 600; color: var(--c); margin-left: 6px; }
+table { border-collapse: collapse; width: 100%; }
+td, th { text-align: left; padding: 0 10px; height: 28px; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+td:first-child, th:first-child { padding-left: 16px; } td:last-child, th:last-child { padding-right: 16px; }
+th { color: var(--faint); font-weight: 500; font-size: 12px; height: 30px; border-bottom-color: var(--line); }
+/* Workflow */
+.wf { display: grid; grid-template-columns: 1fr 248px; flex: 1; min-height: 0; }
+.wf-main { padding: 18px 24px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.who { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.who .av { width: 32px; height: 32px; border-radius: 8px; background: var(--hover); display: grid; place-items: center; font-weight: 700; color: var(--dim); }
+.who b { font-size: 14px; } .who .meta { display: flex; gap: 16px; color: var(--dim); }
+.who button { margin-left: auto; }
+.field label { display: block; font-weight: 600; margin-bottom: 6px; }
+.field .in { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px; border: 1px solid var(--gold); border-radius: 8px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 30%, transparent); color: var(--faint); }
+.field input { all: unset; flex: 1; font: 400 15px var(--mono); color: var(--text); }
+.field .in kbd { flex: none; }
+.log h2 { font-size: 13px; font-weight: 600; margin: 4px 0 6px; display: flex; gap: 8px; }
+.log table { border: 1px solid var(--line); border-radius: 8px; border-collapse: separate; border-spacing: 0; overflow: hidden; }
+.log tr:last-child td { border-bottom: 0; }
+.log tr.new td { background: var(--selrow); }
+.ok { color: var(--green); display: inline-flex; gap: 5px; align-items: center; }
+.keys { border-left: 1px solid var(--line); padding: 18px 16px; color: var(--dim); }
+.keys h3 { margin: 0 0 10px; font-size: 12px; color: var(--faint); font-weight: 600; }
+.keys div { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
+.keys div span { color: var(--text); }
+.keys p { margin: 18px 0 0; font-size: 12px; line-height: 1.5; }
+/* Assets */
+.tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); height: 38px; align-items: stretch; }
+.tabs span { display: flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--dim); font-weight: 500; border-bottom: 2px solid transparent; }
+.tabs .on { color: var(--text); border-bottom-color: var(--mark); font-weight: 600; }
+.tabs b { font: 400 11px var(--mono); color: var(--faint); }
+.tools { display: flex; gap: 6px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.tools .filter { flex: 1; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--faint); max-width: 360px; }
+.tools .chipf { height: 28px; padding: 0 8px; border: 1px dashed var(--line); border-radius: 6px; display: inline-flex; align-items: center; color: var(--dim); }
+.tools .sel { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--text); font-weight: 600; }
+.list { flex: 1; overflow: hidden; }
+.list input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); vertical-align: middle; }
+.list tr.ticked td { background: var(--selrow); }
+.list tr.sel td { background: var(--hover); }
+.list tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
+.list td.tagc { font-weight: 400; }
+.count { margin-left: 4px; color: var(--faint); font-weight: 400; }
+</style><script src="shared.js"></script></head>
+<body><script>
+const C = { blue: 'var(--blue)', green: 'var(--green)', amber: 'var(--amber)', red: 'var(--red)', grey: 'var(--grey)' }
+const side = (sel) => `<aside class="side"><div class="brand"><i>S</i>NOMMA IT</div>
+  <div class="find">${ic('Search', 14)}Search or scan<kbd>Ctrl K</kbd></div>
+  ${[['LayoutGrid', 'Dashboard', 'G D'], ['Laptop', 'Assets', 'G A'], ['Users', 'Users', 'G U'], ['MapPin', 'Locations', 'G L'], ['Package', 'Inventory', 'G I'], ['Activity', 'Activity', 'G Y'], ['FileSpreadsheet', 'Reports', 'G R']]
+    .map(([i, l, k]) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i, 15)}${l}<kbd>${k}</kbd></div>`).join('')}
+  <div class="group">Workflows</div>
+  ${['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout'].map((l, i) => `<div class="item ${l === sel ? 'sel' : ''}">${ic(i ? 'Workflow' : 'ScanBarcode', 15)}${l}<kbd>F${i + 2}</kbd></div>`).join('')}
+  <div class="item foot">${ic('Settings', 15)}Settings<kbd>Ctrl ,</kbd></div></aside>`
+const st = (r) => `<span class="st" style="--c:${C[r.color]}">${r.status}</span>`
+if (SCREEN === 'workflow') show(`<div class="layout">${side('Bulk checkout')}<main class="main">
+  <div class="bar"><span class="crumb">Workflows / <b>Bulk checkout</b></span><span class="sp"></span><button>${ic('Undo2', 13)}Undo last <kbd>Ctrl Z</kbd></button><button class="primary">Done <kbd>Esc</kbd></button></div>
+  <div class="wf"><div class="wf-main">
+    <div class="who"><div class="av">SU</div><div><b>${USER.name}</b><div class="meta"><span>${USER.email}</span><span class="mono">#${USER.emp}</span><span>${USER.loc}</span><span>Already has ${USER.holds} Asset</span></div></div><button>Change User <kbd>F2</kbd></button></div>
+    <div class="field"><label>Asset Tag</label><div class="in">${ic('ScanBarcode', 18)}<input autofocus placeholder="Scan or type, then Enter"><kbd>Enter</kbd></div></div>
+    <div class="log"><h2>Checked out this session <span class="dim" style="font-weight:400">4</span></h2>
+      <table><tr><th>Asset Tag</th><th>Asset Model</th><th>Result</th><th>Time</th><th></th></tr>
+      ${DONE.map((d, i) => `<tr class="${i ? '' : 'new'}"><td class="mono">${d.tag}</td><td>${d.model}</td><td><span class="ok">${ic('Check', 13)}Checked out</span></td><td class="dim">${d.time}</td><td style="text-align:right">${i ? '' : '<button>Undo <kbd>Ctrl Z</kbd></button>'}</td></tr>`).join('')}</table></div>
+  </div>
+  <aside class="keys"><h3>Keys</h3>
+    <div><span>Check out</span><kbd>Enter</kbd></div><div><span>Undo last</span><kbd>Ctrl Z</kbd></div><div><span>Change User</span><kbd>F2</kbd></div><div><span>Done</span><kbd>Esc</kbd></div><div><span>Open Asset</span><kbd>Ctrl Enter</kbd></div>
+    <p>The field keeps focus. A scanner and the keyboard type into it the same way.</p></aside></div>
+</main></div>`)
+else show(`<div class="layout">${side('Assets')}<main class="main">
+  <div class="bar"><span class="crumb"><b>Assets</b> <span class="count">240</span></span><span class="sp"></span><button>Columns</button><button class="primary">New Asset <kbd>N</kbd></button></div>
+  <div class="tabs"><span class="on">All <b>240</b></span><span>Damaged <b>7</b></span><span>Out on temp <b>12</b></span><span>Audit due <b>31</b></span><span>Ready to Deploy <b>58</b></span><span>+ Save view</span></div>
+  <div class="tools"><div class="filter">${ic('Search', 13)}Filter<kbd style="margin-left:auto">/</kbd></div><span class="chipf">+ Status</span><span class="chipf">+ Location</span><span class="chipf">+ Asset Model</span>
+    <span class="sel">3 selected <button>Check out</button><button>Edit</button><button>Print labels</button><button>Clear <kbd>Esc</kbd></button></span></div>
+  <div class="list"><table><tr><th style="width:1%"></th><th>Asset Tag</th><th>Name</th><th>Status</th><th>Asset Model</th><th>Category</th><th>Location</th><th>Checked out to</th><th>Expected checkin</th><th>Last audit</th></tr>
+  ${ROWS.map(r => `<tr class="${r.sel ? 'sel' : ''} ${r.ticked ? 'ticked' : ''}"><td><input type="checkbox" ${r.ticked ? 'checked' : ''}></td><td class="mono">${r.tag}</td><td>${r.name}</td><td>${st(r)}</td><td>${r.model}</td><td class="dim">${r.cat}</td><td>${r.loc}</td><td>${r.to}</td><td>${r.due}${r.temp ? '<span class="flag" style="--c:var(--amber)">Temp</span>' : ''}</td><td class="dim">${r.audited}${r.audit ? `<span class="flag" style="--c:${r.audit === 'late' ? 'var(--red)' : 'var(--amber)'}">${r.audit === 'late' ? 'Audit late' : 'Audit due'}</span>` : ''}</td></tr>`).join('')}</table></div>
+</main></div>`)
+</script></body></html>

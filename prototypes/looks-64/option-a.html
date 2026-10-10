@@ -1,0 +1,110 @@
+<!doctype html>
+<!-- PROTOTYPE (#64), throwaway. Option A "Rail": today's NOMMA tokens and icon rail, tightened for density. ?screen=workflow|assets&theme=light|dark -->
+<html lang="en"><head><meta charset="utf-8"><title>Option A: Rail</title>
+<style>
+@font-face { font-family: Fredoka; font-weight: 300 700; src: url(../../src/renderer/src/fonts/fredoka-latin.woff2) format('woff2'); }
+@font-face { font-family: Figtree; font-weight: 300 900; src: url(../../src/renderer/src/fonts/figtree-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 400; src: url(../../src/renderer/src/fonts/space-mono-latin.woff2) format('woff2'); }
+@font-face { font-family: 'Space Mono'; font-weight: 700; src: url(../../src/renderer/src/fonts/space-mono-bold-latin.woff2) format('woff2'); }
+:root {
+  --navy: #14285a; --gold: #f5b301;
+  --bg: #f4f6fb; --panel: #ffffff; --panel2: #e9edf7; --line: #d7ddeb;
+  --text: #15213f; --dim: #5d6b8a; --heading: var(--navy);
+  --primary: var(--navy); --on-primary: #fff; --focus: var(--gold);
+  --strip: var(--navy); --strip-fg: #c9d3f0; --strip-hover: #2a4079;
+  --coral: #ee5a42; --leaf: #22b573; --sky: #2e8be8; --tangerine: #f27e2e; --slate: #7c8aa5; --on-bright: #14213d; --on-deep: #fff;
+  --display: Fredoka, Figtree, sans-serif; --sans: Figtree, sans-serif; --mono: 'Space Mono', monospace;
+}
+[data-theme=dark] {
+  --bg: #0b1530; --panel: #122047; --panel2: #1a2c5c; --line: #28407c;
+  --text: #e8eeff; --dim: #97a6cc; --heading: var(--gold);
+  --primary: var(--gold); --on-primary: var(--navy);
+  --strip: #08102a; --strip-fg: #a9b7dd; --strip-hover: #1a2c5c;
+  --coral: #ff6b55; --leaf: #3dd68c; --sky: #5aa9ff; --tangerine: #ff9a4d; --slate: #8e9cba; --on-deep: #14213d;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
+.layout { display: grid; grid-template-columns: 68px 1fr; height: 100%; }
+.strip { display: flex; flex-direction: column; gap: 8px; padding: 16px 10px 14px; background: var(--strip); }
+.logo { display: grid; place-items: center; width: 40px; height: 40px; margin: 0 auto 12px; border-radius: 12px; background: var(--gold); color: var(--navy); font: 700 22px var(--display); }
+.nav { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: var(--strip-fg); }
+.nav.sel { background: var(--gold); color: var(--navy); }
+.nav.last { margin-top: auto; }
+.sheet { overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.head { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.head h1 { font: 600 24px/1.15 var(--display); color: var(--heading); margin: 0; flex: 1; }
+.head h1 .sub { display: block; font: 400 13.5px/1.4 var(--sans); color: var(--dim); margin-top: 2px; }
+button { font: 600 13.5px var(--sans); min-height: 36px; padding: 6px 14px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--panel); color: var(--text); }
+button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 700; }
+kbd { font: 700 11px var(--mono); color: var(--dim); margin-left: 6px; }
+.primary kbd { color: inherit; opacity: .75; }
+.mono { font-family: var(--mono); font-size: 12.5px; font-weight: 700; }
+.tag { font: 700 13px/1 var(--mono); background: var(--navy); color: var(--gold); padding: 7px 11px; border-radius: 8px; }
+.chip { display: inline-flex; padding: 2px 9px; border-radius: 999px; font: 700 11.5px/1.6 var(--sans); white-space: nowrap; }
+.c-green { background: var(--leaf); color: var(--on-bright); } .c-amber { background: var(--tangerine); color: var(--on-bright); }
+.c-blue { background: var(--sky); color: var(--on-bright); } .c-red { background: var(--coral); color: var(--on-deep); } .c-grey { background: var(--slate); color: var(--on-deep); }
+.out { border: 1.5px solid var(--tangerine); color: var(--tangerine); background: none; }
+.late { border: 1.5px solid var(--coral); color: var(--coral); background: none; }
+.dim { color: var(--dim); }
+/* Workflow */
+.steps { display: flex; gap: 8px; padding: 12px 24px; background: var(--panel2); border-bottom: 1px solid var(--line); font-weight: 600; font-size: 13.5px; }
+.steps span { padding: 4px 12px; border-radius: 999px; color: var(--dim); }
+.steps .done { color: var(--text); } .steps .now { background: var(--primary); color: var(--on-primary); }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 16px 24px 4px; }
+.cell { padding: 10px 14px; background: var(--panel2); border-radius: 12px; }
+.cell .k { font-size: 12.5px; color: var(--dim); margin-bottom: 2px; } .cell b { font-weight: 600; }
+.scan { position: relative; padding: 14px 24px 6px; }
+.scan svg { position: absolute; left: 40px; top: 30px; color: var(--dim); }
+.scan input { width: 100%; height: 54px; border: 2px solid var(--gold); border-radius: 14px; background: var(--panel); color: var(--text); font: 500 17px var(--sans); padding: 0 16px 0 52px; outline: 3px solid color-mix(in srgb, var(--gold) 35%, transparent); }
+.scan p { margin: 8px 2px 0; color: var(--dim); font-size: 13px; }
+.section { padding: 14px 24px 6px; font: 600 16px var(--display); color: var(--heading); display: flex; gap: 10px; align-items: baseline; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+td, th { text-align: left; padding: 6px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+td:first-child, th:first-child { padding-left: 24px; } td:last-child, th:last-child { padding-right: 24px; }
+th { color: var(--dim); font-weight: 600; font-size: 12.5px; background: var(--bg); position: sticky; top: 0; }
+.new td { background: var(--panel2); }
+/* Assets */
+.filters { display: flex; gap: 8px; padding: 10px 24px; border-bottom: 1px solid var(--line); align-items: center; }
+.filters input, .filters select { min-height: 36px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 500 13.5px var(--sans); padding: 0 12px; }
+.filters input { flex: 1; }
+.views { display: flex; gap: 6px; padding: 10px 24px 0; }
+.views span { padding: 5px 12px; border-radius: 999px; border: 1.5px solid var(--line); font-weight: 600; font-size: 13px; background: var(--panel); }
+.views .on { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.views b { font: 700 11.5px var(--mono); margin-left: 6px; opacity: .7; }
+.list { overflow: hidden; flex: 1; }
+.list td { padding-top: 4px; padding-bottom: 4px; height: 33px; }
+.list tr.ticked td { background: var(--panel2); }
+.list tr.sel td { box-shadow: inset 0 2px 0 var(--gold), inset 0 -2px 0 var(--gold); }
+.list tr.sel td:first-child { box-shadow: inset 4px 0 0 var(--gold), inset 0 2px 0 var(--gold), inset 0 -2px 0 var(--gold); }
+.list input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); vertical-align: middle; }
+.list .mono { color: var(--primary); }
+.selbar { margin: 10px 24px 0; padding: 6px 12px; border-radius: 10px; background: var(--panel2); display: flex; gap: 8px; align-items: center; font-size: 13.5px; font-weight: 600; }
+.selbar button { min-height: 30px; padding: 3px 10px; }
+</style><script src="shared.js"></script></head>
+<body><script>
+const rail = (sel) => `<nav class="strip"><div class="logo">S</div>${['LayoutGrid', 'Laptop', 'Users', 'MapPin', 'Package', 'Workflow', 'Activity']
+  .map(n => `<div class="nav ${n === sel ? 'sel' : ''}">${ic(n, 22)}</div>`).join('')}<div class="nav last">${ic('Settings', 22)}</div></nav>`
+const chip = (r) => `<span class="chip c-${r.color}">${r.status}</span>`
+if (SCREEN === 'workflow') show(`<div class="layout">${rail('Workflow')}<main class="sheet">
+  <header class="head"><h1>Bulk checkout<span class="sub">Scan each Asset to check it out to this User. Done when the last one is in.</span></h1>
+    <button>Undo last<kbd>Ctrl+Z</kbd></button><button class="primary">Done<kbd>Esc</kbd></button></header>
+  <div class="steps"><span class="done">1 Find User ✓</span><span class="now">2 Scan Assets</span><span>3 Next User</span></div>
+  <div class="grid">
+    <div class="cell"><div class="k">User</div><b>${USER.name}</b></div>
+    <div class="cell"><div class="k">Email</div><b>${USER.email}</b></div>
+    <div class="cell"><div class="k">Employee number</div><b class="mono">${USER.emp}</b></div>
+    <div class="cell"><div class="k">Already has</div><b>${USER.holds} Asset</b></div></div>
+  <div class="scan">${ic('ScanBarcode', 22)}<input autofocus placeholder="Scan or type an Asset Tag, then Enter"><p>Enter checks it out. A wrong scan? Ctrl+Z undoes the last one.</p></div>
+  <div class="section">Checked out this session <span class="dim" style="font:500 13px var(--sans)">4 Assets</span></div>
+  <table><tr><th>Asset Tag</th><th>Asset Model</th><th>Time</th><th>Result</th><th></th></tr>
+  ${DONE.map((d, i) => `<tr class="${i ? '' : 'new'}"><td><span class="tag">${d.tag}</span></td><td>${d.model}</td><td class="dim">${d.time}</td><td><span class="chip c-blue">Checked out</span></td><td style="text-align:right">${i ? '' : '<button>Undo<kbd>Ctrl+Z</kbd></button>'}</td></tr>`).join('')}</table>
+</main></div>`)
+else show(`<div class="layout">${rail('Laptop')}<main class="sheet">
+  <header class="head"><h1>Assets</h1><span class="mono dim">240 total</span><button>Columns</button><button class="primary">New Asset</button></header>
+  <div class="views"><span class="on">All<b>240</b></span><span>Damaged<b>7</b></span><span>Out on temp<b>12</b></span><span>Audit due<b>31</b></span><span>Ready to Deploy<b>58</b></span></div>
+  <div class="filters"><input placeholder="Filter Assets (/)"><select><option>Any status</option></select><select><option>Any Location</option></select><select><option>Any Asset Model</option></select></div>
+  <div class="selbar">3 selected <button>Check out</button><button>Edit</button><button>Print labels</button><span class="dim" style="margin-left:auto;font-weight:500">Space ticks, Enter opens</span></div>
+  <div class="list"><table><tr><th></th><th>Asset Tag</th><th>Name</th><th>Status</th><th>Asset Model</th><th>Category</th><th>Location</th><th>Checked out to</th><th>Expected checkin</th><th>Last audit</th></tr>
+  ${ROWS.map(r => `<tr class="${r.sel ? 'sel' : ''} ${r.ticked ? 'ticked' : ''}"><td><input type="checkbox" ${r.ticked ? 'checked' : ''}></td><td class="mono">${r.tag}</td><td>${r.name}</td><td>${chip(r)}</td><td>${r.model}</td><td>${r.cat}</td><td>${r.loc}</td><td>${r.to}</td><td>${r.due}${r.temp ? ' <span class="chip out">Temp</span>' : ''}</td><td>${r.audited}${r.audit ? ` <span class="chip ${r.audit === 'late' ? 'late' : 'out'}">${r.audit === 'late' ? 'Late' : 'Due'}</span>` : ''}</td></tr>`).join('')}</table></div>
+</main></div>`)
+</script></body></html>
