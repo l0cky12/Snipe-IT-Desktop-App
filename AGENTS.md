@@ -25,10 +25,10 @@ npm run typecheck && npm test && npm run build
 
 ## The review loop (Claude)
 
-Codex runs locally through the Codex CLI, signed in with the owner's ChatGPT plan; the Codex GitHub app is not used. Reviews use GPT-6.1 Sol at high reasoning effort through the `openai` provider, all pinned on the command line so local Codex defaults don't change the reviewer. Codex reads this file, so the guidelines below apply. After pushing a PR, review it from the PR branch (`< /dev/null`, or Codex waits on stdin):
+Codex runs locally through the Codex CLI, signed in with the owner's ChatGPT plan; the Codex GitHub app is not used. Reviews use GPT-6.1 Sol at high reasoning effort, pinned on the command line so local Codex defaults don't change the reviewer. They go through the owner's default `teamclaude` provider (a local proxy); the `openai` provider can't get through this machine's HTTPS proxy. Codex reads this file, so the guidelines below apply. After pushing a PR, review it from the PR branch (`< /dev/null`, or Codex waits on stdin):
 
 ```sh
-git fetch origin && codex review -c 'model_provider="openai"' -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"' --base origin/main < /dev/null
+git fetch origin && codex review -c 'model="gpt-6.1-sol"' -c 'model_reasoning_effort="high"' --base origin/main < /dev/null
 ```
 
 Post the result as a PR comment headed `### Codex review (round N)` naming the reviewed commit's SHA, then work in rounds. One round = fix or answer every finding, push once, and run the review again. Codex tags findings P0 (blocker) to P3 (nitpick). A failing CI check counts as a finding and uses the same rounds.
@@ -37,7 +37,7 @@ Post the result as a PR comment headed `### Codex review (round N)` naming the r
 - If you think a finding is wrong, say why in the round's comment instead of changing code. It's settled if the next review doesn't raise it again.
 - Round limit: 1 for PRs labelled `small`, 3 for `large`. When the limit is hit and findings or red checks remain, add the `needs-human-review` label, comment a short summary of what is still open, and stop.
 - PRs labelled `security-sensitive` always end with a human merge. Finish the rounds, then stop.
-- Merge with `gh pr merge --squash` only when checks are green, every review thread is resolved, a Codex review comment names the PR's latest commit, and neither `needs-human-review` nor `security-sensitive` is set. `.claude/hooks/guard-merge.sh` enforces this for `gh pr merge`; don't route around it.
+- Merge with `gh pr merge <number> --squash` only when checks are green, every review thread is resolved, a Codex review comment names the PR's latest commit, and neither `needs-human-review` nor `security-sensitive` is set. `.claude/hooks/guard-merge.sh` enforces this for `gh pr merge`; don't route around it.
 
 ## Review guidelines
 
