@@ -716,21 +716,22 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return rows
   }
 
-  // The Damaged Report (#69 §3): Assets whose Status Label is Damaged (by name, as Repair intake finds it), when they became
+  // The Damaged Report (#69 §3): Assets whose Status Label is Damaged (by name, as #59 decided), when they became
   // Damaged, and what their newest live Repair intake recorded. Damaged since is the open Repair Maintenance's start, else
   // that Repair intake's date, else not recorded (set Damaged by hand). Each Asset's Activity is searched PAGE_BATCH at a time.
   async function damaged(now: Date): Promise<Report> {
     const label = (await allRows<StatusLabel>('/statuslabels')).find((l) => l.name.trim().toLowerCase() === 'damaged')
     if (!label) throw new Error('Snipe-IT has no Status Label named Damaged.')
-    const [assets, open] = await Promise.all([allRows<RawAsset>(`/hardware?status_id=${label.id}`), allRows<RawMaintenance>('/maintenances?completed=false')])
-    // Repair intake opens one Repair Maintenance; should an Asset have more, the newest start is the one Incoming repair closes.
+    const [assets, openMaintenances] = await Promise.all([allRows<RawAsset>(`/hardware?status_id=${label.id}`), allRows<RawMaintenance>('/maintenances?completed=false')])
+    // Repair intake opens one Repair Maintenance (#59); should an Asset have more, the newest start is the one Incoming repair closes (#60).
     const started = new Map<number, string>()
-    for (const m of open) {
+    for (const m of openMaintenances) {
       const start = dayOf(m.start_date)
       if (m.asset && start && (m.maintenance_type || m.asset_maintenance_type || '').trim().toLowerCase() === 'repair' && start > (started.get(m.asset.id) ?? ''))
         started.set(m.asset.id, start)
     }
-    // The Workflow name without brackets also finds its undos; ponytail: the newest 20 hits, far more than one Asset's repairs.
+    // The Workflow name without brackets also finds its undos. ponytail: the newest 20 hits, far more than one Asset's repairs;
+    // an undo whose Repair intake is older than those would leave that Repair intake live. Page further if that ever happens.
     const intakeOf = async (id: number) => {
       const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=${encodeURIComponent('Repair intake')}&sort=created_at&order=desc&limit=20`)
       if (isError(body)) throw new Error(reason(body.messages))
