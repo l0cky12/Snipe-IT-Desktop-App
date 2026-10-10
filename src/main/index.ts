@@ -1,13 +1,16 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
 import { sendMail } from './mail'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt } from './snipeit'
 import trayIcon from './tray.png?asset'
+
+// The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#ffffff')
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
@@ -18,7 +21,7 @@ export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promi
 async function showLabel(parent: BrowserWindow | null, dir: string, name: string, pdf: Buffer) {
   const file = join(dir, `${name.replace(/[^\w.-]+/g, '_')}.pdf`)
   await writeFile(file, pdf)
-  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: '#0d1117', webPreferences: { plugins: true } })
+  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: windowBackground(), webPreferences: { plugins: true } })
   win.setMenuBarVisibility(false)
   win.on('closed', () => rm(dir, { recursive: true, force: true }))
   await win.loadFile(file, { hash: 'navpanes=0' })
@@ -49,12 +52,15 @@ app.whenReady().then(() => {
   const client = (input?: SettingsInput) => createSnipeIt(store.credentials(input), fetch)
   // A corrupt settings file shouldn't keep the window from opening to say so.
   let background = BACKGROUND_OFF
-  try { background = store.get().background } catch {}
+  let appearance: Appearance = 'system'
+  try { ({ background, appearance } = store.get()) } catch {}
+  // Also switches the window's prefers-color-scheme, so the stylesheet's one dark token block follows the setting.
+  nativeTheme.themeSource = appearance
   const win = new BrowserWindow({
     show: !(background.tray && process.argv.includes(HIDDEN_ARG)),
     width: 1280,
     height: 800,
-    backgroundColor: '#0d1117',
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -67,6 +73,7 @@ app.whenReady().then(() => {
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   const show = () => { if (win.isMinimized()) win.restore(); win.show(); win.focus() }
   app.on('second-instance', show)
+  nativeTheme.on('updated', () => win.setBackgroundColor(windowBackground()))
 
   ipcMain.handle('settings:get', () => store.get())
   ipcMain.handle('settings:save', (_e, input: SettingsInput) => {
@@ -124,6 +131,11 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:saveBackground', (_e, input: Background) => {
     const saved = store.saveBackground(input)
     applyBackground(saved.background)
+    return saved
+  })
+  ipcMain.handle('settings:saveAppearance', (_e, input: Appearance) => {
+    const saved = store.saveAppearance(input)
+    nativeTheme.themeSource = saved.appearance
     return saved
   })
   ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())

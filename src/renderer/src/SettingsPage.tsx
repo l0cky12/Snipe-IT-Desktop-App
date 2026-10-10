@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Background, MailInput, Settings, SettingsInput } from '../../main/config'
+import type { Appearance, Background, MailInput, Settings, SettingsInput } from '../../main/config'
 
 export function SettingsPage({ settings, onSaved }: { settings: Settings; onSaved: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
@@ -9,7 +9,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'appearance'>('connection')
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
@@ -103,6 +103,15 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
       </section>
     </fieldset>
     {place === 'background' && notes}
+    <section className="settings-section settings-appearance">
+      <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
+      <label htmlFor="appearance">Theme</label>
+      <select id="appearance" value={settings.appearance} onChange={(e) => {
+        const appearance = e.target.value as Appearance
+        run(async () => onSaved(await window.settings.saveAppearance(appearance)), 'appearance')
+      }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </section>
+    {place === 'appearance' && notes}
     <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
       <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
     </section>

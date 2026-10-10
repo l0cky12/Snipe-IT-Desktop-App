@@ -331,7 +331,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     <>
       <header className="head">
         <h1>{listName[kind]}{saved && `: ${saved.name}`}</h1>
-        <span className="dim mono">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
+        <span className="dim">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
           <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
@@ -473,7 +473,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       {page && rows.length === 0 && <p className="empty">Nothing matches</p>}
       {total > LIST_PAGE && (
         <div className="pager actions">
-          <span className="dim mono">{(offset + 1).toLocaleString()}–{Math.min(offset + LIST_PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+          <span className="dim">{(offset + 1).toLocaleString()}–{Math.min(offset + LIST_PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
           <button className="quiet" disabled={offset === 0 || loading} onClick={() => setOffset((o) => Math.max(0, o - LIST_PAGE))}>Previous</button>
           <button className="quiet" disabled={offset + LIST_PAGE >= total || loading} onClick={() => setOffset((o) => o + LIST_PAGE)}>Next</button>
         </div>
@@ -491,7 +491,7 @@ export function BulkResults({ title, run, onStop, onRetry, onClose }: { title: s
     <section className="selection bulk" aria-label={title}>
       <div className="actions">
         <b>{title}</b>
-        <span className="dim mono" role="status">{progress(run)}{run.busy ? '' : c.finished < c.of ? ', stopped' : ' finished'}</span>
+        <span className="dim" role="status">{progress(run)}{run.busy ? '' : c.finished < c.of ? ', stopped' : ' finished'}</span>
         {run.busy
           ? <button disabled={run.stopping} onClick={onStop}>{run.stopping ? 'Stopping…' : 'Stop'}</button>
           : <>

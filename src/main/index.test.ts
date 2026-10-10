@@ -40,6 +40,7 @@ beforeEach(async () => {
       isVisible() { return true }
     },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
+    nativeTheme: { themeSource: 'system', shouldUseDarkColors: false, on: () => {} },
     safeStorage: { isEncryptionAvailable: () => false },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))

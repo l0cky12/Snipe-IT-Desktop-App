@@ -540,12 +540,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? '', true],
+    ['Expected checkin', a.expectedCheckin ?? ''],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial, true],
-    ['Purchased', a.purchaseDate ?? '', true],
-    ['Warranty ends', a.warrantyEnd ?? '', true],
+    ['Purchased', a.purchaseDate ?? ''],
+    ['Warranty ends', a.warrantyEnd ?? ''],
   ]
   return (
     <>
@@ -734,7 +734,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
       }))
     const { used, available } = entry as { used: number; available: number }
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
-    return [{ name: usedName, count: used, color: 'var(--bar-used)' }, { name: freeName, count: available, color: 'var(--bar-free)' }]
+    return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
 
   const tag = (a: AssetSummary) => (
@@ -808,7 +808,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
     <>
       <header className="head">
         <h1>Dashboard</h1>
-        <span className="dim mono">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
+        <span className="dim">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Customize</button>
           <button onClick={load} disabled={loading}>Refresh</button>
