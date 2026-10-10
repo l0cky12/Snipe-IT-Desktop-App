@@ -330,7 +330,7 @@ describe('Overdue (today is 2026-09-24)', () => {
 
   it('an Asset whose Expected Checkin was yesterday is Overdue by 1 day', async () => {
     const asset = await snipeItWith(due('2026-09-23 00:00:00')).getAsset(4812)
-    expect(asset.overdue).toEqual({ days: 1, minutes: 0 })
+    expect(asset.overdue).toEqual({ days: 1, minutes: 1 })
   })
 
   it('an Asset due back today is not Overdue', async () => {
@@ -341,6 +341,7 @@ describe('Overdue (today is 2026-09-24)', () => {
   it('an Asset due today at 14:50 is not Overdue at 14:49, and is Overdue 1 min at 14:51', async () => {
     const before = await atTime(due('2026-09-24 14:50:00'), 14, 49).getAsset(4812)
     expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdue: null })
+    expect((await atTime(due('2026-09-24 14:50:00'), 14, 50).getAsset(4812)).overdue).toBeNull()
     const after = await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)
     expect(after.overdue).toEqual({ days: 0, minutes: 1 })
     expect(lateness(after.overdue!)).toBe('1 min')

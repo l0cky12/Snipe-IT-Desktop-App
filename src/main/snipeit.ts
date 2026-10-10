@@ -394,13 +394,14 @@ function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
   return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
 }
 
-// How late an Expected Checkin is, or null when it isn't yet: from its time of day when it has one, else from the end of its date.
+// How late an Expected Checkin is, or null until it has passed: its time of day when it has one, else the last moment of its date.
+// A started minute counts as 1, so an Asset just past due reads "1 min", never "0 min".
 function overdueOf(now: Date, due: string): Lateness | null {
   const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
-  const from = due.length > 10 ? new Date(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d + 1)
-  const ms = now.getTime() - from.getTime()
-  if (ms < 0) return null
-  return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.ceil(ms / 6e4) } // || 0: not -0
+  const at = due.length > 10 ? new Date(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d + 1, 0, 0, 0, -1)
+  const ms = now.getTime() - at.getTime()
+  if (ms <= 0) return null
+  return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.max(1, Math.floor(ms / 6e4)) } // || 0: not -0
 }
 
 function toAsset(raw: RawAsset, today: Date): Asset {
