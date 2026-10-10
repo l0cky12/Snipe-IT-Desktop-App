@@ -1119,7 +1119,7 @@ describe('report', () => {
   it('Temp checkout history pairs each live Temp checkout with its return, wherever that falls', async () => {
     let id = 0
     const entry = (asset: number, action_type: string, datetime: string, note: string, operator = 'A. Tech') => ({
-      id: ++id, action_type, created_at: { datetime: `${datetime}:00` }, created_by: { id: 5, name: operator },
+      id: ++id, action_type, created_at: { datetime: datetime.length > 16 ? datetime : `${datetime}:00` }, created_by: { id: 5, name: operator },
       target: { id: 300 + asset, name: `User ${asset}`, type: 'user' }, note, item: { id: asset, name: `CB-${asset} (NOMMA-${asset})`, type: 'asset' },
     })
     const temp = (due: string, text = '') => `[Temp checkout | due: ${due}]${text}`
@@ -1134,7 +1134,7 @@ describe('report', () => {
       entry(4, 'checkin from', '2026-09-21 11:01', '[Undo] Temp checkout'),
       entry(6, 'checkout', '2026-09-21 11:30', '[Bulk checkout]'),
       entry(3, 'checkin from', '2026-09-21 15:00', '[Automatic check-in]'),
-      entry(2, 'checkin from', '2026-09-21 15:40', '', 'B. Tech'), // a web UI Checkin
+      entry(2, 'checkin from', '2026-09-21 15:00:40', '', 'B. Tech'), // a web UI Checkin, 40 seconds late
       entry(5, 'checkin from', '2026-09-22 08:00', '[Bulk return]'),
       entry(5, 'checkout', '2026-09-22 08:05', '[Undo] Bulk return [Temp checkout | due: 2026-09-22 15:00]'),
       entry(1, 'checkin from', '2026-09-23 10:00', '[Bulk return]', 'B. Tech'), // after To
@@ -1149,7 +1149,7 @@ describe('report', () => {
       columns: ['Checked out', 'Asset Tag', 'Name', 'User', 'Operator', 'Due', 'Returned', 'Returned by', 'Late by'],
       rows: [
         ['2026-09-21 10:00', 'NOMMA-3', 'CB-3', 'User 3', 'A. Tech', '2026-09-21 15:00', '2026-09-21 15:00', 'Automatic check-in', ''],
-        ['2026-09-21 09:00', 'NOMMA-2', 'CB-2', 'User 2', 'A. Tech', '2026-09-21 15:00', '2026-09-21 15:40', 'B. Tech', '40 min'],
+        ['2026-09-21 09:00', 'NOMMA-2', 'CB-2', 'User 2', 'A. Tech', '2026-09-21 15:00', '2026-09-21 15:00', 'B. Tech', '1 min'],
         // Returned, then the return undone: still out, and late since the due time.
         ['2026-09-20 12:00', 'NOMMA-5', 'CB-5', 'User 5', 'A. Tech', '2026-09-22 15:00', 'Still out', '', '2d'],
         ['2026-09-20 08:00', 'NOMMA-1', 'CB-1', 'User 1', 'A. Tech', '2026-09-20 14:50', '2026-09-23 10:00', 'B. Tech', '3d'],

@@ -964,11 +964,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (kind === 'tempHistory') {
         // From now, not from `to`, so a Temp checkout returned after the range still gets its return (#69 §4).
         // ponytail: without From it reads the whole log, with no row cap to stop early; pick a From on a big log.
-        const byAsset = new Map<number, (HistoryEntry & { id: number; user: string; item: string })[]>()
+        const byAsset = new Map<number, (HistoryEntry & { id: number; at: string; user: string; item: string })[]>()
         for await (const r of activitySince(from)) {
           if (r.item?.type !== 'asset') continue
           const list = byAsset.get(r.item.id) ?? byAsset.set(r.item.id, []).get(r.item.id)!
-          list.push({ ...toHistoryEntry(r), id: r.id, user: r.target?.name ?? '', item: r.item.name })
+          list.push({ ...toHistoryEntry(r), id: r.id, at: r.created_at?.datetime ?? '', user: r.target?.name ?? '', item: r.item.name })
         }
         const found: { assetId: number; out: string; cells: string[] }[] = []
         for (const [assetId, entries] of byAsset) {
@@ -981,7 +981,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             if (!due || !inRange(e.when.slice(0, 10))) return
             // Whatever its note: a web UI Checkin returns it too.
             const back = live.slice(i + 1).find((x) => x.action === 'Checkin')
-            const late = overdueOf(back ? new Date(`${back.when.replace(' ', 'T')}:00`) : now, due)
+            // To the second: a return 40 seconds after the due minute is late.
+            const late = overdueOf(back ? new Date(back.at.replace(' ', 'T')) : now, due)
             const by = back && (parseAppNote(back.note)?.tag === 'Automatic check-in' ? 'Automatic check-in' : back.operator)
             found.push({ assetId, out: e.when, cells: [e.user, e.operator, due, back?.when ?? 'Still out', by || '', late ? lateness(late) : ''] })
           })
