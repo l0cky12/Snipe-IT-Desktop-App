@@ -3,10 +3,10 @@ import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Schedu
 import type { ReportRef } from '../../main/scheduler'
 import { listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, REPORT_NAMES, REPORTS, type Report, type ReportKind, type ReportQuery } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, AUDIT_REPORTS, itemTypeName, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report.
-const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends' }
+const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited' }
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
@@ -48,10 +48,10 @@ export function lastSendText(last: LastSend) {
 }
 const keyOf = (r: ScheduleKey) => ('saved' in r ? `saved:${r.saved}` : r.builtIn)
 
-// A Report's schedule and its last send, changed in place. range: the schedule sets the Report's dates (see Schedule).
-function ScheduleCell({ report, schedule, name, range, onChange }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; range: boolean; onChange: (all: Scheduled[]) => void }) {
+// A Report's schedule and its last send, changed in place.
+function ScheduleCell({ report, schedule, name, onChange }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; onChange: (all: Scheduled[]) => void }) {
   const [editing, setEditing] = useState(false)
-  if (editing) return <ScheduleForm report={report} schedule={schedule} name={name} range={range} onDone={(all) => (all && onChange(all), setEditing(false))} />
+  if (editing) return <ScheduleForm report={report} schedule={schedule} name={name} onDone={(all) => (all && onChange(all), setEditing(false))} />
   return (
     <div className="schedule">
       <span>{schedule ? scheduleText(schedule) : <span className="dim">Not scheduled</span>}</span>
@@ -61,8 +61,9 @@ function ScheduleCell({ report, schedule, name, range, onChange }: { report: Sch
   )
 }
 
-// onDone: the schedules after saving or stopping, or nothing when cancelled.
-function ScheduleForm({ report, schedule, name, range, onDone }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; range: boolean; onDone: (all?: Scheduled[]) => void }) {
+// onDone: the schedules after saving or stopping, or nothing when cancelled. range: the schedule sets the Report's dates (see Schedule).
+function ScheduleForm({ report, schedule, name, onDone }: { report: ScheduleKey; schedule?: KeptSchedule; name: string; onDone: (all?: Scheduled[]) => void }) {
+  const range = takesRange(report)
   const [s, setS] = useState<Schedule>(schedule ?? { every: 'week', day: 1, time: '07:00', ...(range && { range: 7 }) })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -105,6 +106,7 @@ function ScheduleForm({ report, schedule, name, range, onDone }: { report: Sched
       </div>
       {s.every === 'month' && s.day! > 28 && <span className="dim">In a shorter month it sends on the month's last day.</span>}
       {'builtIn' in report && report.builtIn === 'activity' && <span className="dim">It sends every record type and action.</span>}
+      {'builtIn' in report && AUDIT_REPORTS.includes(report.builtIn) && <span className="dim">It sends every Location and Category.</span>}
       <div className="actions">
         <button disabled={busy}>Save schedule</button>
         {schedule && <button type="button" className="quiet danger" disabled={busy} onClick={() => save(null)}>Stop schedule</button>}
@@ -151,8 +153,19 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     return () => clearInterval(timer)
   }, [])
   const scheduleOf = (r: ScheduleKey) => schedules.find((s) => keyOf(s.report) === keyOf(r))?.schedule
-  // The filters the chosen report has: only the Activity Report narrows by record type and action.
-  const sent = kind === 'activity' ? query : { from: query.from, to: query.to }
+  // The audit Reports' Location and Category choices; a list that doesn't load just leaves fewer choices.
+  const [places, setPlaces] = useState<{ locations: StatusLabel[]; categories: StatusLabel[] }>({ locations: [], categories: [] })
+  useEffect(() => {
+    window.snipeIt.locations().then((locations) => setPlaces((p) => ({ ...p, locations })), () => {})
+    window.snipeIt.names('categories').then((categories) => setPlaces((p) => ({ ...p, categories })), () => {})
+  }, [])
+  const located = AUDIT_REPORTS.includes(kind)
+  // The filters the chosen report has: only the Activity Report narrows by record type and action, only the audit Reports by Location and Category.
+  const sent: ReportQuery = {
+    from: query.from, to: query.to,
+    ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
+    ...(located && { locationId: query.locationId, categoryId: query.categoryId }),
+  }
   // Bumped by every run and every change of report or filter; a result for an older one is dropped, so what shows
   // (and what exports) always matches the filters on screen.
   const latest = useRef(0)
@@ -211,6 +224,19 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
               </select>
             </>
           )}
+          {located && (
+            <>
+              <select value={query.locationId ?? ''} onChange={(e) => set({ locationId: e.target.value })} aria-label="Location">
+                <option value="">Any Location</option>
+                {places.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+              <select value={query.categoryId ?? ''} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
+                <option value="">Any Category</option>
+                {places.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </>
+          )}
+          {kind === 'auditDue' && <span className="dim">How far ahead comes from Snipe-IT's Audit warning setting.</span>}
           <button disabled={busy}>{busy ? 'Running…' : 'Run report'}</button>
         </form>
       </header>
@@ -226,7 +252,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
             {REPORTS.map((k) => (
               <tr key={k}>
                 <td>{REPORT_NAMES[k]}</td>
-                <td><ScheduleCell report={{ builtIn: k }} schedule={scheduleOf({ builtIn: k })} name={REPORT_NAMES[k]} range={k !== 'expiring'} onChange={setSchedules} /></td>
+                <td><ScheduleCell report={{ builtIn: k }} schedule={scheduleOf({ builtIn: k })} name={REPORT_NAMES[k]} onChange={setSchedules} /></td>
               </tr>
             ))}
           </tbody>
@@ -285,7 +311,7 @@ function SavedReports({ onOpen, onEmailed, scheduleOf, onScheduled }: { onOpen: 
                   ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
                 </td>
                 <td className="dim">{listName[r.kind]}</td>
-                <td><ScheduleCell report={{ saved: r.id }} schedule={scheduleOf({ saved: r.id })} name={r.name} range={false} onChange={onScheduled} /></td>
+                <td><ScheduleCell report={{ saved: r.id }} schedule={scheduleOf({ saved: r.id })} name={r.name} onChange={onScheduled} /></td>
                 <td><div className="actions">
                   {deleting === r.id ? (
                     <span className="confirm" role="alertdialog" aria-label={`Delete ${r.name}?`}>
