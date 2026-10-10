@@ -972,9 +972,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const rows = (await allRows<RawMaintenance>('/maintenances')).flatMap((m) => {
           const started = m.start_date?.date ?? ''
           if (!inRange(started)) return []
+          // Open or completed as Snipe-IT counts it (completed_at set, on v8.6+, even for one completed before the upgrade).
           const completed = dayOf('completed_at' in m ? m.completed_at : m.completion_date)
-          // Snipe-IT counts the days once it's completed; while open, it's the days so far.
-          const days = completed ? String(m.asset_maintenance_time ?? '') : started ? String(-daysFrom(now, started)) : ''
+          // Snipe-IT counts the days once it's completed; while open, it's the days so far (none yet if it starts later).
+          const days = completed ? String(m.asset_maintenance_time ?? '') : started ? String(Math.max(0, -daysFrom(now, started))) : ''
           return [{ id: m.id, started, cells: [started, completed ?? 'Open', days, m.asset?.asset_tag ?? '', m.asset?.name ?? '', m.title ?? '',
             m.maintenance_type || m.asset_maintenance_type || '', m.supplier?.name ?? '', Number(m.is_warranty) ? 'Yes' : 'No',
             m.cost ? amount(m.cost) : '', m.created_by?.name ?? '', m.completed_by?.name ?? ''] }]
