@@ -15,6 +15,7 @@ const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
+  assetByTag: call('snipeit:assetByTag'),
   lookup: call('snipeit:lookup'),
   getAsset: call('snipeit:getAsset'),
   statusLabels: call('snipeit:statusLabels'),

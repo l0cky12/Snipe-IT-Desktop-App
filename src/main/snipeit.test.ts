@@ -71,6 +71,24 @@ function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
   return { fetch: fetch as typeof globalThis.fetch, calls, requests, queries }
 }
 
+describe('assetByTag', () => {
+  it('finds an Asset by its exact Asset Tag only: an unknown tag is null, with no fallback search', async () => {
+    const { fetch, calls } = fakeFetch({ '/hardware/bytag/NOMMA-004812': { body: chromebook }, '/hardware': { body: { total: 1, rows: [chromebook] } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.assetByTag('NOMMA-004812')).toMatchObject({ id: 4812, assetTag: 'NOMMA-004812', statusMeta: 'deployed' })
+    expect(await snipeIt.assetByTag('NOMMA-0048')).toBeNull()
+    expect(calls).toEqual(['/hardware/bytag/NOMMA-004812', '/hardware/bytag/NOMMA-0048'])
+  })
+
+  it('refuses an empty or non-text tag without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.assetByTag('')).rejects.toThrow('Invalid Asset Tag')
+    await expect(snipeIt.assetByTag(42 as unknown as string)).rejects.toThrow('Invalid Asset Tag')
+    expect(calls).toEqual([])
+  })
+})
+
 describe('lookup', () => {
   it('scanning an exact Asset Tag returns that one Asset, marked exact', async () => {
     const { fetch } = fakeFetch({ '/hardware/bytag/NOMMA-004812': { body: chromebook } })
