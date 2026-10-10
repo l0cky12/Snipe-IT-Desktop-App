@@ -1,3 +1,5 @@
+import { liveEntries, parseAppNote, parseWorkflowNote } from './notes'
+
 export type Config = { baseUrl: string; apiKey: string }
 
 export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string }
@@ -166,14 +168,15 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports and Temp checkout history. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'tempHistory'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited',
+  tempHistory: 'Temp checkout history',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
-export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
+export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'tempHistory']
 /** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
 export const takesRange = (report: unknown) =>
   !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
@@ -185,7 +188,7 @@ export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ * end, next audit, last audit, Checkout day). locationId/categoryId: Snipe-IT ids, for the audit Reports.
  */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -740,6 +743,23 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return rows
   }
 
+  // The Activity Report newest first, down to its first entry before `from`. Each page starts where the last one's rows
+  // ended: a server may cap pages below PAGE_LIMIT. An entry without a date can't be placed, and mustn't end it either.
+  async function* activitySince(from?: string, actionType?: string): AsyncGenerator<RawActivity> {
+    for (let offset = 0; ; ) {
+      const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }) })
+      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      for (const r of page.rows) {
+        const day = r.created_at?.datetime.slice(0, 10) ?? ''
+        if (from && day && day < from) return
+        yield r
+      }
+      offset += page.rows.length
+      if (!page.rows.length || offset >= page.total) return
+    }
+  }
+
   // A page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
   async function listPage<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery, limit: number, timeout?: number): Promise<ListPage<K>> {
     if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
@@ -931,26 +951,53 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
-        // Each page starts where the last one's rows ended: a server may cap pages below PAGE_LIMIT.
-        for (let offset = 0; ; ) {
-          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }) })
-          const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
-          if (isError(page)) throw new Error(reason(page.messages))
-          for (const r of page.rows) {
-            const day = r.created_at?.datetime.slice(0, 10) ?? ''
-            // An entry without a date can't be placed in the range, and mustn't end the report either.
-            if (from && day && day < from) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
-            if (!inRange(day) || (itemType && r.item?.type !== itemType)) continue
-            // Full, and one more matches: it's cut short.
-            if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
-            const e = toHistoryEntry(r)
-            rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
-          }
-          offset += page.rows.length
-          if (!page.rows.length || offset >= page.total) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
+        for await (const r of activitySince(from, actionType)) {
+          if (!inRange(r.created_at?.datetime.slice(0, 10) ?? '') || (itemType && r.item?.type !== itemType)) continue
+          // Full, and one more matches: it's cut short.
+          if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
+          const e = toHistoryEntry(r)
+          rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
         }
+        return { columns: ACTIVITY_COLUMNS, rows, capped: false }
       }
       const now = today()
+      if (kind === 'tempHistory') {
+        // From now, not from `to`, so a Temp checkout returned after the range still gets its return (#69 §4).
+        const byAsset = new Map<number, (HistoryEntry & { id: number; user: string; item: string })[]>()
+        for await (const r of activitySince(from)) {
+          if (r.item?.type !== 'asset') continue
+          const list = byAsset.get(r.item.id) ?? byAsset.set(r.item.id, []).get(r.item.id)!
+          list.push({ ...toHistoryEntry(r), id: r.id, user: r.target?.name ?? '', item: r.item.name })
+        }
+        const found: { assetId: number; out: string; cells: string[] }[] = []
+        for (const [assetId, entries] of byAsset) {
+          // Oldest first by id: a Move's Checkin and Checkout can share a second. An undo and what it undid drop out, so
+          // the Temp tag an undo puts back never starts a row, and an undone return leaves its Temp checkout open.
+          const live = liveEntries(entries.sort((a, b) => a.id - b.id))
+          live.forEach((e, i) => {
+            const tag = e.action === 'Checkout' ? parseWorkflowNote(e.note) : null
+            const due = tag?.workflow === 'Temp checkout' && tag.due
+            if (!due || !inRange(e.when.slice(0, 10))) return
+            // Whatever its note: a web UI Checkin returns it too.
+            const back = live.slice(i + 1).find((x) => x.action === 'Checkin')
+            const late = overdueOf(back ? new Date(`${back.when.replace(' ', 'T')}:00`) : now, due)
+            const by = back && (parseAppNote(back.note)?.tag === 'Automatic check-in' ? 'Automatic check-in' : back.operator)
+            found.push({ assetId, out: e.when, cells: [e.user, e.operator, due, back?.when ?? 'Still out', by || '', late ? lateness(late) : ''] })
+          })
+        }
+        found.sort((a, b) => b.out.localeCompare(a.out))
+        const capped = found.length > REPORT_MAX
+        // ponytail: every Asset for its Asset Tag and Name (the log's item name mixes both); one dropped since shows the log's name.
+        const assets = found.length ? new Map((await allRows<RawAsset>('/hardware')).map((a) => [a.id, a])) : new Map<number, RawAsset>()
+        return {
+          columns: ['Checked out', 'Asset Tag', 'Name', 'User', 'Operator', 'Due', 'Returned', 'Returned by', 'Late by'],
+          rows: found.slice(0, REPORT_MAX).map(({ assetId, out, cells }) => {
+            const a = assets.get(assetId)
+            return [out, a?.asset_tag ?? '', a?.name ?? byAsset.get(assetId)![0].item, ...cells]
+          }),
+          capped,
+        }
+      }
       if (AUDIT_REPORTS.includes(kind)) {
         const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
         const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'

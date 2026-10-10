@@ -198,7 +198,7 @@ it('keeps a date range only on the Schedules of ranged Reports: Audit due and Au
   const { store } = setup()
   for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
   const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
-  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited'])
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'tempHistory'])
   expect(ranged).toEqual(RANGED_REPORTS)
   // The Schedule form shows the range choice by the same rule.
   expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
