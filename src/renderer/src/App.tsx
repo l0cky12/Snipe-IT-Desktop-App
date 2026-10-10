@@ -556,12 +556,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           <span className="sub">{a.model}</span>
         </h1>
         <StatusChip asset={a} />
-        {a.overdueDays !== null && <span className="chip c-red">Overdue {a.overdueDays}d</span>}
+        {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
         {a.warranty &&
           (a.warranty.expired ? (
-            <span className="chip c-grey">Warranty expired</span>
+            <span className="flag c-grey">Warranty expired</span>
           ) : (
-            <span className="chip c-amber">Warranty {a.warranty.daysLeft}d left</span>
+            <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
           ))}
         <div className="actions">
           <button
@@ -759,7 +759,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th className="num">Days late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -767,7 +767,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   {tag(a)}
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late">{a.overdueDays}d</td>
+                  <td className="late num">{a.overdueDays}d</td>
                 </tr>
               ))}
             </tbody>
@@ -782,7 +782,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
         <div className="section">Warranty expiring in 90 days ({rows.length})</div>
         <table className="history">
           <thead>
-            <tr><th>Asset Tag</th><th>Name</th><th>Status</th><th>Days left</th></tr>
+            <tr><th>Asset Tag</th><th>Name</th><th>Status</th><th className="num">Days left</th></tr>
           </thead>
           <tbody>
             {rows.map((a) => (
@@ -790,7 +790,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                 {tag(a)}
                 <td>{a.name || '—'}</td>
                 <td>{a.status}</td>
-                <td>{a.daysLeft}d</td>
+                <td className="num">{a.daysLeft}d</td>
               </tr>
             ))}
           </tbody>
