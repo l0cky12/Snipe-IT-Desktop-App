@@ -2,6 +2,9 @@
 // Run: node scripts/mock-snipeit.mjs [port]   then use http://127.0.0.1:<port> and any API token in Settings.
 // For timing, make it bigger and slower like a real server: MOCK_SCALE=20 (240 Assets and 64 Users each),
 // MOCK_LATENCY_MS=150 (every request) and MOCK_ROW_MS=5 (each row a list returns).
+// To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
+// 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
+// 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -10,6 +13,8 @@ const port = Number(process.argv[2] ?? 8765)
 const scale = Number(process.env.MOCK_SCALE ?? 1)
 const latency = Number(process.env.MOCK_LATENCY_MS ?? 0)
 const rowCost = Number(process.env.MOCK_ROW_MS ?? 0)
+const failAll = process.env.MOCK_FAIL
+const retryAfter = process.env.MOCK_RETRY_AFTER ?? '23'
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
@@ -196,6 +201,16 @@ const routes = [
 const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
 createServer(async (req, res) => {
+  if (failAll === 'hang') return
+  if (failAll) {
+    const [status, body, headers] = {
+      401: [401, { message: 'Unauthenticated.' }],
+      403: [403, refused],
+      429: [429, { message: 'Too Many Attempts.' }, retryAfter ? { 'Retry-After': retryAfter } : {}],
+      503: [503, { message: 'Service Unavailable' }],
+    }[failAll] ?? [500, { message: `Unknown MOCK_FAIL: ${failAll}` }]
+    return res.writeHead(status, { 'Content-Type': 'application/json', ...headers }).end(JSON.stringify(body))
+  }
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
   const raw = req.method === 'GET' ? '' : await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s)) })
