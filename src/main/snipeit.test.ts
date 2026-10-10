@@ -1158,6 +1158,10 @@ describe('report', () => {
     })
     // Without To, the one still out from today shows too, late by the hour on its due day.
     expect((await snipeIt.report('tempHistory', { from: '2026-09-20' })).rows[0]).toEqual(['2026-09-23 13:00', 'NOMMA-2', 'CB-2', 'User 2', 'A. Tech', '2026-09-24 15:00', 'Still out', '', '1 h'])
+    // Out, back and out again within a minute: the later Checkout still comes first.
+    const again = [entry(6, 'checkout', '2026-09-24 09:00:10', temp('2026-09-24 12:00')), entry(6, 'checkin from', '2026-09-24 09:00:30', ''), entry(6, 'checkout', '2026-09-24 09:00:50', temp('2026-09-24 18:00'))]
+    log.unshift(...again.reverse())
+    expect((await snipeIt.report('tempHistory', { from: '2026-09-24' })).rows.map((row) => row.slice(5, 7))).toEqual([['2026-09-24 18:00', 'Still out'], ['2026-09-24 12:00', '2026-09-24 09:00']])
   })
 })
 

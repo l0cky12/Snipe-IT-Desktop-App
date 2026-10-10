@@ -970,7 +970,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           const list = byAsset.get(r.item.id) ?? byAsset.set(r.item.id, []).get(r.item.id)!
           list.push({ ...toHistoryEntry(r), id: r.id, at: r.created_at?.datetime ?? '', user: r.target?.name ?? '', item: r.item.name })
         }
-        const found: { assetId: number; out: string; cells: string[] }[] = []
+        const found: { assetId: number; id: number; at: string; out: string; cells: string[] }[] = []
         for (const [assetId, entries] of byAsset) {
           // Oldest first by id: a Move's Checkin and Checkout can share a second. An undo and what it undid drop out, so
           // the Temp tag an undo puts back never starts a row, and an undone return leaves its Temp checkout open.
@@ -984,10 +984,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             // To the second: a return 40 seconds after the due minute is late.
             const late = overdueOf(back ? new Date(back.at.replace(' ', 'T')) : now, due)
             const by = back && (parseAppNote(back.note)?.tag === 'Automatic check-in' ? 'Automatic check-in' : back.operator)
-            found.push({ assetId, out: e.when, cells: [e.user, e.operator, due, back?.when ?? 'Still out', by || '', late ? lateness(late) : ''] })
+            found.push({ assetId, id: e.id, at: e.at, out: e.when, cells: [e.user, e.operator, due, back?.when ?? 'Still out', by || '', late ? lateness(late) : ''] })
           })
         }
-        found.sort((a, b) => b.out.localeCompare(a.out))
+        // To the second, then by id: the shown minute can't order two Checkouts in the same minute.
+        found.sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id)
         const capped = found.length > REPORT_MAX
         // ponytail: every Asset for its Asset Tag and Name (the log's item name mixes both); one dropped since shows the log's name.
         const assets = found.length ? new Map((await allRows<RawAsset>('/hardware')).map((a) => [a.id, a])) : new Map<number, RawAsset>()
