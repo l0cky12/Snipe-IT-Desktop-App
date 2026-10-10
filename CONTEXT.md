@@ -37,6 +37,18 @@ The optional date, set at Checkout (or changed later by editing the Asset), by w
 A checked-out Asset whose Expected Checkin date has passed. Means late *return* only.
 _Avoid_: using "overdue" for audits
 
+**Audit**:
+Confirming in person that an Asset is where Snipe-IT says it is. Each Asset has a last audited date and a next audit date.
+_Avoid_: inventory check, stocktake
+
+**Audit due**:
+An Asset whose next audit date falls within the coming warning window (30 days unless decided otherwise).
+_Avoid_: upcoming audit
+
+**Audit late**:
+An Asset whose next audit date has passed without an Audit.
+_Avoid_: overdue (late return only)
+
 **Expiring Warranty**:
 An Asset whose warranty ends within the next 90 days. "Warranty expiring" is the same thing as a heading (dashboard list, Report name).
 
@@ -106,6 +118,35 @@ A Checkout, Checkin, status change, or add-to-Batch done from an Asset's row in 
 **Batch**:
 Assets gathered on the Batch page for one Checkout or Checkin of all of them. It lives only for the session; each Asset still goes through the single Checkout or Checkin, so History credits the Operator as usual.
 _Avoid_: cart, selection (a Selection is ticked rows in one List; it can be added to the Batch)
+Being replaced by **Bulk checkout** and **Bulk return**.
+
+**Workflow**:
+A guided screen for one job the Operator repeats at the counter, driven by scanning or typing: the field waits for input, Enter submits, and it loops until the Operator says Done. The Workflows are Bulk checkout, Bulk return, Repair intake, Incoming repair and Temp checkout.
+_Avoid_: wizard, tool, flow
+
+**Bulk checkout**:
+The Workflow for handing Assets to one User: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. It keeps a list of what was checked out this session and can undo the last one.
+_Avoid_: bulk issue, issue (say Checkout)
+
+**Bulk return**:
+The Workflow for taking many Assets back: scan Assets one at a time and Check each in, ready to deploy again.
+_Avoid_: collection, bulk checkin
+
+**Repair intake**:
+The Workflow for a broken Asset coming to the counter: scan it, Check it in from its User, mark it Damaged and record what happened, both on the Checkin and in the User's notes.
+_Avoid_: drop-off, break/fix
+
+**Damaged**:
+An Asset between Repair intake and Incoming repair: broken, waiting for or away at repair.
+_Avoid_: broken, in repair (one state covers both)
+
+**Incoming repair**:
+The Workflow for Assets coming back from repair: scan each, make it ready to deploy again, and note that it returned from repair, optionally with the vendor.
+_Avoid_: repair return, RMA
+
+**Temp checkout**:
+A Checkout for the rest of the school day: due back at the end-of-day time (2:50 pm unless changed, e.g. for a half day) the same school day, or the next school day if made after that time. Every Operator sees every Temp checkout, whoever made it.
+_Avoid_: loaner, day loan, short-term checkout
 
 **Selection**:
 The Records ticked in one List, across its pages, that a Bulk Action applies to. It clears when the Operator leaves the List.
@@ -166,6 +207,7 @@ _Avoid_: stats, widgets
 
 ## Flagged ambiguities
 
-- "Overdue" was used for both late returns and late audits. Resolved: **Overdue** means late return only. Audits are out of scope.
+- "Overdue" was used for both late returns and late audits. Resolved: **Overdue** means late return only; a late audit is **Audit late**.
 - "People" on the dashboard means **Users**.
 - "User" could mean the person running the app or the person holding the Asset. Resolved: **Operator** runs the app, **User** holds the Asset.
+- "Issue" (as in "bulk issue") was a second word for Checkout. Resolved: the Workflow is **Bulk checkout**; say Checkout.
