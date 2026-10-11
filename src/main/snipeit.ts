@@ -64,8 +64,12 @@ export type UserCard = { id: number; name: string; username: string; employeeNum
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
 
-/** A Maintenance to open on one Asset. startDate: YYYY-MM-DD. */
-export type MaintenanceInput = { assetId: number; typeId: number; name: string; startDate: string; notes: string }
+/** A Maintenance to open on one Asset. startDate: YYYY-MM-DD. cost: a Repair cost as `45.00`. */
+export type MaintenanceInput = { assetId: number; typeId: number; name: string; startDate: string; notes: string; supplierId?: number; cost?: string }
+/** An Asset's open Maintenance. startDate: YYYY-MM-DD; notes: as plain text; cost: its Repair cost as `1234.50`, or null. */
+export type OpenMaintenance = { id: number; type: StatusLabel | null; startDate: string | null; notes: string; supplier: StatusLabel | null; cost: string | null }
+/** A Maintenance's Supplier and Repair cost to set (null clears one; left out, it's kept). reopen: clears its completion. */
+export type MaintenanceChange = { supplierId?: number | null; cost?: string | null; reopen?: boolean }
 /** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
  *  must be deployable). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
 export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; expectedCheckin?: string; note?: string }
@@ -268,7 +272,7 @@ type RawAsset = {
   expected_checkin: { date?: string; datetime?: string } | null
   available_actions?: unknown
 }
-type RawMaintenance = { id: number; maintenance_type_details?: { id: number; name: string } | null }
+type RawMaintenance = { id: number; maintenance_type_details?: { id: number; name: string } | null; start_date?: { date: string } | null; notes?: string | null; supplier?: Named; cost?: string | number | null }
 type RawActivity = {
   id: number
   item?: { id: number; name: string; type: string } | null
@@ -282,6 +286,8 @@ type RawActivity = {
 }
 
 const EXPIRING_DAYS = 90
+// A Repair cost as the app writes it (notes.ts repairCost): 45.00.
+const COST = /^\d+\.\d{2}$/
 // Rows per List page.
 export const LIST_PAGE = 50
 // Kinds counted by quantity: their list, and the fields for the whole quantity and the available part. Used is the rest.
@@ -1158,6 +1164,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return body.results.map((r) => ({ id: r.id, name: r.text }))
     },
+    // Snipe-IT's Supplier picker (first 50 by name), for Incoming repair's "Repaired by". Unlike /suppliers, it needs only
+    // the selectlist gate, which any Operator passes.
+    async supplierSelectlist(text: string): Promise<StatusLabel[]> {
+      const q = String(text).trim()
+      const body = await request<{ results: { id: number; text: string }[] }>(`/suppliers/selectlist${q ? `?search=${encodeURIComponent(q)}` : ''}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.results.map((r) => ({ id: r.id, name: r.text }))
+    },
     async userCard(id: number): Promise<UserCard> {
       checkId(id, 'User')
       const body = await request<RawUser>(`/users/${id}`)
@@ -1187,20 +1201,51 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (used) return used
       return Number.isSafeInteger(fallback) && fallback! > 0 ? fallback : null
     },
-    async openMaintenances(assetId: number): Promise<{ id: number; type: StatusLabel | null }[]> {
+    async openMaintenances(assetId: number): Promise<OpenMaintenance[]> {
       checkId(assetId)
       const body = await request<{ rows: RawMaintenance[] }>(`/maintenances?asset_id=${assetId}&completed=false&limit=50`)
       if (isError(body)) throw new Error(reason(body.messages))
-      return body.rows.map((m) => ({ id: m.id, type: m.maintenance_type_details ? { id: m.maintenance_type_details.id, name: m.maintenance_type_details.name } : null }))
+      const named = (n: Named | undefined) => (n ? { id: n.id, name: n.name } : null)
+      // Snipe-IT sends the cost formatted ("1,234.50") and the notes rendered from Markdown.
+      return body.rows.map((m) => ({
+        id: m.id, type: named(m.maintenance_type_details), startDate: m.start_date?.date ?? null, notes: plainText(m.notes ?? ''),
+        supplier: named(m.supplier), cost: String(m.cost ?? '').replace(/[^\d.]/g, '') || null,
+      }))
     },
     // Opens a Maintenance on one Asset; resolves to its id. Needs `assets.edit`.
-    async createMaintenance({ assetId, typeId, name, startDate, notes }: MaintenanceInput): Promise<number> {
+    async createMaintenance({ assetId, typeId, name, startDate, notes, supplierId, cost }: MaintenanceInput): Promise<number> {
       checkId(assetId)
       checkId(typeId, 'Maintenance type')
-      if (typeof name !== 'string' || !name.trim() || typeof notes !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('Invalid Maintenance')
-      const body = await request<{ payload?: { id?: number } }>('/maintenances', { asset_id: assetId, maintenance_type_id: typeId, name, start_date: startDate, notes })
+      if (supplierId !== undefined) checkId(supplierId, 'Supplier')
+      if (typeof name !== 'string' || !name.trim() || typeof notes !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || (cost !== undefined && !COST.test(cost))) throw new Error('Invalid Maintenance')
+      const body = await request<{ payload?: { id?: number } }>('/maintenances', { asset_id: assetId, maintenance_type_id: typeId, name, start_date: startDate, notes, ...(supplierId !== undefined && { supplier_id: supplierId }), ...(cost !== undefined && { cost }) })
       if (isError(body)) throw new Error(reason(body.messages))
       return Number(body.payload?.id)
+    },
+    // Sets a Maintenance's Supplier and Repair cost (never the Asset's purchase cost); reopen also clears its completion,
+    // for Incoming repair's undo. Needs `assets.edit`.
+    async updateMaintenance(id: number, { supplierId, cost, reopen }: MaintenanceChange): Promise<void> {
+      checkId(id, 'Maintenance')
+      if (supplierId != null) checkId(supplierId, 'Supplier')
+      if (cost != null && !COST.test(cost)) throw new Error('Invalid Maintenance')
+      const body = await request(`/maintenances/${id}`, {
+        ...(supplierId !== undefined && { supplier_id: supplierId }), ...(cost !== undefined && { cost }),
+        ...(reopen === true && { completed_at: null, completed_by: null, asset_maintenance_time: null }),
+      }, 'PATCH')
+      if (isError(body)) throw new Error(reason(body.messages))
+    },
+    // Completes an open Maintenance with a note; Snipe-IT stamps when, who, and the days it took. Needs `assets.edit`.
+    async completeMaintenance(id: number, note: string): Promise<void> {
+      checkId(id, 'Maintenance')
+      if (typeof note !== 'string') throw new Error('Invalid note')
+      const body = await request(`/maintenances/${id}/complete`, { note })
+      if (isError(body)) throw new Error(reason(body.messages))
+    },
+    // Deletes a Maintenance (Snipe-IT keeps it soft-deleted). Needs `assets.edit`.
+    async deleteMaintenance(id: number): Promise<void> {
+      checkId(id, 'Maintenance')
+      const body = await request(`/maintenances/${id}`, {}, 'DELETE')
+      if (isError(body)) throw new Error(reason(body.messages))
     },
     // A note in the Asset's History, for a step that can't carry one (a status change). Snipe-IT v8.3+, `assets.edit`.
     async addAssetNote(assetId: number, note: string): Promise<void> {

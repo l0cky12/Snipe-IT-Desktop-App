@@ -1459,7 +1459,7 @@ describe('Repair intake', () => {
 
   it("an Asset's open Maintenances, each with its type", async () => {
     const { fetch, queries } = fakeFetch({ '/maintenances': { body: { total: 2, rows: [{ id: 51, maintenance_type_details: repairType }, { id: 52, maintenance_type_details: null }] } } })
-    expect(await createSnipeIt(config, fetch).openMaintenances(4812)).toEqual([{ id: 51, type: { id: 4, name: 'Repair' } }, { id: 52, type: null }])
+    expect(await createSnipeIt(config, fetch).openMaintenances(4812)).toMatchObject([{ id: 51, type: { id: 4, name: 'Repair' } }, { id: 52, type: null }])
     expect(queries[0]).toMatchObject({ asset_id: '4812', completed: 'false' })
   })
 
@@ -1524,6 +1524,70 @@ describe('Repair intake', () => {
         expect(requests.map((r) => r.method)).toEqual(['GET', 'PATCH', 'GET'])
       }
     })
+  })
+})
+
+describe('Incoming repair', () => {
+  const ok = { body: { status: 'success', messages: 'Done.', payload: {} } }
+  // Shaped like Snipe-IT v8.8's MaintenancesTransformer (trimmed): notes rendered, cost formatted with separators.
+  const open = {
+    id: 51, name: 'NOMMA-004812 damaged', notes: '[Repair intake] cracked &amp; <em>bent</em>', supplier: { id: 3, name: 'Campus Tech Supply' }, cost: '1,234.50',
+    start_date: { date: '2026-10-01', formatted: '10/01/2026' }, completed_at: null, maintenance_type_details: { id: 4, name: 'Repair', tag_color: null },
+  }
+
+  it("Snipe-IT's Supplier picker list, which only needs the selectlist gate; with no text, the first page", async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/suppliers/selectlist': { body: { results: [{ id: 3, text: 'Campus Tech Supply', image: null }], pagination: { more: false } } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.supplierSelectlist(' campus ')).toEqual([{ id: 3, name: 'Campus Tech Supply' }])
+    expect(await snipeIt.supplierSelectlist('')).toEqual([{ id: 3, name: 'Campus Tech Supply' }])
+    expect(calls).toEqual(['/suppliers/selectlist', '/suppliers/selectlist'])
+    expect(queries).toEqual([{ search: 'campus' }, {}])
+  })
+
+  it("an open Maintenance carries its start date, plain notes, Supplier and Repair cost (as Snipe-IT's number)", async () => {
+    const { fetch } = fakeFetch({ '/maintenances': { body: { total: 2, rows: [open, { id: 52, name: 'x', notes: null, supplier: null, cost: null, start_date: null, maintenance_type_details: null }] } } })
+    expect(await createSnipeIt(config, fetch).openMaintenances(4812)).toEqual([
+      { id: 51, type: { id: 4, name: 'Repair' }, startDate: '2026-10-01', notes: '[Repair intake] cracked & bent', supplier: { id: 3, name: 'Campus Tech Supply' }, cost: '1234.50' },
+      { id: 52, type: null, startDate: null, notes: '', supplier: null, cost: null },
+    ])
+  })
+
+  it('creates a Maintenance with a Supplier and Repair cost when given, never touching the purchase cost', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /maintenances': { body: { status: 'success', messages: 'Created.', payload: { id: 62 } } } })
+    const input = { assetId: 4812, typeId: 4, name: 'NOMMA-004812 repair', startDate: '2026-10-11', notes: '[Incoming repair] No Repair intake record', supplierId: 3, cost: '45.00' }
+    expect(await createSnipeIt(config, fetch).createMaintenance(input)).toBe(62)
+    expect(requests[0].body).toEqual({ asset_id: 4812, maintenance_type_id: 4, name: 'NOMMA-004812 repair', start_date: '2026-10-11', notes: '[Incoming repair] No Repair intake record', supplier_id: 3, cost: '45.00' })
+    await expect(createSnipeIt(config, fetch).createMaintenance({ ...input, cost: '$45' })).rejects.toThrow('Invalid Maintenance')
+  })
+
+  it("edits a Maintenance's Supplier and Repair cost, or reopens it with its earlier ones", async () => {
+    const { fetch, requests } = fakeFetch({ 'PATCH /maintenances/51': ok })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.updateMaintenance(51, { supplierId: 3, cost: '45.00' })
+    await snipeIt.updateMaintenance(51, { cost: '45.00' })
+    await snipeIt.updateMaintenance(51, { supplierId: null, cost: null, reopen: true })
+    expect(requests.map((r) => [r.method, r.path, r.body])).toEqual([
+      ['PATCH', '/maintenances/51', { supplier_id: 3, cost: '45.00' }],
+      ['PATCH', '/maintenances/51', { cost: '45.00' }],
+      ['PATCH', '/maintenances/51', { supplier_id: null, cost: null, completed_at: null, completed_by: null, asset_maintenance_time: null }],
+    ])
+    for (const bad of [{ cost: '1,234.50' }, { supplierId: 1.5 }, { cost: '-1.00' }]) await expect(snipeIt.updateMaintenance(51, bad)).rejects.toThrow('Invalid')
+    expect(requests).toHaveLength(3)
+    const refused = fakeFetch({ 'PATCH /maintenances/51': { body: { status: 'error', messages: { cost: ['The cost must be a number.'] }, payload: null } } })
+    await expect(createSnipeIt(config, refused.fetch).updateMaintenance(51, { cost: '45.00' })).rejects.toThrow('The cost must be a number.')
+  })
+
+  it('completes a Maintenance with the note, and deletes one', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /maintenances/51/complete': ok, 'DELETE /maintenances/62': ok })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.completeMaintenance(51, '[Incoming repair] screen replaced')
+    await snipeIt.deleteMaintenance(62)
+    expect(requests).toEqual([
+      { method: 'POST', path: '/maintenances/51/complete', body: { note: '[Incoming repair] screen replaced' } },
+      { method: 'DELETE', path: '/maintenances/62', body: {} },
+    ])
+    const done = fakeFetch({ 'POST /maintenances/51/complete': { body: { status: 'error', messages: 'This maintenance is already complete.', payload: null } } })
+    await expect(createSnipeIt(config, done.fetch).completeMaintenance(51, '[Incoming repair]')).rejects.toThrow('This maintenance is already complete.')
   })
 })
 
