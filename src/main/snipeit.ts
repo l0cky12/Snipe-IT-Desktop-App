@@ -864,7 +864,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (view !== undefined && (kind !== 'assets' || !Object.hasOwn(ASSET_VIEWS, view))) throw new Error(`Unknown View: ${view}`)
     const spec = LISTS[kind]
     const { path = spec.path, filter } = view ? ASSET_VIEWS[view] : {}
-    const params = new URLSearchParams({ limit: String(limit), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
+    const from = Number.isSafeInteger(offset) && offset > 0 ? offset : 0
+    const params = new URLSearchParams({ limit: String(limit), offset: String(from) })
     if (search?.trim()) params.set('search', search.trim())
     for (const [key, value] of Object.entries(filters)) {
       if (value === '' || value === undefined) continue
@@ -887,8 +888,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const now = today()
     const keep = view && ASSET_VIEWS[view].keep
     if (keep) {
-      // ponytail: the whole set fetched, then sorted, paged and selected here; tens of Assets. Move to server paging if
-      // either View grows past a few hundred rows (each page, Select all and Export fetch it again).
+      // ponytail: the whole set fetched, then sorted, paged and selected here, and fetched again for each page, Select all
+      // and Export. Overdue's set is tens of Assets, but Out on temp's is every checked-out one matching the boxes (most of
+      // the fleet in a 1:1 school). Move to server paging (or cache the set) if either grows past a few hundred rows.
       params.delete('limit'), params.delete('offset')
       const fetched = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
       const { rows, tempError } = await markTemp(fetched, view === 'outOnTemp')
@@ -897,15 +899,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const value = (a: Asset) => String((sort === 'assignee' ? a.assignee?.name : a[sort as keyof Asset]) ?? '')
         kept.sort((a, b) => value(a).localeCompare(value(b), undefined, { numeric: true }) * (order === 'asc' ? 1 : -1))
       }
-      const from = Number.isSafeInteger(offset) && offset > 0 ? offset : 0
       return { total: kept.length, rows: kept.slice(from, from + limit), ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
     }
     if (sorted) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
     const page = await request<{ total: number; rows: unknown[] }>(`${path}?${params}`, undefined, undefined, timeout)
     if (isError(page)) throw new Error(reason(page.messages))
     const rows = page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows']
-    if (kind !== 'assets') return { total: page.total, rows }
-    // Every Assets View flags Temp checkouts in each row's Status.
+    // The All View flags Temp checkouts in each row's Status (Overdue and Out on temp mark theirs above).
+    // ponytail: one Activity Report request per page with a time-of-day Checkout on it, Select all and Export pages too.
+    if (kind !== 'assets' || (view && view !== 'all')) return { total: page.total, rows }
     const { rows: marked, tempError } = await markTemp(rows as unknown as Asset[])
     return { total: page.total, rows: marked, ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
   }
@@ -994,8 +996,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
   }
 
-  // The Assets with their Temp marks. Out on temp is nothing but the marks, so there (must) the lookup failing fails it;
-  // anywhere else the Assets come back unmarked, with the reason.
+  // The Assets with their Temp marks. If the lookup fails, they come back unmarked with the reason; with must (Out on temp,
+  // which can't be shown without the marks) the failure is thrown instead.
   async function markTemp<T extends Asset>(assets: T[], must = false): Promise<{ rows: (T & { temp: boolean })[]; tempError?: string }> {
     const temp = await outstandingTemp(assets).catch((e: Error) => {
       if (must) throw e

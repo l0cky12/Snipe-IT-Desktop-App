@@ -15,11 +15,12 @@ export const listName: Record<ListKind, string> = {
   manufacturers: 'Manufacturers', suppliers: 'Suppliers', departments: 'Departments', companies: 'Companies', statuslabels: 'Status Labels',
 }
 // What a List shows in a cell instead of its text (LIST_COLUMNS' text, which Export writes): the status as a chip, a note set off.
-// An Asset's Status flags it Temp and Overdue; a Damaged one's Status Label is itself the flag.
+// An Asset's Status flags it Temp (marked on the All View) and Overdue; a Damaged one's Status Label, named as the Damaged
+// View finds it, is itself the flag.
 const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K]) => ReactNode } } = {
   assets: {
     status: (a) => <>
-      {a.status.toLowerCase() === 'damaged' ? <span className="flag c-red">{a.status}</span> : <StatusChip asset={a} />}
+      {a.status.toLowerCase() === ASSET_VIEWS.damaged.filter![1].toLowerCase() ? <span className="flag c-red">{a.status}</span> : <StatusChip asset={a} />}
       {a.temp && <span className="flag c-blue">Temp</span>}
       {a.overdue && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
     </>,

@@ -805,7 +805,7 @@ describe('dashboard (today is 2026-09-24)', () => {
       await expect(snipeIt.list('assets', { view: 'outOnTemp' })).rejects.toThrow('permission to view the Activity Report')
     })
 
-    it("the other Views mark the page's Temp checkouts; a refused Activity Report leaves them unmarked, saying why", async () => {
+    it("the All View marks the page's Temp checkouts; a refused Activity Report leaves them unmarked, saying why", async () => {
       const marked = await fleet({ hardware: tempHardware, 'reports/activity': tempLog }).snipeIt.list('assets')
       expect(marked.rows.filter((a) => a.temp).map((a) => a.id)).toEqual([1, 4])
       expect(marked).not.toHaveProperty('tempError')
@@ -859,6 +859,7 @@ describe('dashboard (today is 2026-09-24)', () => {
       expect(second.total).toBe(60)
       // Three Assets due each day from the 1st to the 20th, latest first: the last ten are due on the 4th to the 1st.
       expect(second.rows.map((a) => a.expectedCheckin!.slice(8))).toEqual(['04', '03', '03', '03', '02', '02', '02', '01', '01', '01'])
+      // End to end: the List's own Select all, paging through this View as the window does.
       const all = await allMatching((offset) => snipeIt.list('assets', { view: 'overdue', sort: 'id', order: 'asc', offset }))
       expect([...all!.keys()]).toEqual(many.map((a) => a.id))
       // Each page asks Snipe-IT for the whole set again, never for a page of it.
