@@ -1392,7 +1392,7 @@ describe('report', () => {
       expect(queries[1]).toMatchObject({ status_id: '6' })
       expect(queries[2]).toMatchObject({ completed: 'false' })
       expect(activity.map((q) => q.item_id)).toEqual(['1', '2', '3', '4'])
-      expect(activity[0]).toMatchObject({ item_type: 'asset', search: 'intake', order: 'desc', limit: '20' })
+      expect(activity[0]).toMatchObject({ item_type: 'asset', search: 'repair', order: 'desc', limit: '20' })
     })
 
     it('an undo typed by hand with odd spacing still cancels its Repair intake', async () => {
@@ -1406,6 +1406,30 @@ describe('report', () => {
     it('the open Repair Maintenance’s start date wins over the Repair intake’s date', async () => {
       const { fetch } = damagedFetch([damagedAsset(1)], [maintenance(10, 1, '2026-09-03')], { 1: [intake(100, 1, '2026-09-10 10:00:00', '[Repair intake] cracked screen', null)] })
       expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3, 5)).toEqual(['2026-09-03', '21'])
+    })
+
+    it('a Repair intake from before a finished Incoming repair doesn’t count when the Asset is set Damaged again by hand', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1), damagedAsset(2)], [], {
+        1: [
+          intake(101, 1, '2026-09-15 09:00:00', '[Incoming repair | supplier: Demo Repairs] screen replaced', null),
+          intake(100, 1, '2026-09-01 10:00:00', '[Repair intake] cracked screen', 'Avery Testwell'),
+        ],
+        // An undone Incoming repair leaves the Repair intake standing.
+        2: [
+          intake(202, 2, '2026-09-15 09:05:00', '[Undo] Incoming repair', null),
+          intake(201, 2, '2026-09-15 09:00:00', '[Incoming repair] wrong Asset scanned', null),
+          intake(200, 2, '2026-09-02 10:00:00', '[Repair intake] won’t power on', null),
+        ],
+      })
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows.map((r) => r.slice(0, 1).concat(r.slice(3, 8)))).toEqual([
+        ['NOMMA-2', '2026-09-02', '22', '', 'Demo Operator', 'won’t power on'],
+        ['NOMMA-1', 'Not recorded', 'Not recorded', '', '', ''],
+      ])
+    })
+
+    it('Days Damaged is 0, not negative, when the Repair Maintenance starts in the future', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1)], [maintenance(10, 1, '2026-10-01')], {})
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3, 5)).toEqual(['2026-10-01', '0'])
     })
 
     it('searches each Damaged Asset’s Activity four at a time', async () => {

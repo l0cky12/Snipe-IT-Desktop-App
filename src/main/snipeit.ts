@@ -844,24 +844,30 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (m.asset && start && (m.maintenance_type || m.asset_maintenance_type || '').trim().toLowerCase() === 'repair' && start > (started.get(m.asset.id) ?? ''))
         started.set(m.asset.id, start)
     }
-    // "intake" finds the Workflow notes however their spacing was typed, and their undos; the parser picks them out (#63 §5).
-    // ponytail: the newest 20 hits, far more than one Asset's repairs; an undo whose Repair intake is older than those would
-    // leave that Repair intake live. Page further if that ever happens.
+    // "repair" finds Repair intake and Incoming repair notes however their spacing was typed, and their undos; the parser
+    // picks them out (#63 §5). A live Incoming repair ends a Damaged spell, so only a Repair intake after the newest one counts.
+    // ponytail: the newest 20 hits, far more than one Asset's repairs; an undo whose step is older than those would
+    // leave that step live. Page further if that ever happens.
     const intakeOf = async (id: number) => {
-      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=intake&sort=created_at&order=desc&limit=20`)
+      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=repair&sort=created_at&order=desc&limit=20`)
       if (isError(body)) throw new Error(reason(body.messages))
       // item_id also matches entries that only target the Asset, such as its Maintenance's; only the Asset's own count.
       const oldestFirst = body.rows.filter((r) => r.item?.type === 'asset' && r.item.id === id).sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
-      const live = liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))
-        .flatMap((e) => { const n = parseWorkflowNote(e.note); return n?.workflow === 'Repair intake' && !n.undo ? [{ ...e, text: n.text ?? '' }] : [] })
-      return live.at(-1)
+      let intake: (HistoryEntry & { from: string; text: string }) | undefined
+      for (const e of liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))) {
+        const n = parseWorkflowNote(e.note)
+        if (!n || n.undo) continue
+        if (n.workflow === 'Incoming repair') intake = undefined
+        else if (n.workflow === 'Repair intake') intake = { ...e, text: n.text ?? '' }
+      }
+      return intake
     }
     const intakes: Awaited<ReturnType<typeof intakeOf>>[] = []
     for (let i = 0; i < assets.length; i += PAGE_BATCH) intakes.push(...await Promise.all(assets.slice(i, i + PAGE_BATCH).map((a) => intakeOf(a.id))))
     const rows = assets.map((raw, i) => {
       const a = toAsset(raw, now), intake = intakes[i]
       const since = started.get(a.id) ?? (intake?.when.slice(0, 10) || null)
-      return { since, cells: [a.assetTag, a.name, a.model, since ?? 'Not recorded', since ? String(-daysFrom(now, since)) : 'Not recorded',
+      return { since, cells: [a.assetTag, a.name, a.model, since ?? 'Not recorded', since ? String(Math.max(0, -daysFrom(now, since))) : 'Not recorded',
         intake?.from ?? '', intake?.operator ?? '', intake?.text ?? '', started.has(a.id) ? 'Open' : 'None'] }
     })
     return {
