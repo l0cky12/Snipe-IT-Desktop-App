@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, markdownOf, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, markdownOf, toWire, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -277,7 +277,7 @@ describe('connection errors', () => {
     const { fetch } = fakeFetch({ '/hardware/bytag/NOMMA-004812': rejected })
     const error = createSnipeIt(config, fetch).lookup('NOMMA-004812')
     await expect(error).rejects.toThrow(/rejected your API key/)
-    await expect(error).rejects.toThrow(/generate a new personal API key/)
+    await expect(error).rejects.toThrow(/may have been deactivated/)
   })
 
   it('a rejected API key fails getAsset too, rather than showing an Asset', async () => {
@@ -314,6 +314,39 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, html).lookup('X')).rejects.toThrow(
       /https:\/\/snipe\.example\.org did not answer like Snipe-IT/,
     )
+  })
+
+  // Each failure as the window receives it, after crossing the bridge: the message and its kind.
+  const failureOf = async (fetch: typeof globalThis.fetch) => {
+    const { message, kind, retryAfter } = fromWire(toWire(await createSnipeIt(config, fetch).statusLabels().catch((e) => e)).message)
+    return { message, kind, retryAfter }
+  }
+  const answering = (status: number, headers?: Record<string, string>) =>
+    (async () => new Response(JSON.stringify({ message: 'Nope.' }), { status, headers })) as typeof globalThis.fetch
+  const unreachable = { message: "Can't reach Snipe-IT at https://snipe.example.org. Check your network connection and server URL in Settings.", kind: 'unreachable' }
+
+  it.each([
+    ['401', answering(401), {
+      message: 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.',
+      kind: 'key',
+    }],
+    ['403', answering(403, {}), { message: 'Snipe-IT returned HTTP 403: Nope.', kind: 'forbidden' }],
+    ['429 with Retry-After', answering(429, { 'Retry-After': '23' }), { message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 }],
+    ['429 with Retry-After: 1', answering(429, { 'Retry-After': '1' }), { message: 'Snipe-IT is limiting requests; try again in 1 second.', kind: 'rateLimited', retryAfter: 1 }],
+    ['429 without Retry-After', answering(429), { message: 'Snipe-IT is limiting requests; try again in 60 seconds.', kind: 'rateLimited', retryAfter: 60 }],
+    ['429 with an unreadable Retry-After', answering(429, { 'Retry-After': 'soon' }), { message: 'Snipe-IT is limiting requests; try again in 60 seconds.', kind: 'rateLimited', retryAfter: 60 }],
+    ['502', answering(502), unreachable],
+    ['503', answering(503), unreachable],
+    ['504', answering(504), unreachable],
+    ['a network error', (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch, unreachable],
+    ['a timeout', (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }) as typeof globalThis.fetch, {
+      message: 'Snipe-IT at https://snipe.example.org took longer than 15 seconds to answer. It may be busy; try again.', kind: 'timeout',
+    }],
+    ['500', answering(500), { message: 'Snipe-IT returned HTTP 500: Nope.', kind: 'refused' }],
+    ['a 200 with status: "error"', fakeFetch({ '/statuslabels': { body: { status: 'error', messages: 'You do not have permission to view Status Labels.' } } }).fetch,
+      { message: 'You do not have permission to view Status Labels.', kind: 'refused' }],
+  ])('%s says so, with its kind', async (_what, fetch, failure) => {
+    expect(await failureOf(fetch)).toEqual(failure)
   })
 
   it("field-by-field messages from Snipe-IT are joined into one readable reason", async () => {

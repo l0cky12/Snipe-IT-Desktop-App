@@ -263,6 +263,28 @@ export type ImportFile = { id: number; name: string; size: string; uploaded: str
 /** Imported, or Snipe-IT's errors for each row that failed, keyed by the row's name, exactly as Snipe-IT sent them. */
 export type ImportResult = { ok: true } | { ok: false; errors: Record<string, unknown> }
 
+/**
+ * What kind of failure a call hit, so the window can tell one every following request would hit too (Snipe-IT
+ * unreachable or too slow, the API key rejected, a refusal, or a request limit) from one about this request alone (refused).
+ */
+export type FailureKind = 'unreachable' | 'timeout' | 'key' | 'forbidden' | 'rateLimited' | 'refused'
+/**
+ * A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait.
+ * A plain object, not an Error: the bridge to the window copies an Error's message only, but an object's every field.
+ */
+export type Failure = { message: string; kind: FailureKind; retryAfter?: number }
+
+// Electron passes only an error's message from the main process, so it writes the kind into it ("[rateLimited 23] …")
+// and the preload reads it back out. An error with no kind is about this request alone.
+export function toWire(e: unknown): Error {
+  const { kind = 'refused', retryAfter } = e as Partial<Failure>
+  return new Error(`[${kind}${retryAfter === undefined ? '' : ` ${retryAfter}`}] ${e instanceof Error ? e.message : String(e)}`)
+}
+export function fromWire(message: string): Failure {
+  const [, kind = 'refused', seconds, text = message] = /^\[(\w+)(?: (\d+))?\] ([\s\S]*)$/.exec(message) ?? []
+  return { message: text, kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) }
+}
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 /** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
@@ -657,11 +679,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
+  // Each thrown Error carries its FailureKind, and an HTTP error its status.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+    const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
+    const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
-      ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
-      : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+      ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
+      : unreachable()
     let res: Response, text: string
     try {
       res = await fetch(api + path, {
@@ -673,8 +698,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } catch (e) {
       throw failed(e)
     }
+    // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
-      throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
+      throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
+    // Over Snipe-IT's requests a minute. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    if (res.status === 429) {
+      const header = res.headers.get('Retry-After')?.trim() ?? ''
+      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
+    }
+    // The proxy in front of Snipe-IT can't reach it.
+    if ([502, 503, 504].includes(res.status)) throw unreachable({ status: res.status })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     // The timeout covers the body too: a slow server can stall after the headers.
     try {
@@ -694,9 +728,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // An Import with rows that failed answers 500 with each row's errors; processImport, the only caller it reaches, reads them.
     if ((body as { status?: unknown } | undefined)?.status === 'import-errors') return body as T
     if (!res.ok) {
-      const failure = body as { messages?: unknown; message?: unknown } | undefined
-      const snipeItReason = reason(failure?.messages ?? failure?.message)
-      throw Object.assign(new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`), { status: res.status })
+      const answer = body as { messages?: unknown; message?: unknown } | undefined
+      const snipeItReason = reason(answer?.messages ?? answer?.message)
+      throw failure(res.status === 403 ? 'forbidden' : 'refused', `Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`, { status: res.status })
     }
     if (body === undefined)
       throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
@@ -781,8 +815,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return true
     } catch (e) {
-      // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
-      if (/HTTP 403\b/.test((e as Error).message)) return false
+      // A refusal is the answer; anything else (offline…) is an error.
+      if ((e as Partial<Failure>).kind === 'forbidden') return false
       throw e
     }
   }
