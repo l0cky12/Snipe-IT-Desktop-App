@@ -97,6 +97,8 @@ export const picking = (view: AssetView): ListState => ({ view, search: '', filt
 export const listQuery = (kind: ListKind, { view, search, filters, sort }: ListState): ListQuery =>
   ({ search, filters, sort: sort?.key, order: sort?.order, ...(kind === 'assets' && { view }) })
 
+const VIEW_COUNT = Object.keys(ASSET_VIEWS).length
+
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 type Row = ListPage<ListKind>['rows'][number]
 
@@ -286,8 +288,9 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // Picking a View or a Saved Report's tab keeps the Selection; the rest starts again as that View or Saved Report.
   const show = (next: ListState) => (setView(next.view), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null))
   const pickView = (v: AssetView) => {
-    // Leaving a Saved Report: the List's usual Columns come back, and Save report… makes a new one.
-    if (saved) setSaved(null), setDrilled(undefined), setShown(readColumns(kind))
+    // Leaving a Saved Report: the List's usual Columns come back, and Save report… makes a new one (its form, named for the
+    // one left, closes).
+    if (saved) setSaved(null), setDrilled(undefined), setShown(readColumns(kind)), setNaming(null)
     show(picking(v))
   }
   const openReport = (r: SavedReport) => {
@@ -397,7 +400,6 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
   // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
   const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== viewSpec?.filter?.[0])
-  const count = page && !loading && <span className="count">{total.toLocaleString()}</span>
   return (
     <>
       {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
@@ -419,26 +421,17 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       <div className="list-top">
         {/* The Assets Views, then the Operator's Saved Reports of Assets, which open in place; only the open tab shows its count. */}
         {kind === 'assets' && (
-          <div className="view-tabs" role="tablist" aria-label="Views">
-            {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => {
-              const on = !saved && v === view
-              return (
-                <button key={v} role="tab" aria-selected={on} className={on ? 'on' : undefined} onClick={() => !on && pickView(v)}>
-                  {ASSET_VIEWS[v].name}
-                  {on && count}
-                </button>
-              )
-            })}
-            {tabReports.length > 0 && <span className="tab-sep" aria-hidden="true" />}
-            {tabReports.map((r) => {
-              const on = saved?.id === r.id
-              return (
-                <button key={r.id} role="tab" aria-selected={on} className={on ? 'on' : undefined} onClick={() => !on && openReport(r)} title={`Saved Report: ${ASSET_VIEWS[r.view ?? 'all'].name}`}>
-                  {r.name}
-                  {on && count}
-                </button>
-              )
-            })}
+          <div className="view-tabs" role="tablist" aria-label="Views and Saved Reports">
+            {[
+              ...(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => ({ key: v, name: ASSET_VIEWS[v].name, on: !saved && v === view, pick: () => pickView(v), title: undefined })),
+              ...tabReports.map((r) => ({ key: r.id, name: r.name, on: saved?.id === r.id, pick: () => openReport(r), title: `Saved Report: ${ASSET_VIEWS[r.view ?? 'all'].name}` })),
+            ].map((t, i) => [
+              i === VIEW_COUNT && <span key="sep" className="tab-sep" aria-hidden="true" />,
+              <button key={t.key} role="tab" aria-selected={t.on} className={t.on ? 'on' : undefined} onClick={() => !t.on && t.pick()} title={t.title}>
+                {t.name}
+                {t.on && page && !loading && <span className="count">{total.toLocaleString()}</span>}
+              </button>,
+            ])}
           </div>
         )}
         {customizing && (

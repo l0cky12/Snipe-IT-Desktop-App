@@ -69,7 +69,7 @@ function reportQuery(r: SavedReportInput): SavedReportQuery & { name: string } {
   const sorts: Record<string, string> | undefined = Object.hasOwn(LIST_SORTS, r.kind) ? LIST_SORTS[r.kind] : undefined
   if (!sorts || typeof r.search !== 'string' || !isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || (r.label !== undefined && typeof r.label !== 'string')
     || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order)))
-    || (r.view !== undefined && (r.kind !== 'assets' || !Object.hasOwn(ASSET_VIEWS, r.view))))
+    || (r.view !== undefined && (r.kind !== 'assets' || typeof r.view !== 'string' || !Object.hasOwn(ASSET_VIEWS, r.view))))
     throw new Error('Invalid report')
   const filters = Object.fromEntries(Object.entries(r.filters).filter(([, v]) => v))
   return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns],

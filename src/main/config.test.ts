@@ -113,6 +113,7 @@ it("keeps an Assets Saved Report's View; re-saving without one drops it, and a V
   expect(store.savedReports()).toEqual([{ ...late, view: 'auditLate' }])
   expect(store.saveReport({ ...report, id: late.id })).not.toHaveProperty('view')
   expect(() => store.saveReport({ ...report, view: 'nope' as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, view: ['auditLate'] as unknown as 'all' })).toThrow('Invalid report')
   expect(() => store.saveReport({ ...report, kind: 'users', sort: null, view: 'overdue' })).toThrow('Invalid report')
 })
 
