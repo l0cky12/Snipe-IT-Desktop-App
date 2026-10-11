@@ -1185,6 +1185,40 @@ describe('report', () => {
     expect((await snipeIt.report('lastAudited', { from: '2026-03-01' })).rows.map((row) => row[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
   })
 
+  // Shaped like Snipe-IT's /maintenances rows (trimmed): v8.6+ names the type maintenance_type and still sends an empty
+  // asset_maintenance_type; earlier versions send only asset_maintenance_type, and completion_date is when it was completed.
+  const maintenance = (id: number, start: string, more: object = {}) => ({
+    id, asset: { id: 4812, name: 'CB-LIB-012', asset_tag: 'NOMMA-004812' }, title: `Repair ${id}`, name: `Repair ${id}`,
+    maintenance_type: 'Repair', asset_maintenance_type: '', supplier: { id: 2, name: 'EduDevices Inc.' }, is_warranty: false, cost: null,
+    start_date: { date: start, formatted: start }, completed_at: null, completed_by: null, asset_maintenance_time: 0, created_by: { id: 5, name: 'E. Caldwell' }, ...more,
+  })
+  const maintenances = [
+    maintenance(1, '2026-08-01', { completed_at: { datetime: '2026-08-15 14:00:00' }, completed_by: { id: 6, name: 'P. Tech' }, asset_maintenance_time: 14, cost: '1,234.50', is_warranty: true }),
+    maintenance(2, '2026-09-20'),
+    // Before v8.6: the old type field, completion_date for when it was done, no completed_at or name.
+    (({ maintenance_type: _, completed_at: __, name: ___, ...old }) => old)(maintenance(3, '2026-09-01', { asset_maintenance_type: 'Upgrade', cost: '89.99', asset_maintenance_time: 3, completion_date: { date: '2026-09-04' } })),
+    maintenance(4, '2026-06-30'),
+    // Opened ahead of its start date: no days yet.
+    maintenance(5, '2026-09-30'),
+  ]
+
+  it('Maintenances lists every Maintenance with its cost, newest first, Days so far while open', async () => {
+    const { fetch, calls } = fakeFetch({ '/maintenances': { body: { total: maintenances.length, rows: maintenances } } })
+    const r = await createSnipeIt(config, fetch, today).report('maintenances')
+    expect(calls).toEqual(['/maintenances'])
+    expect(r).toEqual({
+      columns: ['Started', 'Completed', 'Days', 'Asset Tag', 'Name', 'Title', 'Type', 'Supplier', 'Warranty repair', 'Cost', 'Opened by', 'Completed by'],
+      rows: [
+        ['2026-09-30', 'Open', '0', 'NOMMA-004812', 'CB-LIB-012', 'Repair 5', 'Repair', 'EduDevices Inc.', 'No', '', 'E. Caldwell', ''],
+        ['2026-09-20', 'Open', '4', 'NOMMA-004812', 'CB-LIB-012', 'Repair 2', 'Repair', 'EduDevices Inc.', 'No', '', 'E. Caldwell', ''],
+        ['2026-09-01', '2026-09-04', '3', 'NOMMA-004812', 'CB-LIB-012', 'Repair 3', 'Upgrade', 'EduDevices Inc.', 'No', '89.99', 'E. Caldwell', ''],
+        ['2026-08-01', '2026-08-15', '14', 'NOMMA-004812', 'CB-LIB-012', 'Repair 1', 'Repair', 'EduDevices Inc.', 'Yes', '1234.50', 'E. Caldwell', 'P. Tech'],
+        ['2026-06-30', 'Open', '86', 'NOMMA-004812', 'CB-LIB-012', 'Repair 4', 'Repair', 'EduDevices Inc.', 'No', '', 'E. Caldwell', ''],
+      ],
+      capped: false,
+    })
+  })
+
   // A /hardware row with its Location, Status Label and purchase cost as Snipe-IT formats them ("1,234.56", or null).
   const hardwareRow = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, purchase_cost: null, ...fields })
   const status = (id: number, name: string, status_type: string) => ({ id, name, status_type, status_meta: status_type })
@@ -1241,6 +1275,12 @@ describe('report', () => {
       ],
       capped: false,
     })
+  })
+
+  it('Maintenances keeps those started in the date range', async () => {
+    const { fetch } = fakeFetch({ '/maintenances': { body: { total: maintenances.length, rows: maintenances } } })
+    const r = await createSnipeIt(config, fetch, today).report('maintenances', { from: '2026-08-01', to: '2026-09-01' })
+    expect(r.rows.map((row) => row[5])).toEqual(['Repair 3', 'Repair 1'])
   })
 
   it('End of life lists Assets past it or reaching it within 365 days, past first, in the Location and Category, Archived left out', async () => {

@@ -174,15 +174,15 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, and Damaged. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'damaged'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances and Damaged. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'damaged'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
-  statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', damaged: 'Damaged',
+  statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', maintenances: 'Maintenances', damaged: 'Damaged',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
-export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
+export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'maintenances']
 /** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
 export const takesRange = (report: unknown) =>
   !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
@@ -196,7 +196,7 @@ export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit, End of life). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS.
+ * end, next audit, last audit, End of life, Maintenance start). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS.
  */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -323,13 +323,6 @@ type RawAsset = {
   purchase_cost?: string | number | null
   available_actions?: unknown
 }
-// Snipe-IT v8.6+ names a Maintenance's type in maintenance_type; earlier versions kept it in asset_maintenance_type.
-type RawMaintenance = {
-  asset: { id: number } | null
-  start_date: { date: string } | null
-  maintenance_type?: string | null
-  asset_maintenance_type?: string | null
-}
 type RawActivity = {
   id: number
   item?: { id: number; name: string; type: string } | null
@@ -340,6 +333,25 @@ type RawActivity = {
   admin?: Named
   target: Named
   note: string | null
+}
+type RawMaintenance = {
+  id: number
+  asset: { id: number; name: string | null; asset_tag: string } | null
+  // Snipe-IT v8 renamed `title` to `name` and still sends both.
+  title: string | null
+  // v8.6+ sends the type as maintenance_type (and asset_maintenance_type empty); earlier versions only asset_maintenance_type.
+  maintenance_type?: string | null
+  asset_maintenance_type?: string | null
+  supplier: Named
+  is_warranty: boolean | number | string | null
+  cost: string | null
+  start_date: { date: string } | null
+  // v8.6+ records completed_at; before that completion_date was when it was completed (v8.7 made it the expected date).
+  completed_at?: { datetime: string } | null
+  completion_date?: { date: string } | null
+  asset_maintenance_time: number | null
+  created_by?: Named
+  completed_by?: Named
 }
 
 const EXPIRING_DAYS = 90
@@ -664,8 +676,8 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
-// Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
-// Assumes 1,234.56, not 1.234,56.
+// Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept, a plain
+// number a spreadsheet can sum. ponytail: assumes 1,234.56 formatting, which NOMMA uses; a server set to 1.234,56 would be misread.
 const plainNumber = (v: unknown) => (v === null || v === undefined ? '' : String(v).replace(/[^\d.-]/g, ''))
 
 // A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
@@ -1104,6 +1116,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         return {
           columns: [...assetColumns, 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
           rows: listed.map((a) => [...assetCells(a), a.assignee?.name ?? '', ...auditCells(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
+          capped: false,
+        }
+      }
+      if (kind === 'maintenances') {
+        // Snipe-IT can't filter Maintenances by date, so every one is read and those started in the range kept.
+        const rows = (await allRows<RawMaintenance>('/maintenances')).flatMap((m) => {
+          const started = m.start_date?.date ?? ''
+          if (!inRange(started)) return []
+          // Open or completed as Snipe-IT counts it (completed_at set, on v8.6+, even for one completed before the upgrade).
+          const completed = dayOf('completed_at' in m ? m.completed_at : m.completion_date)
+          // Snipe-IT counts the days once it's completed; while open, it's the days so far (none yet if it starts later).
+          const days = completed ? String(m.asset_maintenance_time ?? '') : started ? String(Math.max(0, -daysFrom(now, started))) : ''
+          return [{ id: m.id, started, cells: [started, completed ?? 'Open', days, m.asset?.asset_tag ?? '', m.asset?.name ?? '', m.title ?? '',
+            m.maintenance_type || m.asset_maintenance_type || '', m.supplier?.name ?? '', Number(m.is_warranty) ? 'Yes' : 'No',
+            m.cost ? plainNumber(m.cost) : '', m.created_by?.name ?? '', m.completed_by?.name ?? ''] }]
+        })
+        return {
+          columns: ['Started', 'Completed', 'Days', 'Asset Tag', 'Name', 'Title', 'Type', 'Supplier', 'Warranty repair', 'Cost', 'Opened by', 'Completed by'],
+          rows: rows.sort((a, b) => b.started.localeCompare(a.started) || b.id - a.id).map((r) => r.cells),
           capped: false,
         }
       }

@@ -92,7 +92,7 @@ for (const a of assets.slice(0, 90).reverse()) {
 // One also had a second Repair intake that was undone.
 const maintenances = []
 const maintain = (asset, start, type = 'Repair', completed = null) => maintenances.push({ id: maintenances.length + 1, asset: { id: asset.id, name: asset.name, asset_tag: asset.asset_tag },
-  name: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
+  name: `${asset.asset_tag} damaged`, title: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
 const at = (offset, hour) => new Date(`${day(offset)}T${String(hour).padStart(2, '0')}:00:00Z`)
 const repairs = ['cracked screen', 'won’t power on', 'keyboard missing keys', 'hinge broken', 'water damage', 'charging port loose']
 assets.filter((a) => a.status_label.name === 'Damaged').forEach((a, k) => {
@@ -170,6 +170,22 @@ for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
 lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date >= day(0) && a.next_audit_date.date <= day(30)) }
 lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
+// More Maintenances, after the Damaged ones above, shaped like Snipe-IT v8.7+ (cost as formatted text, the type under maintenance_type): one every few days
+// over the last four months, mostly Repairs, the newest still open.
+const maintenanceTypes = ['Repair', 'Repair', 'Repair', 'Upgrade', 'Software Support']
+maintenances.push(...Array.from({ length: 24 }, (_, i) => {
+  const a = assets[(i * 41 + 3) % assets.length]
+  const start = -120 + i * 5
+  const time = i % 4 === 1 ? 3 : 6 + (i % 9)
+  const open = start + time > -2
+  const type = pick(maintenanceTypes, i)
+  return {
+    id: maintenances.length + i + 1, asset: { id: a.id, name: a.name, asset_tag: a.asset_tag }, title: `${type === 'Repair' ? pick(['Cracked screen', 'Keyboard replacement', 'Battery swap', 'Hinge repair'], i) : type} for ${a.name}`,
+    maintenance_type: type, asset_maintenance_type: '', supplier: pick(suppliers, i), is_warranty: i % 3 === 0, cost: i % 5 === 4 ? null : (35 + ((i * 173) % 1400) + 0.5 * (i % 2)).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    start_date: { date: day(start), formatted: day(start) }, completed_at: open ? null : { datetime: `${day(start + time)} 15:20:00`, formatted: day(start + time) },
+    completed_by: open ? null : { id: 900, name: 'Demo Operator' }, asset_maintenance_time: open ? 0 : time, created_by: { id: 900, name: 'Demo Operator' },
+  }
+}))
 
 // Creating, editing and deleting records, checked the way Snipe-IT checks them (a few of its rules).
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
