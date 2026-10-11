@@ -38,6 +38,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
   const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
+  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
@@ -47,6 +49,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
     rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
+    last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
+    next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -73,7 +78,8 @@ const lists = {
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
-  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial } },
+  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
+    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '' } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
@@ -118,6 +124,10 @@ Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id
 // A User made in the app may have no Location or department.
 Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
+// Snipe-IT's audit routes: next audit within its Audit warning setting (30 days here), or past; never Archived Assets.
+const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
+lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date >= day(0) && a.next_audit_date.date <= day(30)) }
+lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
 
 // Creating, editing and deleting records, checked the way Snipe-IT checks them (a few of its rules).
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
@@ -189,7 +199,7 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|hardware\/audit\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],

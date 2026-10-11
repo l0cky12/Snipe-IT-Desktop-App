@@ -23,6 +23,10 @@ export type Asset = {
   purchaseDate: string | null
   warrantyEnd: string | null
   expectedCheckin: string | null
+  /** The date of the Asset's last Audit, or null when it has never been Audited */
+  lastAudited: string | null
+  /** The date Snipe-IT expects its next Audit, or null when it has none */
+  nextAudit: string | null
   /** Days past the Expected Checkin, or null when not Overdue */
   overdueDays: number | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
@@ -153,16 +157,28 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, and the Overdue and Warranty expiring lists in full. */
-export const REPORTS = ['activity', 'overdue', 'expiring'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited'] as const
 export type ReportKind = (typeof REPORTS)[number]
-export const REPORT_NAMES: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
+export const REPORT_NAMES: Record<ReportKind, string> = {
+  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited',
+}
+/** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
+export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
+/** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
+export const takesRange = (report: unknown) =>
+  !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
+/** The Reports narrowed to a Location and a Category. */
+export const AUDIT_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited']
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
-/** from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty end). */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string }
+/**
+ * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
+ * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ */
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
@@ -254,6 +270,9 @@ type RawAsset = {
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
   expected_checkin: { date: string } | null
+  // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
+  last_audit_date?: { date?: string; datetime?: string } | null
+  next_audit_date?: { date?: string; datetime?: string } | null
   available_actions?: unknown
 }
 type RawActivity = {
@@ -376,6 +395,9 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
 export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
   ({ id, assetTag, name, status, statusMeta, assignee, can })
 
+// A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
+const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
+
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = raw.expected_checkin?.date ?? null
   const warrantyEnd = raw.warranty_expires?.date ?? null
@@ -398,6 +420,8 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     purchaseDate: raw.purchase_date?.date ?? null,
     warrantyEnd,
     expectedCheckin,
+    lastAudited: dayOf(raw.last_audit_date),
+    nextAudit: dayOf(raw.next_audit_date),
     overdueDays: overdue > 0 ? overdue : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
@@ -867,12 +891,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
-    async report(kind: ReportKind, { from, to, itemType, actionType }: ReportQuery = {}): Promise<Report> {
+    // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited is every Asset.
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
+      for (const [id, what] of [[locationId, 'Location'], [categoryId, 'Category']]) if (id !== undefined && id !== '' && !/^[1-9]\d*$/.test(String(id))) throw new Error(`Invalid ${what} id: ${id}`)
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
@@ -896,6 +922,32 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const now = today()
+      if (AUDIT_REPORTS.includes(kind)) {
+        const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
+        const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
+        // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
+        const assets = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+        // Every audit Report starts with these columns; the to-do ones add the Assignee before the audit dates.
+        const assetColumns = ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location']
+        const assetCells = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
+        const auditCells = (a: Asset) => [a.lastAudited ?? 'Never', a.nextAudit ?? '']
+        if (kind === 'lastAudited')
+          return {
+            columns: [...assetColumns, 'Last audited', 'Next audit'],
+            // A blank From includes Assets never Audited; they're the oldest, so they come first.
+            rows: assets.filter((a) => (a.lastAudited ? inRange(a.lastAudited) : !from)).sort((a, b) => (a.lastAudited ?? '').localeCompare(b.lastAudited ?? ''))
+              .map((a) => [...assetCells(a), ...auditCells(a)]),
+            capped: false,
+          }
+        // Soonest first is most days late first too.
+        const listed = assets.filter((a) => a.nextAudit && inRange(a.nextAudit)).sort((a, b) => a.nextAudit!.localeCompare(b.nextAudit!))
+        const due = kind === 'auditDue'
+        return {
+          columns: [...assetColumns, 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
+          rows: listed.map((a) => [...assetCells(a), a.assignee?.name ?? '', ...auditCells(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
+          capped: false,
+        }
+      }
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {
