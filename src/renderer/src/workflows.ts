@@ -117,7 +117,8 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
   let last: StatusLabel | null = null
   // "Ready to Deploy", found by exact name once per session.
   let ready: number | undefined
-  let session = 0
+  // Bumped by every start, Done and reset, so a start still finding the label never lands after a newer pick or after leaving.
+  let attempt = 0
 
   const runner = createRunner<StatusLabel>(bridge, async (a, location) => {
     if (!a.can.checkin) throw new Error(NOT_ALLOWED)
@@ -138,10 +139,10 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     get last() { return last },
     /** Starts step 2 at this Location; returns why it can't ('' when it did). */
     async start(location: StatusLabel): Promise<string> {
+      const mine = ++attempt
       if (ready === undefined) {
-        const mine = session
         const id = (await bridge.statusLabels()).find((l) => l.name === READY)?.id
-        if (mine !== session) return ''
+        if (mine !== attempt) return ''
         if (id === undefined) return `No Status Label named '${READY}' in Snipe-IT`
         ready = id
       }
@@ -152,12 +153,13 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     },
     /** Change Location, and Done (which also leaves for the Workflows page): back to step 1; the Running list stays. */
     done() {
+      attempt++
       step = { step: 'location' }
       events.changed()
     },
     scan: (raw: string) => (step.step === 'scan' ? runner.scan(raw, step.location) : 'Pick the Location first'),
     reset() {
-      session++
+      attempt++
       step = { step: 'location' }
       last = null
       ready = undefined

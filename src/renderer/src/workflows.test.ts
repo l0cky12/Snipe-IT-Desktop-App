@@ -193,6 +193,29 @@ describe('Bulk return', () => {
     expect(missing.step).toEqual({ step: 'location' })
   })
 
+  it('only the newest Location pick lands, and none after Done, while "Ready to Deploy" is still being found', async () => {
+    const fake = fakeBridge([])
+    let answer = (_: StatusLabel[]) => {}
+    fake.bridge.statusLabels.mockImplementation(() => new Promise((r) => { answer = r }))
+    const flow = createBulkReturn(fake.bridge, { changed: () => {} })
+    const first = flow.start(ITOFFICE)
+    const firstAnswer = answer
+    const second = flow.start(ROOM204)
+    answer(LABELS)
+    await second
+    firstAnswer(LABELS)
+    await first
+    expect(flow.step).toEqual({ step: 'scan', location: ROOM204 })
+
+    flow.done()
+    const again = createBulkReturn(fake.bridge, { changed: () => {} })
+    const pending = again.start(ITOFFICE)
+    again.done()
+    answer(LABELS)
+    await pending
+    expect(again.step).toEqual({ step: 'location' })
+  })
+
   it('Done goes back to picking a Location, keeps the Running list, and remembers the last Location', async () => {
     const { flow } = await started([asset('NOMMA-1')])
     flow.scan('NOMMA-1')
