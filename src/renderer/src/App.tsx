@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -46,7 +46,7 @@ const PANEL_KEY = 'scanPanelOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the left strip; every List (these and the rest) is on the All records page.
+// The Lists in the sidebar; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
@@ -272,7 +272,7 @@ export function App() {
     setMessage({ text: `Deleted ${name}` })
   }
   const page = !showSettings && view?.page
-  // The All records button stands for every page not in the strip.
+  // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
@@ -288,39 +288,38 @@ export function App() {
   return (
     <div className="layout">
       <aside className="rail">
-        <nav className="strip" aria-label="Pages">
-          <span className="logo" aria-hidden="true">S</span>
-          <button title={panelOpen ? 'Close Scan/Search' : 'Scan/Search (Ctrl+K)'} aria-label="Scan/Search panel" aria-expanded={panelOpen} aria-controls={panelOpen ? 'scan-panel' : undefined} className="nav panel-nav"
-            onClick={() => (panelOpen ? setPanelOpen(false) : openPanel())}>
-            <Search size={20} />
+        <nav className="sidebar" aria-label="Pages">
+          <div className="brand"><span className="logo" aria-hidden="true">S</span>Snipe-IT Desktop</div>
+          <button aria-label="Search or scan" aria-controls={panelOpen ? 'scan-panel' : undefined} className="find" onClick={openPanel}>
+            <Search size={14} />Search or scan<kbd>Ctrl K</kbd>
           </button>
-          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
-            <LayoutGrid size={20} />
+          <button aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
+            <LayoutGrid size={18} />Dashboard
           </button>
           {LISTS.map((k) => {
             const Icon = listIcon[k]
-            return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
+            return <button key={k} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={18} />{listName[k]}</button>
           })}
-          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
-            <ListChecks size={20} />
-            {batch.length > 0 && <span className="badge">{batch.length}</span>}
-          </button>
-          <button title="Reports" aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
-            <FileSpreadsheet size={20} />
+          <button aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
+            <FileSpreadsheet size={18} />Reports
           </button>
           {canImport && (
-            <button title="Import" aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
-              <FileUp size={20} />
+            <button aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
+              <FileUp size={18} />Import
             </button>
           )}
-          <button title="All records" aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
-            <Boxes size={20} />
+          <button aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
+            <Boxes size={18} />All records
           </button>
-          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
+          <button aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
+            <ListChecks size={18} />Batch
+            {batch.length > 0 && <span className="badge">{batch.length}</span>}
+          </button>
+          <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
           <form onSubmit={onSubmit}>
-            <ScanBarcode size={16} />
+            <ScanBarcode size={18} />
             <input
               disabled={!settings?.hasToken || showSettings}
               ref={search}
@@ -330,6 +329,7 @@ export function App() {
               placeholder="Scan / search…"
               aria-label="Scan an Asset Tag, or search everything"
             />
+            <button type="button" className="panel-close" aria-label="Close Scan/Search" onClick={() => setPanelOpen(false)}><X size={16} /></button>
           </form>
           {railMessage}
           <div className="list">
@@ -369,7 +369,7 @@ export function App() {
   )
 }
 
-// Every List, the ones in the strip and the rest.
+// Every List, the ones in the sidebar and the rest.
 function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
   return (
     <>
