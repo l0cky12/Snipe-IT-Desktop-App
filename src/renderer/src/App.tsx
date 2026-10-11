@@ -40,6 +40,17 @@ export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllo
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
 export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
   !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
+/** Where a key was pressed: in a field (it takes typing), on a control (a button, link or checkbox has its own Enter and Space), or neither. */
+export type KeyPlace = 'field' | 'control' | 'none'
+export const keyPlace = (target: EventTarget | null): KeyPlace =>
+  !(target instanceof Element) ? 'none'
+  : target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]') ? 'field'
+  : target.closest('button, a, summary, label, input') ? 'control' : 'none'
+
+/** Where an opened Asset shows. On the Assets List it docks in the Asset panel and the List stays as it is (the same view, so the
+ * List isn't opened again and keeps its View, filters, page and Selection); anywhere else the full Asset sheet replaces the page. */
+export const opensAt = <V extends { page: string }>(view: V | null, showSettings: boolean): { docked: true; view: V } | { docked: false; view: null } =>
+  !showSettings && view?.page === 'assets' ? { docked: true, view } : { docked: false, view: null }
 
 // Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
 const PANEL_KEY = 'scanPanelOpen'
@@ -60,6 +71,7 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 // n is bumped on every visit so a List or record starts fresh.
 type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
+type Panel = { asset: AssetWithHistory; form?: SheetForm; n: number }
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -92,6 +104,10 @@ export function App() {
   const [canImport, setCanImport] = useState(false)
   // Bumped on every open so the sheet (and its Checkin form inputs) starts fresh.
   const [opened, setOpened] = useState(0)
+  // The Asset docked in the Asset panel on the Assets List, the form a Quick Action opened in it, and n, bumped on every open so it starts fresh.
+  const [panel, setPanel] = useState<Panel | null>(null)
+  // Set when an open docks in the Asset panel, which then takes focus instead of the Scan box.
+  const docking = useRef(false)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
@@ -113,8 +129,7 @@ export function App() {
   useEffect(() => search.current?.focus(), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const inField = e.target instanceof Element && !!e.target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]')
-      if (!opensPanel(e, inField)) return
+      if (!opensPanel(e, keyPlace(e.target) === 'field')) return
       // Ctrl+K is the app's; a scanned character goes on to the box once it has focus.
       if (e.ctrlKey) e.preventDefault()
       openPanel()
@@ -139,7 +154,7 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
+    cancel(); setSettings(value); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -154,22 +169,29 @@ export function App() {
       if (!isStale()) setMessage({ text: (err as Error).message, error: true })
     } finally {
       setBusy((b) => (b === mine ? 0 : b))
-      search.current?.focus()
+      if (docking.current) docking.current = false
+      else search.current?.focus()
     }
   }
 
-  async function open(id: number, isStale: () => boolean) {
+  // form: the form a Quick Action opens in the Asset panel.
+  async function open(id: number, isStale: () => boolean, form?: SheetForm) {
     const full = await window.snipeIt.getAsset(id)
     if (isStale()) return
-    setShowSettings(false)
-    setAsset(full)
-    setView(null)
-    setOpened((n) => n + 1)
+    if (opensAt(view, showSettings).docked) {
+      docking.current = true
+      setPanel((p) => ({ asset: full, form, n: (p?.n ?? 0) + 1 }))
+    } else {
+      setShowSettings(false)
+      setAsset(full)
+      setView(null)
+      setOpened((n) => n + 1)
+    }
     setMessage({ text: '' })
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
   }
 
-  const pick = (id: number) => run((isStale) => open(id, isStale))
+  const pick = (id: number, form?: SheetForm) => run((isStale) => open(id, isStale, form))
   // While the batch is open, a scanned or picked Asset joins it instead of opening.
   const batching = !showSettings && view?.page === 'batch'
   function addToBatch(...assets: AssetSummary[]) {
@@ -230,6 +252,7 @@ export function App() {
     })
   const checkin = (id: number, options: CheckinOptions) => act(id, 'Checked in', window.snipeIt.checkin(id, options))
   const checkout = (id: number, options: CheckoutOptions) => act(id, 'Checked out', window.snipeIt.checkout(id, options))
+  const changeStatus = (id: number, statusId: number) => act(id, 'Changed the status', window.snipeIt.updateStatus(id, statusId))
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -253,10 +276,10 @@ export function App() {
     })
   }
 
-  const selected = view ? undefined : asset?.id
+  const selected = view ? (opensAt(view, showSettings).docked ? panel?.asset.id : undefined) : asset?.id
   // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the panel, so it opens.
   const showSegment = (s: AssetSegment) => (setPanelOpen(true), setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
-  const go = (page: ListKind, drill?: Drill, report?: SavedReport) => (setShowSettings(false), setView({ page, drill, report, n: cancel() }))
+  const go = (page: ListKind, drill?: Drill, report?: SavedReport) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
@@ -271,6 +294,13 @@ export function App() {
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
+  // What the Asset sheet needs for one Asset; the full sheet and the Asset panel get the same, so the two act alike.
+  const sheetProps = (a: AssetWithHistory, onDeleted: () => void): SheetProps => ({
+    asset: a, baseUrl: settings?.baseUrl ?? '', defaultLocation: settings?.defaultLocation ?? null, locations, statusLabels,
+    onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
+  })
+  // An Asset deleted from the panel leaves it; the List stays.
+  const panelDeleted = (a: Asset) => (forget(a.id), setPanel(null), setMessage({ text: `Deleted ${a.assetTag}` }))
   const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
@@ -361,10 +391,10 @@ export function App() {
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => setPanel(null)}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
-        : asset ? <AssetSheet baseUrl={settings?.baseUrl ?? ''} defaultLocation={settings?.defaultLocation ?? null} locations={locations} key={opened} asset={asset} statusLabels={statusLabels} onCheckin={checkin} onCheckout={checkout} onOpenRecord={openRecord} onOpenAsset={pick}
-            onEdit={() => editRecord('assets', asset.id)} onDeleted={() => deleted('assets', asset.id, asset.assetTag)} /> : <p className="empty">Scan an Asset Tag</p>}</main>
+        : asset ? <AssetSheet key={opened} {...sheetProps(asset, () => deleted('assets', asset.id, asset.assetTag))} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
   )
 }
@@ -425,6 +455,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   return (
     <form className="actions" onSubmit={onSubmit}>
       <select
+        autoFocus
         value={statusId ?? ''}
         onChange={(e) => setStatusId(Number(e.target.value))}
         disabled={off}
@@ -523,61 +554,113 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted }: {
+export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void> }) {
+  const [statusId, setStatusId] = useState(a.statusId)
+  const [busy, setBusy] = useState(false)
+  const labels = statusChoices(statusLabels, a)
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (statusId === null) return
+    setBusy(true)
+    await onSave(statusId)
+    setBusy(false)
+  }
+  return (
+    <form className="actions" onSubmit={onSubmit}>
+      <select autoFocus value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
+        {statusId === null && <option value="" disabled>Choose a status</option>}
+        {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      <button disabled={busy || statusId === null || statusId === a.statusId}>{busy ? 'Saving…' : 'Save status'}</button>
+    </form>
+  )
+}
+
+/** The forms the Asset sheet opens under its header; a Quick Action opens one in the Asset panel. */
+export type SheetForm = 'checkin' | 'checkout' | 'status'
+/** What the Asset sheet needs; App builds it, so the full sheet and the Asset panel act the same way. */
+export type SheetProps = {
+  asset: AssetWithHistory
   baseUrl: string
-  onEdit: () => void
-  onDeleted: () => void
-  onOpenRecord: (kind: RecordKind, id: number) => void
-  onOpenAsset: (id: number) => void
   defaultLocation: StatusLabel | null
   locations: StatusLabel[]
-  asset: AssetWithHistory
   statusLabels: StatusLabel[]
   onCheckin: (id: number, o: CheckinOptions) => Promise<void>
   onCheckout: (id: number, o: CheckoutOptions) => Promise<void>
-}) {
-  const [checkingOut, setCheckingOut] = useState(false)
+  onStatus: (id: number, statusId: number) => Promise<void>
+  onOpenRecord: (kind: RecordKind, id: number) => void
+  onOpenAsset: (id: number) => void
+  onEdit: () => void
+  onDeleted: () => void
+}
+/** The Asset panel's extras: Tick (the Asset in the List's Selection or not), Close, and whether the Asset is outside the open View. */
+export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void; notInView: boolean }
+
+// One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
+// form: the form it opens with (a Quick Action's).
+export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: opening, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
+  const [form, setForm] = useState<SheetForm | null>(opening ?? null)
+  const root = useRef<HTMLDivElement>(null)
+  // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
+  useEffect(() => { if (docked && !opening) root.current?.focus() }, [])
+  const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
+  // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape' || !form) return
+    e.preventDefault()
+    setForm(null)
+    root.current?.focus()
+  }
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
     ['Expected checkin', a.expectedCheckin ?? ''],
     ['Location', a.location],
-    ['Category', a.category],
+    ['Last audited', a.lastAudited ?? 'Never'],
+    ['Next audit', a.nextAudit ?? ''],
     ['Serial', a.serial, true],
+    ['Category', a.category],
     ['Purchased', a.purchaseDate ?? ''],
     ['Warranty ends', a.warrantyEnd ?? ''],
   ]
+  const canCheckout = a.checkoutAllowed && a.can.checkout
   return (
-    <>
+    <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
       <header className="head">
         <span className="tag">{a.assetTag}</span>
         <h1>
           {a.name || 'Unnamed Asset'}
           <span className="sub">{a.model}</span>
         </h1>
-        <StatusChip asset={a} />
-        {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
-        {a.warranty &&
-          (a.warranty.expired ? (
-            <span className="flag c-grey">Warranty expired</span>
-          ) : (
-            <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
-          ))}
-        <div className="actions">
-          <button
-            disabled={!a.checkoutAllowed || !a.can.checkout}
-            onClick={() => setCheckingOut((o) => !o)}
-            title={checkoutReason(a)}
-          >
-            {checkingOut ? 'Cancel' : 'Checkout…'}
-          </button>
-          <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
-          <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
-          <PrintLabel baseUrl={baseUrl} assets={[a]} />
+        {docked && <button className="panel-close" aria-label="Close the Asset panel" title="Close (Esc)" onClick={docked.onClose}><X size={16} /></button>}
+        <div className="sheet-status-line">
+          <StatusChip asset={a} />
+          {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
+          {a.warranty &&
+            (a.warranty.expired ? (
+              <span className="flag c-grey">Warranty expired</span>
+            ) : (
+              <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
+            ))}
         </div>
-        <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
+        <div className="actions">
+          <button className={checkinReason(a) ? 'quiet' : undefined} disabled={!!checkinReason(a)} title={checkinReason(a)} aria-expanded={form === 'checkin'} onClick={() => toggle('checkin')}>Checkin</button>
+          <button className={canCheckout ? undefined : 'quiet'} disabled={!canCheckout} title={checkoutReason(a)} aria-expanded={form === 'checkout'} onClick={() => toggle('checkout')}>Checkout…</button>
+          <button className={`quiet${form === 'status' ? ' on' : ''}`} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED} aria-expanded={form === 'status'} onClick={() => toggle('status')}>Status</button>
+          <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
+          <PrintLabel baseUrl={baseUrl} assets={[a]} />
+          <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
+          {docked && <button className={`quiet${docked.ticked ? ' on' : ''}`} aria-pressed={docked.ticked} title="Add to the Selection or take it out (Space)" onClick={docked.onTick}>{docked.ticked ? 'Ticked' : 'Tick'}</button>}
+        </div>
       </header>
-      {checkingOut && a.checkoutAllowed && a.can.checkout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
+      {docked?.notInView && <p className="notice">Not in this View</p>}
+      {form && (
+        <div className="sheet-form">
+          {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />}
+          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
+          {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} />}
+        </div>
+      )}
       <div className="grid">
         {facts.map(([k, v, mono]) => (
           <div className="cell" key={k}>
@@ -621,7 +704,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
       ) : (
         a.history.length === 0 && <p className="empty">No History</p>
       )}
-    </>
+    </div>
   )
 }
 

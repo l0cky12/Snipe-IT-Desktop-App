@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -201,5 +201,55 @@ describe('Assets Views', () => {
     const all = await allMatching(async (offset) => (asked.push({ ...query, offset }), { total: 3, rows: lateRows.slice(offset, offset + 2) }))
     expect(asked).toEqual([0, 2].map((offset) => ({ view: 'auditLate', search: '', filters: {}, sort: 'id', order: 'asc', offset })))
     expect([...new Map([...s, ...all!]).keys()]).toEqual([1, 2, 9, 12])
+  })
+})
+
+describe('keys on the Assets List', () => {
+  const key = (name: string, mods: Partial<Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {}) =>
+    ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
+
+  it('↑/↓ move between rows from anywhere but a field, even with a button focused', () => {
+    expect(listKey(key('ArrowDown'), 'none', false)).toBe('down')
+    expect(listKey(key('ArrowUp'), 'control', false)).toBe('up')
+    expect(listKey(key('ArrowDown'), 'field', false)).toBeNull()
+  })
+
+  it('Enter opens the focused row, but leaves a focused button or field to do its own job', () => {
+    expect(listKey(key('Enter'), 'none', false)).toBe('open')
+    expect(listKey(key('Enter'), 'control', false)).toBeNull()
+    expect(listKey(key('Enter'), 'field', true)).toBeNull()
+  })
+
+  it('Space ticks only when focus is not in a field or on a button', () => {
+    expect(listKey(key(' '), 'none', true)).toBe('tick')
+    expect(listKey(key(' '), 'control', true)).toBeNull()
+    expect(listKey(key(' '), 'field', false)).toBeNull()
+  })
+
+  it('Esc closes (or cancels the form in the panel), but a field outside the panel keeps it', () => {
+    expect(listKey(key('Escape'), 'none', false)).toBe('close')
+    expect(listKey(key('Escape'), 'control', false)).toBe('close')
+    expect(listKey(key('Escape'), 'field', true)).toBe('close')
+    expect(listKey(key('Escape'), 'field', false)).toBeNull()
+  })
+
+  it('with a modifier held, or any other key, nothing happens', () => {
+    expect(listKey(key('ArrowDown', { shiftKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key(' ', { ctrlKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key('a'), 'none', false)).toBeNull()
+  })
+
+  it('the focused row moves one at a time and stops at either end of the page', () => {
+    const ids = [4, 8, 15]
+    expect(moveCursor(ids, 8, 1)).toBe(15)
+    expect(moveCursor(ids, 8, -1)).toBe(4)
+    expect(moveCursor(ids, 15, 1)).toBe(15)
+    expect(moveCursor(ids, 4, -1)).toBe(4)
+  })
+
+  it('with no focused row (or one no longer on the page), ↓ starts at the top and ↑ at the bottom', () => {
+    expect(moveCursor([4, 8, 15], null, 1)).toBe(4)
+    expect(moveCursor([4, 8, 15], 99, -1)).toBe(15)
+    expect(moveCursor([], null, 1)).toBeNull()
   })
 })

@@ -113,7 +113,7 @@ An Asset's status in Snipe-IT (e.g. "Ready to Deploy", "Broken"), each of a type
 _Avoid_: state, status (alone, when the label is meant)
 
 **Quick Action**:
-A Checkout, Checkin, status change, or add-to-Batch done from an Asset's row in a List, without opening the Asset.
+A Checkout, Checkin, status change, or add-to-Batch started from an Asset's row in the Assets List. Its form opens in the Asset panel, without leaving the List.
 
 **Batch**:
 Assets gathered on the Batch page for one Checkout or Checkin of all of them. It lives only for the session; each Asset still goes through the single Checkout or Checkin, so History credits the Operator as usual.

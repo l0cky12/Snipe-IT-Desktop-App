@@ -123,7 +123,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .actions :disabled { opacity: .45; cursor: default; }
 .actions button.quiet, .quick button { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 500; }
 .actions button.quiet.on, .quick button.on { border-color: var(--primary); color: var(--primary); }
-.checkout { padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); }
+.checkout, .sheet-form { padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); }
+.sheet-form .checkout { padding: 0; border: 0; background: none; }
+/* The sheet's Status Label and flags, kept together. */
+.sheet-status-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .checkout .actions input:not([type]) { flex: 1; min-width: 160px; }
 .checkout .message.error { margin: 10px 0 0; }
 .targets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -271,9 +274,12 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .selection-bar { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .selection-bar > b { font-weight: 600; }
 .list-table td, .list-table th { white-space: nowrap; }
-/* Row states: hover, ticked, and selected (its Quick Action open) with the --mark bar. */
-.list-table tbody tr:not(.quick-form):hover td { background: var(--hover); }
+/* Row states: hover, ticked, focused by ↑/↓ (a --dim bar), and selected (open in the Asset panel) with the --mark bar. */
+.list-table tbody tr:hover td { background: var(--hover); }
 .list-table tr.ticked td { background: var(--selrow); }
+.list-table tr.cursor { scroll-margin: 48px 0 8px; }
+.list-table tr.cursor td { background: var(--hover); }
+.list-table tr.cursor td:first-child { box-shadow: inset 3px 0 0 var(--dim); }
 .list-table tr.sel td { background: var(--hover); }
 .list-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
 .list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }
@@ -293,8 +299,25 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick button { height: 24px; font: 500 12.5px var(--sans); padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
-.list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
-.quick-form .checkout { padding: 0; border: 0; background: none; }
+/* The Assets List with the Asset panel docked on its right: each scrolls on its own, so the List keeps its place. */
+.sheet:has(> .docked) { display: flex; flex-direction: column; overflow: hidden; }
+.docked { flex: 1; min-height: 0; display: flex; }
+.docked-list { flex: 1; min-width: 0; overflow: auto; }
+.asset-panel { flex: none; width: clamp(340px, 38%, 480px); overflow: auto; border-left: 1px solid var(--line); background: var(--bg); box-shadow: var(--shadow); }
+/* The panel takes focus so its keys work; it isn't a control, so it shows no ring (its buttons do). */
+.asset-panel:focus-visible { outline: none !important; }
+.asset-panel .head { min-height: 44px; padding: 8px 16px; gap: 8px; }
+.asset-panel .head h1 { font-size: 16px; min-width: 0; }
+.asset-panel .head h1 .sub { font-size: 12.5px; margin-top: 0; }
+.asset-panel .tag { padding: 6px 8px; font-size: 12px; }
+.asset-panel .head > .sheet-status-line, .asset-panel .head > .actions { flex-basis: 100%; }
+.asset-panel .actions { gap: 6px; }
+.asset-panel .sheet-form { padding: 12px 16px; }
+.asset-panel .notice { margin: 10px 16px 0; }
+.asset-panel .grid { grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 16px; }
+.asset-panel .cell { padding: 8px 10px; border-radius: 8px; }
+.asset-panel .codes { padding: 0 16px 8px; }
+.asset-panel .section { padding: 14px 16px 6px; font-size: 14px; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
 .pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
 .batch td { white-space: nowrap; }
