@@ -815,6 +815,44 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(await snipeIt.dashboard(['users'])).toEqual({ users: { used: 2, available: 3 } })
     expect(offsets('users')).toEqual([0, 2, 4])
   })
+
+  it('missing fields: a blank Serial counts, a missing Asset Model counts checked out or not, a Location only when not checked out', async () => {
+    const { snipeIt } = fleet({
+      hardware: [
+        asset(1), asset(2, { serial: null }), asset(3, { serial: '  ', assigned_to: null, status_label: ready }), asset(4, { model: null }),
+        // Checked out with no Location: found through whoever has it, so not counted.
+        asset(5, { location: null }),
+        asset(6, { location: null, assigned_to: null, status_label: ready }), asset(7, { location: null, assigned_to: null, status_label: repair, serial: '' }),
+      ],
+    })
+    expect(await snipeIt.dashboard(['missing'])).toEqual({ missing: { serial: 3, model: 1, location: 2 } })
+  })
+
+  it('Licenses running out: below the Minimum quantity, or no Free seats when none is set; a minimum of 0 silences one', async () => {
+    const { snipeIt } = fleet({
+      licenses: [
+        { id: 1, name: 'Below minimum', seats: 40, free_seats_count: 4, min_amt: 5 },
+        { id: 2, name: 'At minimum', seats: 40, free_seats_count: 5, min_amt: 5 },
+        { id: 3, name: 'None left, no minimum', seats: 30, free_seats_count: 0, min_amt: null },
+        { id: 4, name: 'Some left, no minimum', seats: 30, free_seats_count: 1, min_amt: null },
+        { id: 5, name: 'None left, silenced', seats: 10, free_seats_count: 0, min_amt: 0 },
+        // An older Snipe-IT may not send min_amt at all: no minimum.
+        { id: 6, name: 'None left, no field', seats: 10, free_seats_count: 0 },
+      ],
+    })
+    expect(await snipeIt.dashboard(['runningOut'])).toEqual({ runningOut: 3 })
+    const old = fleet({ licenses: [{ id: 1, name: 'Old', seats: 3 }] })
+    expect(await old.snipeIt.dashboard(['runningOut'])).toEqual({ runningOut: { error: expect.stringMatching(/free_seats_count/) } })
+  })
+
+  it('the Health warnings reuse the lists the dashboard fetches, once each, and fetch them even when the bars are hidden', async () => {
+    const { snipeIt, offsets, listsAsked } = fleet({ hardware: [asset(1)], statuslabels: labels, licenses })
+    expect(await snipeIt.dashboard(['missing', 'runningOut'])).toEqual({ missing: { serial: 0, model: 0, location: 0 }, runningOut: 0 })
+    expect(listsAsked()).toEqual(['hardware', 'licenses'])
+    await snipeIt.dashboard(['assets', 'overdue', 'missing', 'licenses', 'runningOut'])
+    expect(offsets('hardware')).toEqual([0, 0])
+    expect(offsets('licenses')).toEqual([0, 0])
+  })
 })
 
 it('tests authentication before reporting connection success and detects the version', async () => {
@@ -829,11 +867,37 @@ it('tests authentication before reporting connection success and detects the ver
 describe('Health warnings', () => {
   const audits = { '/hardware/audit/overdue': { body: { total: 12, rows: [] } }, '/hardware/audit/due': { body: { total: 3, rows: [] } } }
 
+  const noneDeactivated = { '/users': { body: { total: 0, rows: [] } } }
+
   it('probes /version for the version, and reads both audit totals with limit=1', async () => {
-    const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits })
-    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3 })
-    expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/version'])
-    expect(queries.filter((q) => Object.keys(q).length)).toEqual([{ limit: '1' }, { limit: '1' }])
+    const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits, ...noneDeactivated })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, deactivated: { assets: 0, users: 0 } })
+    expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/users', '/version'])
+    expect(queries.filter((q) => q.limit === '1')).toHaveLength(2)
+  })
+
+  // Shaped like Snipe-IT's /users rows (trimmed).
+  const deactivatedUser = (id: number, assets_count: number) => ({ id, name: `Test User ${id}`, activated: false, assets_count })
+
+  it('deactivated Users holding Assets: most Assets first, counted until a User holds none', async () => {
+    const { fetch, queries } = fakeFetch({ ...audits, '/users': { body: { total: 40, rows: [deactivatedUser(4, 3), deactivatedUser(9, 1), deactivatedUser(2, 1), deactivatedUser(7, 0), deactivatedUser(8, 0)] } } })
+    expect((await createSnipeIt(config, fetch).health()).deactivated).toEqual({ assets: 5, users: 3 })
+    expect(queries.find((q) => q.activated)).toEqual({ activated: '0', sort: 'assets_count', order: 'desc', limit: '500', offset: '0' })
+  })
+
+  it('deactivated Users: the next page only while every User so far holds Assets; a refusal is that line alone', async () => {
+    const holding = Array.from({ length: 500 }, (_, i) => deactivatedUser(i + 1, 1))
+    const pages: Record<string, unknown>[] = []
+    const paged = (async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/users')) pages.push(Object.fromEntries(url.searchParams))
+      const rows = url.searchParams.get('offset') === '0' ? holding : [deactivatedUser(501, 2), deactivatedUser(502, 0)]
+      return new Response(JSON.stringify(url.pathname.endsWith('/users') ? { total: 900, rows } : { total: 0, rows: [] }))
+    }) as typeof globalThis.fetch
+    expect((await createSnipeIt(config, paged).health()).deactivated).toEqual({ assets: 502, users: 501 })
+    expect(pages.map((p) => p.offset)).toEqual(['0', '500'])
+    const denied = fakeFetch({ ...audits, '/users': { status: 403, body: { status: 'error', messages: 'You cannot view Users.' } } })
+    expect(await createSnipeIt(config, denied.fetch).health()).toMatchObject({ auditLate: 12, deactivated: { error: 'Snipe-IT returned HTTP 403: You cannot view Users.' } })
   })
 
   it('classifies the probe: unreachable (network, timeout, 503), the key rejected (401) or refused key-wide (403)', async () => {
@@ -850,29 +914,44 @@ describe('Health warnings', () => {
   })
 
   it('a check that fails says why on its own, leaving the others', async () => {
-    const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'] })
+    const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'], ...noneDeactivated })
     expect(await createSnipeIt(config, fetch).health()).toEqual({
-      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3,
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, deactivated: { assets: 0, users: 0 },
     })
   })
 
+  const none = { deactivated: { assets: 0, users: 0 } }
   it('lines: hidden at 0, too old below v8.7, and a failed check on its own line only', () => {
-    expect(healthLines({ probe: { version: 'v8.7.0' }, auditLate: 0, auditDue: 0 })).toEqual([])
-    expect(healthLines({ probe: { version: 'v9.0.1' }, auditLate: 12, auditDue: 0 })).toEqual([{ warning: 'auditLate', count: 12 }])
-    expect(healthLines({ probe: { version: 'v8.6.3' }, auditLate: { error: 'No audits for you.' }, auditDue: 3 })).toEqual([
+    expect(healthLines({ probe: { version: 'v8.7.0' }, auditLate: 0, auditDue: 0, ...none })).toEqual([])
+    expect(healthLines({ probe: { version: 'v9.0.1' }, auditLate: 12, auditDue: 0, ...none })).toEqual([{ warning: 'auditLate', count: 12 }])
+    expect(healthLines({ probe: { version: 'v8.6.3' }, auditLate: { error: 'No audits for you.' }, auditDue: 3, ...none })).toEqual([
       { warning: 'tooOld', version: 'v8.6.3' }, { warning: 'auditLate', error: 'No audits for you.' }, { warning: 'auditDue', count: 3 },
     ])
-    expect(healthLines({ probe: { version: 'nightly' }, auditLate: 0, auditDue: 1 })).toEqual([
+    expect(healthLines({ probe: { version: 'nightly' }, auditLate: 0, auditDue: 1, ...none })).toEqual([
       { warning: 'tooOld', error: "Snipe-IT's version, nightly, isn't one this app can read." }, { warning: 'auditDue', count: 1 },
     ])
-    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0, ...none })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+  })
+
+  it("lines: one per missing field, deactivated Users, Licenses running out, in #67's order; a list still loading adds none", () => {
+    const ok = { probe: { version: 'v8.8.0' }, auditLate: 2, auditDue: 1 }
+    expect(healthLines({ ...ok, deactivated: { assets: 5, users: 3 }, missing: { serial: 4, model: 0, location: 2 }, runningOut: 1 })).toEqual([
+      { warning: 'auditLate', count: 2 }, { warning: 'auditDue', count: 1 },
+      { warning: 'missing', field: 'serial', count: 4 }, { warning: 'missing', field: 'location', count: 2 },
+      { warning: 'deactivated', assets: 5, users: 3 }, { warning: 'runningOut', count: 1 },
+    ])
+    expect(healthLines({ ...ok, auditLate: 0, auditDue: 0, deactivated: { error: 'No Users.' }, missing: { error: 'No Assets.' }, runningOut: { error: 'No Licenses.' } })).toEqual([
+      { warning: 'missing', error: 'No Assets.' }, { warning: 'deactivated', error: 'No Users.' }, { warning: 'runningOut', error: 'No Licenses.' },
+    ])
+    expect(healthLines({ ...ok, auditLate: 0, auditDue: 0, ...none, missing: { serial: 0, model: 0, location: 0 }, runningOut: 0 })).toEqual([])
+    expect(healthLines({ ...ok, auditLate: 0, auditDue: 0, ...none })).toEqual([])
   })
 
   it('lines: Snipe-IT unreachable or the key failing shows only that line', () => {
     const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
-    expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
+    expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4, deactivated: { error: "Can't reach Snipe-IT." }, missing: { error: "Can't reach Snipe-IT." } })).toEqual([down])
     const key = { warning: 'key', message: 'Snipe-IT rejected your API key.' } as const
-    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 })).toEqual([key])
+    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4, deactivated: { assets: 1, users: 1 }, runningOut: 2 })).toEqual([key])
   })
 })
 
@@ -919,8 +998,36 @@ describe('list', () => {
     expect(queries[0]).toEqual({ limit: '50', offset: '0', status: 'RTD', location_id: '12', assigned_to: '311', assigned_type: 'App\\Models\\User' })
   })
 
+  it("missing a Serial, Asset Model or Location asks with Snipe-IT's is:null filter; a Location only for Assets not checked out", async () => {
+    const { fetch, queries } = fakeFetch({ '/hardware': { body: { total: 0, rows: [] } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    for (const missing of ['serial', 'model', 'location']) await snipeIt.list('assets', { filters: { missing, status_id: '3' } })
+    expect(queries.map((q) => [q.filter && JSON.parse(q.filter), q.status_id])).toEqual([
+      [{ serial: 'is:null' }, '3'], [{ model: 'is:null' }, '3'], [{ location: 'is:null', assigned_to: 'is:null' }, '3'],
+    ])
+  })
+
+  it('Snipe-IT ignores the search beside its is:null filter, so the List refuses both rather than show the wrong Assets', async () => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).list('assets', { search: 'cb', filters: { missing: 'serial' } })).rejects.toThrow('Clear the search')
+    expect(calls).toEqual([])
+  })
+
+  it('Users filter by activated; Licenses sort by Free seats', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } }, '/licenses': { body: { total: 0, rows: [] } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.list('users', { filters: { activated: '0' }, sort: 'assets', order: 'desc' })
+    await snipeIt.list('licenses', { sort: 'free', order: 'asc' })
+    expect(queries).toEqual([
+      { limit: '50', offset: '0', activated: '0', sort: 'assets_count', order: 'desc' },
+      { limit: '50', offset: '0', sort: 'free_seats_count', order: 'asc' },
+    ])
+    await expect(snipeIt.list('users', { filters: { activated: 'no' } })).rejects.toThrow('Invalid filter')
+  })
+
   it.each([
     ['a filter the List does not have', { department_id: '2' }],
+    ['a missing field the List does not know', { missing: 'notes' }],
     ['an id that is not a positive whole number', { location_id: '12&admin=1' }],
     ['a value outside the known ones', { status: 'Deleted' }],
     ['a value that is not text', { location_id: 12 as unknown as string }],
@@ -1334,6 +1441,16 @@ describe('create, edit and delete', () => {
     expect((await snipeIt.form('accessories', 5)).values).toMatchObject({ min_amt: '10', category_id: '2', qty: '60' })
     await snipeIt.save('accessories', 5, { min_amt: '12' })
     expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { min_amt: '12' } })
+  })
+
+  it("a License's Minimum quantity: a blank one is sent as none, never 0, so none set and 0 stay different", async () => {
+    const { fetch, requests } = fakeFetch({ '/licenses/3': { body: { id: 3, name: 'Typing Tutor', seats: 30, min_amt: 5 } }, 'PATCH /licenses/3': { body: { status: 'success' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.form('licenses', 3)).values).toMatchObject({ min_amt: '5', seats: '30' })
+    await snipeIt.save('licenses', 3, { min_amt: '' })
+    expect(requests.at(-1)?.body).toEqual({ min_amt: null })
+    await snipeIt.save('licenses', 3, { min_amt: '0' })
+    expect(requests.at(-1)?.body).toEqual({ min_amt: '0' })
   })
 
   it('a new User asks for a password; editing one does not', async () => {

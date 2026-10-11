@@ -149,6 +149,13 @@ export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumabl
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
 export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'overdue', 'expiring']
+/** Health warnings worked out from lists the dashboard fetches anyway (the Asset list, the Licenses list): asked for beside
+ * the pieces so each list is fetched once, and even when its pieces are hidden. Not in Customize. */
+export const HEALTH_PIECES = ['missing', 'runningOut'] as const
+export type HealthPiece = (typeof HEALTH_PIECES)[number]
+/** The fields a listed Asset can be missing, as the Assets List's missing filter names them. */
+export const MISSING_FIELDS = ['serial', 'model', 'location'] as const
+export type MissingField = (typeof MISSING_FIELDS)[number]
 
 /** One Asset status segment of the Inventory Chart. color is Snipe-IT's status label color, or null when it has none. */
 export type AssetSegment = { status: string; statusMeta: string; color: string | null; count: number; assets: AssetSummary[] }
@@ -162,11 +169,13 @@ export type Split = { used: number; available: number }
  * Asset segments most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
  */
 export type Dashboard = {
-  [K in DashboardPiece]?: Failed | {
+  [K in DashboardPiece | HealthPiece]?: Failed | {
     assets: AssetSegment[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: (AssetSummary & { overdueDays: number })[]
     expiring: (AssetSummary & { daysLeft: number })[]
+    missing: Record<MissingField, number>
+    runningOut: number
   }[K]
 }
 
@@ -174,32 +183,57 @@ export type Dashboard = {
  * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
  * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
+ * deactivated: the Assets checked out to deactivated Users, and how many Users hold them.
  */
 export type Health = {
   probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
   auditLate: number | Failed
   auditDue: number | Failed
+  deactivated: { assets: number; users: number } | Failed
 }
 /** One line of the Health warnings strip, or why its check couldn't run. */
 export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
   | { warning: 'tooOld'; version: string }
-  | { warning: 'auditLate' | 'auditDue'; count: number }
-  | { warning: 'tooOld' | 'auditLate' | 'auditDue'; error: string }
+  | { warning: 'auditLate' | 'auditDue' | 'runningOut'; count: number }
+  | { warning: 'missing'; field: MissingField; count: number }
+  | { warning: 'deactivated'; assets: number; users: number }
+  | { warning: 'tooOld' | 'auditLate' | 'auditDue' | 'missing' | 'deactivated' | 'runningOut'; error: string }
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
-/** The strip's lines, in order: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
-export function healthLines({ probe, auditLate, auditDue }: Health): HealthLine[] {
+/** The strip's lines, in #67's order: none at 0. Snipe-IT unreachable or the key failing shows only that line. missing and
+ * runningOut come with the dashboard's lists; still loading (left out), they add no line yet. */
+export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Health & Pick<Dashboard, HealthPiece>): HealthLine[] {
   if ('warning' in probe) return [probe]
   const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
   const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
     : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
     : older ? [{ warning: 'tooOld', version: probe.version }] : []
-  const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
-    typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue)]
+  const total = (warning: 'auditLate' | 'auditDue' | 'runningOut', t: number | Failed | undefined): HealthLine[] =>
+    t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
+  const gaps: HealthLine[] = !missing ? [] : 'error' in missing ? [{ warning: 'missing', error: missing.error }]
+    : MISSING_FIELDS.flatMap((field) => (missing[field] ? [{ warning: 'missing' as const, field, count: missing[field] }] : []))
+  const held: HealthLine[] = 'error' in deactivated ? [{ warning: 'deactivated', error: deactivated.error }] : deactivated.assets ? [{ warning: 'deactivated', ...deactivated }] : []
+  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue), ...gaps, ...held, ...total('runningOut', runningOut)]
+}
+
+/** How many listed Assets miss a Serial (a blank one too) or an Asset Model, checked out or not, or a Location while not
+ * checked out (one that is is found through whoever has it). Archived Assets count only if the list holds them. */
+export const missingFields = (assets: Asset[]): Record<MissingField, number> => ({
+  serial: assets.filter((a) => !a.serial.trim()).length,
+  model: assets.filter((a) => !a.model).length,
+  location: assets.filter((a) => !a.location && !a.assignee).length,
+})
+
+/** How many Licenses are Running out: Free seats below the Minimum quantity, or none left when none is set; a minimum of 0
+ * silences one. Snipe-IT (v8.7, v8.8) sends a minimum of 0 as null, like a blank one, so through the API 0 reads as none set. */
+export function runningOut(licenses: { free_seats_count?: unknown; min_amt?: unknown }[]): number {
+  return licenses.filter(({ free_seats_count: free, min_amt: min }) => {
+    if (typeof free !== 'number') throw new Error(`Snipe-IT didn't send "free_seats_count" for licenses; it may be too old for this warning.`)
+    return min !== 0 && free < (typeof min === 'number' ? min : 1)
+  }).length
 }
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
@@ -539,7 +573,7 @@ export const LIST_SORTS = {
   locations: { name: 'name', parent: 'parent', city: 'city', assets: 'assets_count', checkedOut: 'assigned_assets_count', users: 'users_count' },
   models: { name: 'name', modelNumber: 'model_number', manufacturer: 'manufacturer', category: 'category', assets: 'assets_count', available: 'remaining' },
   activity: { when: 'created_at', action: 'action_type', operator: 'created_by' },
-  licenses: { name: 'name', manufacturer: 'manufacturer', seats: 'seats', expires: 'expiration_date' },
+  licenses: { name: 'name', manufacturer: 'manufacturer', seats: 'seats', free: 'free_seats_count', expires: 'expiration_date' },
   accessories: { name: 'name', category: 'category', manufacturer: 'manufacturer', location: 'location', qty: 'qty' },
   consumables: { name: 'name', category: 'category', manufacturer: 'manufacturer', location: 'location', qty: 'qty' },
   components: { name: 'name', category: 'category', location: 'location', qty: 'qty' },
@@ -557,11 +591,12 @@ export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create',
 const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note']
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
-// user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type).
+// user_id isn't Snipe-IT's; it stands for "checked out to this User" (assigned_to + assigned_type). Nor is missing: Assets
+// missing that field, as Snipe-IT's structured filter (v8.7+) asks: is:null matches none or blank, a Location only when not checked out.
 const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
-  assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'] }, row: toAsset },
+  assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'], missing: MISSING_FIELDS }, row: toAsset },
   users: {
-    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id' },
+    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', activated: ['0', '1'] },
     row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
@@ -626,6 +661,8 @@ export const FORMS: Record<EditKind, FormField[]> = {
   ],
   licenses: [
     txt('name', 'Name', { required: true }), { key: 'seats', label: 'Seats', type: 'number', required: true }, pick('category_id', 'Category', 'categories:license', { required: true }),
+    // Blank is sent as none, never 0: 0 silences Running out, none warns at 0 Free seats.
+    { key: 'min_amt', label: 'Minimum quantity', type: 'number' },
     txt('serial', 'Product key', { from: 'product_key' }), txt('license_name', 'Licensed to'), { key: 'license_email', label: 'Licensed to email', type: 'email' },
     pick('manufacturer_id', 'Manufacturer', 'manufacturers'), { key: 'expiration_date', label: 'Expires', type: 'date' }, txt('order_number', 'Order number'),
     { key: 'purchase_date', label: 'Purchase date', type: 'date' }, { key: 'notes', label: 'Notes', type: 'textarea' },
@@ -813,7 +850,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const allowed = Object.hasOwn(spec.filters, key) ? spec.filters[key] : undefined
       if (!allowed || !(allowed === 'id' ? /^[1-9]\d*$/.test(value) : allowed.includes(value))) throw new Error(`Invalid filter: ${key}`)
       if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
-      else params.set(key, value)
+      else if (key === 'missing') {
+        // Snipe-IT reads a structured filter instead of the search, never both.
+        if (search?.trim()) throw new Error('Clear the search to see Assets missing a field; Snipe-IT searches only the whole List.')
+        params.set('filter', JSON.stringify(value === 'location' ? { location: 'is:null', assigned_to: 'is:null' } : { [value]: 'is:null' }))
+      } else params.set(key, value)
     }
     // The View's own condition, over any filter box for the same thing (the List hides that box).
     if (filter?.[0] === 'status_id') {
@@ -1266,7 +1307,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
-    // The Health warnings' checks: three small requests at once, each failing on its own. Runs on open and Refresh only.
+    // The Health warnings' checks: four small requests at once, each failing on its own. Runs on open and Refresh only.
     async health(): Promise<Health> {
       const failed = (e: Error): Failed => ({ error: e.message })
       const total = async (path: string) => {
@@ -1275,7 +1316,22 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         if (typeof body.total !== 'number') throw new Error(`Snipe-IT didn't send a total for ${path.slice(1)}.`)
         return body.total
       }
-      const [probe, auditLate, auditDue] = await Promise.all([
+      // Deactivated Users, most Assets first, counted until one holds none: usually one page. Only Assets count, not seats.
+      const deactivated = async () => {
+        let assets = 0, users = 0
+        for (let offset = 0; ; ) {
+          const page = await request<{ total: number; rows: { assets_count?: unknown }[] }>(`/users?activated=0&sort=assets_count&order=desc&limit=${PAGE_LIMIT}&offset=${offset}`)
+          if (isError(page)) throw new Error(reason(page.messages))
+          for (const { assets_count: n } of page.rows) {
+            if (typeof n !== 'number') throw new Error(`Snipe-IT didn't send "assets_count" for users.`)
+            if (!n) return { assets, users }
+            assets += n, users++
+          }
+          offset += page.rows.length
+          if (!page.rows.length || offset >= page.total) return { assets, users }
+        }
+      }
+      const [probe, auditLate, auditDue, held] = await Promise.all([
         request<{ version?: unknown }>('/version').then(
           (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
             : typeof body.version === 'string' ? { version: body.version } : { error: "Snipe-IT didn't say which version it runs." },
@@ -1286,19 +1342,22 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             : failed(e)),
         total('/hardware/audit/overdue').catch(failed),
         total('/hardware/audit/due').catch(failed),
+        deactivated().catch(failed),
       ])
-      return { probe, auditLate, auditDue }
+      return { probe, auditLate, auditDue, deactivated: held }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
     // ponytail: each Asset segment carries its Assets' summaries over IPC (the whole fleet); fine at the same ~5k ceiling.
-    async dashboard(requested: DashboardPiece[]): Promise<Dashboard> {
+    async dashboard(requested: (DashboardPiece | HealthPiece)[]): Promise<Dashboard> {
       // The list arrives from the screen over IPC; keep only pieces this module knows.
-      const pieces = DASHBOARD_PIECES.filter((p) => Array.isArray(requested) && requested.includes(p))
+      const pieces = [...DASHBOARD_PIECES, ...HEALTH_PIECES].filter((p) => Array.isArray(requested) && requested.includes(p))
       const now = today()
-      const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
-      // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
-      const assets = wants(...ASSET_PIECES) ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      const wants = (...p: (DashboardPiece | HealthPiece)[]) => p.some((x) => pieces.includes(x))
+      // Overdue, Warranty expiring and the missing fields come from the Asset list too, so it's fetched once for all.
+      const assets = wants(...ASSET_PIECES, 'missing') ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      // The Licenses bar and Running out share one Licenses list.
+      const licenses = wants('licenses', 'runningOut') ? allRows<Record<string, unknown>>('/licenses') : undefined
       // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
       // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
       const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined
@@ -1306,7 +1365,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const colors = wants('assets')
         ? allRows<{ id: number; color: string | null }>('/statuslabels').then((rows) => new Map<number | null, string>(rows.flatMap((l) => (l.color ? [[l.id, l.color]] : []))), () => new Map())
         : undefined
-      const entry = async <T>(piece: DashboardPiece, work: () => Promise<T>): Promise<[DashboardPiece, T | Failed] | []> =>
+      const entry = async <T>(piece: DashboardPiece | HealthPiece, work: () => Promise<T>): Promise<[DashboardPiece | HealthPiece, T | Failed] | []> =>
         !pieces.includes(piece) ? [] : [piece, await work().catch((e: Error) => ({ error: e.message }))]
       const entries = await Promise.all([
         entry('assets', async () => {
@@ -1326,8 +1385,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),
+        entry('missing', async () => missingFields(await assets!)),
+        entry('runningOut', async () => runningOut(await licenses!)),
         ...Object.entries(QUANTITIES).map(([piece, [path, whole, free]]) =>
-          entry(piece as DashboardPiece, async () => (await allRows<Record<string, number | null>>(path)).reduce<Split>((sum, r) => {
+          entry(piece as DashboardPiece, async () => ((await (piece === 'licenses' ? licenses! : allRows(path))) as Record<string, number | null>[]).reduce<Split>((sum, r) => {
             // An older Snipe-IT may not send a field; say so rather than show a wrong number.
             // A quantity of 0 arrives as null (Accessories, Components), so null counts as 0.
             const [all, left] = [whole, free].map((field) => {

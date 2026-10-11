@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
@@ -55,10 +55,12 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
       { key: 'location_id', label: 'Any Location', options: toOptions(locations) },
       { key: 'model_id', label: 'Any Asset Model', options: toOptions(names.models) },
       { key: 'category_id', label: 'Any category', options: toOptions(names.categories) },
+      { key: 'missing', label: 'Missing a field or not', options: MISSING_FIELDS.map((f) => ({ value: f, label: missingLabel[f] })) },
     ]
     case 'users': return [
       { key: 'location_id', label: 'Any Location', options: toOptions(locations) },
       { key: 'department_id', label: 'Any department', options: toOptions(names.departments) },
+      { key: 'activated', label: 'Activated or deactivated', options: [{ value: '1', label: 'Activated' }, { value: '0', label: 'Deactivated' }] },
     ]
     case 'models': return [{ key: 'category_id', label: 'Any category', options: toOptions(names.categories) }]
     case 'activity': return [
@@ -68,8 +70,12 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
   }
 }
 
-/** A List opened already filtered to one record, e.g. a Location's Assets; label names a filter that has no filter box. */
-export type Drill = { filters: Record<string, string>; label?: string }
+/** "Missing a Serial": the Assets List's missing filter, and the Health warning that opens it. */
+export const missingLabel: Record<MissingField, string> = { serial: 'Missing a Serial', model: 'Missing an Asset Model', location: 'Missing a Location' }
+
+/** A List opened already filtered to one record, e.g. a Location's Assets; label names a filter that has no filter box.
+ * sort: where it starts sorted (a Health warning's most urgent first). */
+export type Drill = { filters: Record<string, string>; label?: string; sort?: SavedReport['sort'] }
 // "Categories" → "Category", "Status Labels" → "Status Label".
 export const singular = (kind: ListKind) => listName[kind].replace(/ies$/, 'y').replace(/s$/, '')
 /** What a Drill from one record is called: a User's Assets are "Checked out to" them, anything else "Kind: name". */
@@ -80,7 +86,7 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 /** What a List is showing: its View (Assets only; All elsewhere), search, filter boxes and sort. */
 export type ListState = { view: AssetView; search: string; filters: Record<string, string>; sort: SavedReport['sort'] }
 /** Where a List opens: on All, with a Drill's filters, or a Saved Report's search and sort (App passes its filters as the Drill). */
-export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? null })
+export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? drill?.sort ?? null })
 /** Where picking an Assets View starts: no search or filters, and the View's own sort, as if another List were opened. */
 export const picking = (view: AssetView): ListState => ({ view, search: '', filters: {}, sort: ASSET_VIEWS[view].sort ?? null })
 /** What a List asks Snipe-IT for; only Assets have Views. */

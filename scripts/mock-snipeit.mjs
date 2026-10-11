@@ -36,7 +36,8 @@ const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
 const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
-  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
+  // A few deactivated Users, some still holding Assets.
+  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i), activated: i % 13 !== 5 }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
@@ -44,14 +45,16 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
   const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  // A few with no Serial (none or blank), no Asset Model (deleted), or no Location (some of those checked out, which don't count as missing it).
+  const noLocation = holder?.type !== 'location' && i % 29 === 11
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
   const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40 + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
-    serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
+    serial: i % 41 === 9 ? null : i % 41 === 30 ? '' : `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: i % 97 === 50 ? null : { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
-    location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
+    location: holder?.type === 'location' ? holder : noLocation ? null : pick(locations.slice(1), i), assigned_to: holder,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
@@ -62,7 +65,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
 })
 // The stocked kinds, a few of each.
 const stock = (list) => list.map((r, i) => ({ id: i + 1, notes: null, manufacturer: null, category: null, ...r }))
-const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, notes: 'Renews each July' }])
+// min_amt as Snipe-IT sends it: null when none is set, and for 0 too (its LicensesTransformer). Two are Running out.
+const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, min_amt: 20, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, min_amt: null, notes: 'Renews each July' },
+  { name: 'Typing Tutor', seats: 30, free_seats_count: 3, min_amt: 5 }, { name: 'Lab Design Suite', seats: 25, free_seats_count: 0, min_amt: null }])
 const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', qty: 80, remaining_qty: 23 }, { name: 'Wireless Mouse', model_number: 'M-220', qty: 40, remaining_qty: 31, notes: 'For the Library cart' }])
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
@@ -78,27 +83,30 @@ for (const a of assets.slice(0, 90).reverse()) {
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
 const lists = {
   // Searches the fields and related names real Snipe-IT does (Asset::$searchableRelations), plus custom fields.
-  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
+  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model?.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
-    status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
+    status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model?.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
-  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
+  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model?.name ?? '', category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial ?? '',
     next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '' } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
-    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
+    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v, activated: (u, v) => String(Number(u.activated)) === v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
-  models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model.id === m.id).length, remaining: assets.filter((a) => a.model.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
+  models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model?.id === m.id).length, remaining: assets.filter((a) => a.model?.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
   'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: () => true }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
   statuslabels: { rows: () => statuses }, categories: { rows: () => categories }, departments: { rows: () => departments },
-  licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes) }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
+  licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes), sorts: { name: (r) => r.name, seats: (r) => r.seats, free_seats_count: (r) => r.free_seats_count } }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
   consumables: { rows: () => consumables, search: (r) => text(r.name, r.item_no, r.notes) }, components: { rows: () => components, search: (r) => text(r.name, r.notes) },
 }
 
 function listPage(spec, q) {
   let rows = spec.rows()
-  const search = q.get('search')?.toLowerCase()
+  // Snipe-IT's structured filter (only its is:null here: none or blank) replaces the search, as Snipe-IT's does.
+  const filter = JSON.parse(q.get('filter') || '{}')
+  for (const [key, v] of Object.entries(filter)) if (v === 'is:null') rows = rows.filter((r) => r[key] == null || r[key] === '')
+  const search = q.get('filter') ? '' : q.get('search')?.toLowerCase()
   if (search && spec.search) rows = rows.filter((r) => spec.search(r).includes(search))
   for (const [key, test] of Object.entries(spec.filters ?? {})) if (q.get(key)) rows = rows.filter((r) => test(r, q.get(key)))
   const by = spec.sorts?.[q.get('sort') ?? spec.sort]
@@ -157,6 +165,8 @@ function saveRecord(kind, body, row) {
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
     else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
+    // Snipe-IT keeps a minimum of 0, but sends it back as null, like none set.
+    else if (k === 'min_amt') target[k] = Number(v) || null
     else target[k] = v
   }
   if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
