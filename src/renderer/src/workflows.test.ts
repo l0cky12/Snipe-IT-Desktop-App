@@ -844,6 +844,15 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
 
+    it("the User's Asset count goes up with the Checkout and back down with its Undo", async () => {
+      const { flow, bridge } = await checkedOut()
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets + 1 } })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets } })
+    })
+
     it('refuses when it is no longer checked out to this User, or its Status Label changed, and writes nothing', async () => {
       const { flow, bridge, checkins } = await checkedOut()
       bridge.assetByTag.mockResolvedValueOnce(now({ assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } }))
