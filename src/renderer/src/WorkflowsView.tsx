@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ArchiveRestore, PackageCheck, type LucideIcon } from 'lucide-react'
 import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
@@ -256,6 +256,9 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const step = flow.step
   const user = step.step === 'scan' ? step.user : null
   const q = text.trim()
+  // What the field holds now, for an answer that lands after the Operator typed on.
+  const typed = useRef(q)
+  typed.current = q
   const shown = !user && list?.q === q ? list.users : []
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
   useEffect(() => {
@@ -279,10 +282,11 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   async function find() {
     try {
       const r: { users?: StatusLabel[]; status: string } = moved?.q === q && shown[hi] ? await flow.pick(shown[hi].id) : await flow.find(q, shown, hi)
+      if (typed.current !== q) return
       if (r.users) setList({ q, users: r.users })
       setStatus(r.status)
     } catch (e) {
-      setStatus((e as Error).message)
+      if (typed.current === q) setStatus((e as Error).message)
     }
   }
   function pick(id: number) {
@@ -330,13 +334,14 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const o = flow.options
   const who = (u: { username: string; employeeNum: string }) => [u.username, u.employeeNum && `#${u.employeeNum}`].filter(Boolean).join(', ')
   const a = open?.row.before
+  const ctx = open?.row.ctx
   const said = open && `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}? Enter or rescan to confirm, Esc to cancel.`
   return (
     <div className="workflow">
       <div className="workflow-main">
         <header className="head">
           {user ? (
-            <h1>{user.name}<span className="sub">{[user.username, user.employeeNum && `#${user.employeeNum}`, `holds ${user.assets} Asset${user.assets === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</span></h1>
+            <h1>{user.name}<span className="sub">{[who(user), `holds ${user.assets} Asset${user.assets === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</span></h1>
           ) : (
             <h1>Bulk checkout<span className="sub">Who are the Assets for?</span></h1>
           )}
@@ -362,9 +367,9 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
               <dl className="confirm-facts">
                 {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
               </dl>
-              <p>→ Checkout to <strong>{open.row.ctx.user.name}</strong>{who(open.row.ctx.user) && ` (${who(open.row.ctx.user)})`}</p>
-              {(open.row.ctx.expectedCheckin || open.row.ctx.note) && (
-                <p className="dim">{[open.row.ctx.expectedCheckin && `Expected Checkin ${open.row.ctx.expectedCheckin}`, open.row.ctx.note && `Note: ${workflowNote('Bulk checkout', { text: open.row.ctx.note })}`].filter(Boolean).join(' · ')}</p>
+              <p>→ Checkout to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
+              {(ctx!.expectedCheckin || ctx!.note) && (
+                <p className="dim">{[ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote('Bulk checkout', { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
               )}
               <div className="actions">
                 <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={confirm}>Confirm</button>
@@ -398,7 +403,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           </>
         )}
         <RunningList rows={flow.runner.rows} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
-          what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what)} />
+          what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what || `To ${r.ctx.user.name}`)} />
         <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
       </div>
       {open

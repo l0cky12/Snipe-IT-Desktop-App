@@ -785,10 +785,10 @@ describe('Bulk checkout', () => {
       // Counts this User's done rows, including writes that finish after Done.
       expect(flow.summary(line)).toBe('Checked out 1 Asset to Avery Testwell')
       expect(checkouts.map(([id]) => id)).toEqual([1])
-      // A User with nothing scanned adds no line.
+      // A User with nothing scanned still gets their line.
       await flow.find('atestwell', [{ id: 7, name: 'Avery' }])
       flow.done()
-      expect(flow.runner.rows).toHaveLength(4)
+      expect(flow.summary(flow.runner.rows[0])).toBe('Checked out 0 Assets to Avery Testwell')
     })
   })
 

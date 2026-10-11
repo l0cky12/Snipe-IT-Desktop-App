@@ -474,10 +474,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       attempt++
       runner.cancelOpen()
       runner.cancelUndo()
-      if (step.step === 'scan') {
-        const { user, round: r } = step
-        if (runner.rows.some((row) => !row.line && row.ctx.round === r)) runner.addLine({ ...options, user, round: r })
-      }
+      if (step.step === 'scan') runner.addLine({ ...options, user: step.user, round: step.round })
       step = { step: 'user' }
       events.changed()
     },
