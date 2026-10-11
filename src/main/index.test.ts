@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { MailInput, SavedReport } from './config'
 import type { Mail } from './mail'
+import { RELEASES_URL } from './release'
 import type { SnipeItBridge } from './snipeit'
 
 // Exercise the actual IPC wiring and settings store; only Electron, HTTP and SMTP are fake.
@@ -16,6 +17,7 @@ const send = vi.fn<(server: MailInput, mail: Mail) => Promise<void>>(async () =>
 const request = vi.fn<typeof fetch>()
 let dir: string
 const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
+const openExternal = vi.fn(async (_url: string) => {})
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -28,10 +30,13 @@ beforeEach(async () => {
   vi.useFakeTimers()
   handlers.clear()
   send.mockClear()
+  openExternal.mockClear()
   request.mockReset().mockImplementation(async (url) => new Response(JSON.stringify(
     String(url).endsWith('/users/me') ? { email: 'operator@nomma.net' } : { total: 0, rows: [] },
   )))
   vi.stubGlobal('fetch', request)
+  // From source the app asks only this for the latest Snipe-IT release; the fake fetch answers it.
+  vi.stubEnv('SNIPEIT_RELEASES_URL', RELEASES_URL)
   nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
@@ -62,6 +67,7 @@ beforeEach(async () => {
           [name, (...args: unknown[]) => fn(...args).catch((e) => { throw structuredClone(e) })]))),
     },
     safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))
   vi.doMock('./tray.png?asset', () => ({ default: '' }))
@@ -74,6 +80,7 @@ afterEach(() => {
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -165,4 +172,18 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: expect.stringMatching(/^Snipe-IT rejected your API key\./), kind: 'key' })
   request.mockImplementation(async () => new Response(JSON.stringify({ status: 'error', messages: 'No Status Labels for you.' })))
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'No Status Labels for you.', kind: 'refused' })
+})
+
+it("adds GitHub's latest Snipe-IT release to the Health check, opens only its release notes, and hides it", async () => {
+  const notes = 'https://github.com/grokability/snipe-it/releases/tag/v8.9.1'
+  request.mockImplementation(async (url) => new Response(JSON.stringify(
+    String(url) === RELEASES_URL ? { tag_name: 'v8.9.1', html_url: notes } : String(url).endsWith('/version') ? { version: 'v8.8.0' } : { total: 0, rows: [] })))
+  expect(await call('snipeit:health')).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0, release: { tag: 'v8.9.1', url: notes } })
+  await call('release:open', notes)
+  await expect(call('release:open', 'https://example.org/grokability/snipe-it/releases/tag/v8.9.1')).rejects.toThrow('Only Snipe-IT release notes')
+  expect(openExternal.mock.calls).toEqual([[notes]])
+  call('release:hide', 'v8.9.1')
+  expect(await call('snipeit:health')).toMatchObject({ release: null })
+  // Asked GitHub once: the second check read the day-long cache.
+  expect(request.mock.calls.filter(([url]) => String(url) === RELEASES_URL)).toHaveLength(1)
 })

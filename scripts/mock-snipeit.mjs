@@ -6,6 +6,8 @@
 // 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
 // 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
 // MOCK_ALL_AUDITED=1 moves every next audit date at least 40 days ahead, so nothing is Audit late or Audit due.
+// It also stands in for GitHub's latest Snipe-IT release (v8.8.1, a patch past its /version), so the app never asks GitHub:
+// start the app from source with SNIPEIT_RELEASES_URL=http://127.0.0.1:<port>/repos/grokability/snipe-it/releases/latest.
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -204,6 +206,8 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // A new endpoint below needs its path here too.
 const routes = [
   [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|hardware\/audit\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  // GitHub's, outside /api/v1/.
+  [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
@@ -272,6 +276,9 @@ createServer(async (req, res) => {
     const errors = Object.fromEntries(rows.flatMap((r, n) => (column >= 0 && r[column] ? [] : [[r.find(Boolean) ?? `Row ${n + 2}`, { [required]: { [required]: [`The ${required.replace(/_/g, ' ')} field is required.`] } }]])))
     return Object.keys(errors).length ? send({ status: 'import-errors', messages: errors, payload: null }, 500) : send({ status: 'success', messages: { redirect_url: '' }, payload: null })
   }
+  // Shaped like GitHub's releases/latest, trimmed to what the app reads.
+  if (path === '/repos/grokability/snipe-it/releases/latest')
+    return send({ tag_name: 'v8.8.1', name: 'v8.8.1', html_url: 'https://github.com/grokability/snipe-it/releases/tag/v8.8.1', draft: false, prerelease: false })
   // Shaped like Snipe-IT v8.8's /version.
   if (path === 'version') return send({ version: 'v8.8.0', build_version: 'v8.8.0-0-gmock', hash_version: 'gmock', full_version: 'v8.8.0 build 0 (gmock)' })
   if (path === 'hardware/labels') {
