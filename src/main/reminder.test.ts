@@ -187,13 +187,17 @@ describe('the Automatic check-in notification', () => {
 // would: checked in, skipped (no longer on that Checkout), or failed.
 describe('the Automatic check-in job', () => {
   const rows = tags(3).map((assetTag, i) => ({ id: 10 + i, assetTag, lastCheckout: `2026-10-12 09:0${i}` }))
-  function automatic({ on = true, answers = [true, true, true] as (boolean | Error)[] } = {}) {
+  function automatic({ on = true, answers = [true, true, true] as (boolean | Error)[], during = (() => {}) as (id: number) => void } = {}) {
     const base = setup()
     if (on) base.store.saveTempCheckout({ ...base.store.get().tempCheckout, automatic: true })
     const checkins: [number, string, string][] = []
     const notified: [{ title: string; body: string }, string][] = []
     const logged: string[] = []
+    const waits: number[] = []
+    // Which connection (1, 2, …) each Checkin went over.
+    const sessions: number[] = []
     let lookups = 0
+    let connects = 0
     const launch = () => {
       const s = base.open()
       return createAutomaticCheckin({
@@ -201,18 +205,29 @@ describe('the Automatic check-in job', () => {
         settings: s.get,
         lastRan: s.lastAutomatic,
         recordRan: s.recordAutomatic,
-        outstanding: async () => (lookups++, rows),
-        checkin: async (id, checkout, note) => {
-          checkins.push([id, checkout, note])
-          const answer = answers[id - 10]
-          if (answer instanceof Error) throw answer
-          return answer
+        connect: () => {
+          const session = ++connects
+          return {
+            outstanding: async () => (lookups++, during(0), rows),
+            checkin: async (id, checkout, note) => {
+              checkins.push([id, checkout, note])
+              sessions.push(session)
+              during(id)
+              const answer = answers[id - 10]
+              if (answer instanceof Error) {
+                answers[id - 10] = true
+                throw answer
+              }
+              return answer
+            },
+          }
         },
         notify: (text, day) => void notified.push([text, day]),
         log: (message) => void logged.push(message),
+        wait: async (ms) => void waits.push(ms),
       })
     }
-    return { ...base, launch, checkins, notified, logged, lookups: () => lookups }
+    return { ...base, launch, checkins, notified, logged, waits, sessions, lookups: () => lookups }
   }
 
   it('checks in each one once at its time on a School day, on its tagged Checkout, never twice even across a restart', async () => {
@@ -239,6 +254,49 @@ describe('the Automatic check-in job', () => {
     await launch().tick()
     expect(notified.map(([n]) => n)).toEqual([{ title: 'Checked in 1 Temp checkout automatically', body: 'NOMMA-1001' }])
     expect(logged).toEqual(['NOMMA-1003: Snipe-IT refused it.'])
+  })
+
+  it('paces its Checkins, and on a 429 waits out the Retry-After and tries that one again', async () => {
+    const limited = Object.assign(new Error('Snipe-IT is limiting requests; try again in 7 seconds.'), { kind: 'rateLimited', retryAfter: 7 })
+    const { launch, at, checkins, notified, logged, waits } = automatic({ answers: [true, limited, true] })
+    at(12, 16, 0)
+    await launch().tick()
+    expect(checkins.map(([id]) => id)).toEqual([10, 11, 11, 12])
+    expect(waits).toEqual([1000, 7000, 1000])
+    expect(logged).toEqual([])
+    expect(notified.map(([n]) => n.title)).toEqual(['Checked in 3 Temp checkouts automatically'])
+  })
+
+  it('stops when switched off mid-run, keeping those already checked in', async () => {
+    const t = automatic({ during: (id) => { if (id === 11) t.store.saveTempCheckout({ ...t.store.get().tempCheckout, automatic: false }) } })
+    t.at(12, 16, 0)
+    await t.launch().tick()
+    expect(t.checkins.map(([id]) => id)).toEqual([10, 11])
+    expect(t.notified.map(([n]) => n.body)).toEqual(['NOMMA-1001, NOMMA-1002'])
+  })
+
+  it('makes every Checkin of a run over the one connection it looked up with, and stops when the connection is saved', async () => {
+    let job: ReturnType<typeof createAutomaticCheckin>
+    const t = automatic({ during: (id) => { if (id === 10) job.cancel() } })
+    job = t.launch()
+    t.at(12, 16, 0)
+    await job.tick()
+    expect(t.checkins.map(([id]) => id)).toEqual([10])
+    expect(t.sessions).toEqual([1])
+  })
+
+  it('records nothing when cancelled during the lookup, so the next tick runs on the new connection', async () => {
+    let job: ReturnType<typeof createAutomaticCheckin>
+    let first = true
+    const t = automatic({ during: (id) => { if (id === 0 && first) (first = false, job.cancel()) } })
+    job = t.launch()
+    t.at(12, 16, 0)
+    await job.tick()
+    expect(t.checkins).toEqual([])
+    t.at(12, 16, 1)
+    await job.tick()
+    expect(t.checkins).toHaveLength(3)
+    expect(t.sessions).toEqual([2, 2, 2])
   })
 
   it('shows no notification when it checked in none', async () => {

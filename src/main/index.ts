@@ -90,11 +90,13 @@ app.whenReady().then(() => {
   handle('settings:save', (_e, input: SettingsInput) => {
     const saved = store.save(input)
     scheduler.cancelPending()
+    automatic.cancel()
     return saved
   })
   handle('settings:clearToken', () => {
     const saved = store.clearToken()
     scheduler.cancelPending()
+    automatic.cancel()
     return saved
   })
   handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
@@ -150,8 +152,8 @@ app.whenReady().then(() => {
   }
   // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
   // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
-  const outstanding = async () => {
-    const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
+  const outstanding = async (connection: ReturnType<typeof client>) => {
+    const temp = overdueTemp((await connection.dashboard(['overdue'])).overdue)
     if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
     return temp
   }
@@ -160,7 +162,7 @@ app.whenReady().then(() => {
     settings: store.get,
     lastShown: store.lastReminder,
     recordShown: store.recordReminder,
-    outstanding: async () => (await outstanding()).map((a) => a.assetTag),
+    outstanding: async () => (await outstanding(client())).map((a) => a.assetTag),
     notify: (text) => { reminderNote = notify(text, () => win.webContents.send('reminder:open')) },
   })
   const automatic = createAutomaticCheckin({
@@ -168,8 +170,10 @@ app.whenReady().then(() => {
     settings: store.get,
     lastRan: store.lastAutomatic,
     recordRan: store.recordAutomatic,
-    outstanding,
-    checkin: (id, checkout, note) => client().automaticCheckin(id, checkout, note),
+    connect: () => {
+      const connection = client()
+      return { outstanding: () => outstanding(connection), checkin: (id, checkout, note) => connection.automaticCheckin(id, checkout, note) }
+    },
     // Opens the Activity Report on that day's automatic check-ins.
     notify: (text, day) => { automaticNote = notify(text, () => win.webContents.send('automatic:open', day)) },
     log: (message) => console.error('Automatic check-in:', message),
