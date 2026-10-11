@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, markdownOf, toWire, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
 import { toCsv } from './export'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -369,38 +369,47 @@ describe('Overdue (today is 2026-09-24)', () => {
 
   it('an Asset whose Expected Checkin was yesterday is Overdue by 1 day', async () => {
     const asset = await snipeItWith(due('2026-09-23 00:00:00')).getAsset(4812)
-    expect(asset.overdueDays).toBe(1)
+    expect(asset.overdue).toEqual({ days: 1, minutes: 1 })
   })
 
   it('an Asset due back today is not Overdue', async () => {
     const asset = await snipeItWith(due('2026-09-24 00:00:00')).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
   })
 
-  it('an Expected Checkin with a time of day keeps it, and is Overdue once that time has passed', async () => {
+  it('an Asset due today at 14:50 is not Overdue at 14:49, and is Overdue 1 min at 14:51', async () => {
     const before = await atTime(due('2026-09-24 14:50:00'), 14, 49).getAsset(4812)
-    expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdueDays: null })
-    expect((await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)).overdueDays).toBe(0)
-    expect((await atTime(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdueDays).toBe(1)
+    expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdue: null })
+    expect((await atTime(due('2026-09-24 14:50:00'), 14, 50).getAsset(4812)).overdue).toBeNull()
+    const after = await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)
+    expect(after.overdue).toEqual({ days: 0, minutes: 1 })
+    expect(lateness(after.overdue!)).toBe('1 min')
+    expect((await atTime(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdue).toEqual({ days: 1, minutes: 1090 })
   })
 
-  it('a date-only Expected Checkin is Overdue from the next day, whatever the time', async () => {
-    expect((await atTime(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdueDays).toBeNull()
+  it('a date-only Expected Checkin is Overdue from the end of its date, whatever the time', async () => {
+    expect((await atTime(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdue).toBeNull()
+    expect((await atTime(due('2026-09-23 00:00:00'), 0, 40).getAsset(4812)).overdue).toEqual({ days: 1, minutes: 40 })
   })
 
   it('a Snipe-IT before v8.7 sends Expected Checkin as a date, which still works', async () => {
     const asset = await snipeItWith({ ...chromebook, expected_checkin: { date: '2026-09-23', formatted: '09/23/2026' } }).getAsset(4812)
-    expect(asset).toMatchObject({ expectedCheckin: '2026-09-23', overdueDays: 1 })
+    expect(asset).toMatchObject({ expectedCheckin: '2026-09-23', overdue: { days: 1 } })
   })
 
   it('an Asset without an Expected Checkin is never Overdue', async () => {
     const asset = await snipeItWith({ ...chromebook, expected_checkin: null }).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
   })
 
   it('an Asset with no Assignee is not Overdue even with a past Expected Checkin', async () => {
     const asset = await snipeItWith({ ...chromebook, assigned_to: null }).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
+  })
+
+  it('how late reads in minutes, then hours, on the due day, and in days after it', () => {
+    expect([1, 59, 60, 119, 120, 549].map((minutes) => lateness({ days: 0, minutes }))).toEqual(['1 min', '59 min', '1 h', '1 h', '2 h', '9 h'])
+    expect(lateness({ days: 3, minutes: 3000 })).toBe('3d')
   })
 })
 
@@ -697,9 +706,10 @@ describe('dashboard (today is 2026-09-24)', () => {
     })
   })
 
-  it('lists every Overdue Asset with its Assignee and days late, most late first', async () => {
+  it('lists every Overdue Asset with its Assignee, Expected Checkin and how late, most late first', async () => {
     const { snipeIt } = fleet({ hardware: [
       asset(1, { expected_checkin: { datetime: '2026-09-23 00:00:00' } }),
+      asset(6, { expected_checkin: { datetime: '2026-09-23 14:50:00' } }), // a time of day: late since 14:50, before 1's end of day
       asset(2, { expected_checkin: { datetime: '2026-09-24 00:00:00' } }), // due today: not Overdue
       asset(3, { expected_checkin: { datetime: '2026-09-01 00:00:00' } }),
       asset(4, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, assigned_to: null }), // no Assignee: not Overdue
@@ -707,7 +717,9 @@ describe('dashboard (today is 2026-09-24)', () => {
     ] })
     const { overdue } = await snipeIt.dashboard(['overdue'])
     if (!Array.isArray(overdue)) throw new Error('expected rows')
-    expect(overdue.map((a) => [a.assetTag, a.overdueDays])).toEqual([['NOMMA-3', 23], ['NOMMA-1', 1]])
+    expect(overdue.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
+      ['NOMMA-3', '2026-09-01', '23d'], ['NOMMA-6', '2026-09-23 14:50', '1d'], ['NOMMA-1', '2026-09-23', '1d'],
+    ])
     expect(overdue[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
   })
 
@@ -1059,8 +1071,8 @@ describe('report', () => {
     const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
     const snipeIt = createSnipeIt(config, fetch, today)
     expect(await snipeIt.report('overdue')).toEqual({
-      columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-      rows: [['NOMMA-2', 'CB-2', 'Jordan Reyes', '2026-08-01', '54'], ['NOMMA-1', 'CB-1', 'Jordan Reyes', '2026-09-20', '4'], ['NOMMA-3', 'CB-3', 'Jordan Reyes', '2026-09-23 08:15', '1']],
+      columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],
+      rows: [['NOMMA-2', 'CB-2', 'Jordan Reyes', '2026-08-01', '54d'], ['NOMMA-1', 'CB-1', 'Jordan Reyes', '2026-09-20', '4d'], ['NOMMA-3', 'CB-3', 'Jordan Reyes', '2026-09-23 08:15', '1d']],
       capped: false,
     })
     expect((await snipeIt.report('overdue', { from: '2026-09-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-1', 'NOMMA-3'])
@@ -1068,6 +1080,14 @@ describe('report', () => {
     expect((await snipeIt.report('overdue', { from: '2026-09-23', to: '2026-09-23' })).rows.map((r) => r[0])).toEqual(['NOMMA-3'])
     expect((await snipeIt.report('expiring')).rows).toEqual([['NOMMA-4', 'CB-4', 'Deployed', '2026-10-01', '7'], ['NOMMA-5', 'CB-5', 'Deployed', '2026-12-01', '68']])
     expect((await snipeIt.report('expiring', { to: '2026-11-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-4'])
+  })
+
+  it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
+    const asset = (id: number, datetime: string) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: { datetime } })
+    const hardware = [asset(1, '2026-09-24 15:30:00'), asset(2, '2026-09-24 14:50:00'), asset(3, '2026-09-23 00:00:00'), asset(4, '2026-09-24 16:30:00')]
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    const snipeIt = createSnipeIt(config, fetch, () => new Date(2026, 8, 24, 16, 0))
+    expect((await snipeIt.report('overdue')).rows.map((r) => r.slice(3))).toEqual([['2026-09-23', '1d'], ['2026-09-24 14:50', '1 h'], ['2026-09-24 15:30', '30 min']])
   })
 
   // Snipe-IT v8.7+ sends last_audit_date as {datetime, formatted} and next_audit_date as {date, formatted}.
