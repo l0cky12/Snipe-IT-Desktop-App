@@ -394,6 +394,10 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
+  // The header's "holds N Assets" follows each Checkout and Undo while that User is still the one being served.
+  const held = (userId: number, by: number) => {
+    if (step.step === 'scan' && step.user.id === userId) step = { ...step, user: { ...step.user, assets: step.user.assets + by } }
+  }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
@@ -407,12 +411,14 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
       await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      held(user.id, 1)
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
         if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
         // A label someone set since the Checkout isn't overwritten with the old one.
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
+        held(user.id, -1)
       }
       return { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }
     }
