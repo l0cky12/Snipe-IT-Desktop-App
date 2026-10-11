@@ -35,7 +35,7 @@ describe('Workflow runner', () => {
       open--
       done.push(a.assetTag)
       return { text: 'Done' }
-    }, { changed: () => {} })
+    }, { changed: () => {} }, undefined, 0)
     for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-3']) expect(runner.scan(tag, null)).toBe('')
     expect(runner.rows.map((r) => [r.tag, r.result.state])).toEqual([['NOMMA-3', 'waiting'], ['NOMMA-2', 'waiting'], ['NOMMA-1', 'working']])
     expect(runner.pending).toBe(3)
@@ -45,9 +45,19 @@ describe('Workflow runner', () => {
     expect(runner.rows[0]).toMatchObject({ tag: 'NOMMA-3', name: 'CB-A-3', result: { state: 'done', text: 'Done' } })
   })
 
+  it("paces queued Assets so a fast scanner stays inside Snipe-IT's request limit", async () => {
+    const starts: number[] = []
+    const { bridge } = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-3')])
+    const runner = createRunner<null>(bridge, async () => (starts.push(Date.now()), { text: 'Done' }), { changed: () => {} }, undefined, 40)
+    for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-3']) runner.scan(tag, null)
+    await vi.waitFor(() => expect(runner.pending).toBe(0))
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(35)
+    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(35)
+  })
+
   it("a tag already waiting or working is a double read: ignored, with \"X is already scanned\"", async () => {
     const { bridge } = fakeBridge([asset('NOMMA-1')])
-    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} })
+    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} }, undefined, 0)
     runner.scan('NOMMA-1', null)
     expect(runner.scan(' nomma-1\r', null)).toBe('NOMMA-1 is already scanned')
     expect(runner.rows).toHaveLength(1)
@@ -63,7 +73,7 @@ describe('Workflow runner', () => {
     const runner = createRunner<null>(bridge, async (a) => {
       if (a.assetTag === 'NOMMA-2') throw new Error('Snipe-IT said no')
       return { text: 'Done', what: 'From Avery Testwell' }
-    }, { changed: () => {}, failed })
+    }, { changed: () => {}, failed }, undefined, 0)
     runner.scan('NOMMA-9', null)
     runner.scan('NOMMA-2', null)
     runner.scan('NOMMA-3', null)
@@ -80,14 +90,14 @@ describe('Workflow runner', () => {
   it('strips whitespace and control characters a scanner adds, and ignores an empty scan', () => {
     expect(cleanTag('\u0002 NOMMA-1\t\r\n')).toBe('NOMMA-1')
     const { bridge } = fakeBridge([])
-    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} })
+    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} }, undefined, 0)
     expect(runner.scan(' \r\n', null)).toBe('')
     expect(runner.rows).toEqual([])
   })
 
   it('Clear empties the Running list only when nothing is waiting or working', async () => {
     const { bridge } = fakeBridge([asset('NOMMA-1')])
-    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} })
+    const runner = createRunner<null>(bridge, async () => ({ text: 'Done' }), { changed: () => {} }, undefined, 0)
     runner.scan('NOMMA-1', null)
     runner.clear()
     expect(runner.rows).toHaveLength(1)
@@ -100,7 +110,7 @@ describe('Workflow runner', () => {
     let release = () => {}
     const { bridge } = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2')])
     const act = vi.fn(() => new Promise<{ text: string }>((r) => { release = () => r({ text: 'Done' }) }))
-    const runner = createRunner<null>(bridge, act, { changed: () => {} })
+    const runner = createRunner<null>(bridge, act, { changed: () => {} }, undefined, 0)
     runner.scan('NOMMA-1', null)
     runner.scan('NOMMA-2', null)
     await vi.waitFor(() => expect(act).toHaveBeenCalledTimes(1))
@@ -115,7 +125,7 @@ describe('Workflow runner', () => {
 describe('Bulk return', () => {
   async function started(assets: Asset[], location = ITOFFICE) {
     const fake = fakeBridge(assets)
-    const flow = createBulkReturn(fake.bridge, { changed: () => {} })
+    const flow = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
     expect(await flow.start(location)).toBe('')
     return { ...fake, flow }
   }
@@ -159,7 +169,7 @@ describe('Bulk return', () => {
     const one = asset('NOMMA-1')
     const fake = fakeBridge([one])
     fake.bridge.checkin.mockImplementation(async () => { one.assignee = null })
-    const flow = createBulkReturn(fake.bridge, { changed: () => {} }, () => new Date(2026, 9, 10, 10, 42))
+    const flow = createBulkReturn(fake.bridge, { changed: () => {} }, () => new Date(2026, 9, 10, 10, 42), 0)
     await flow.start(ITOFFICE)
     flow.scan('NOMMA-1')
     await vi.waitFor(() => expect(flow.runner.pending).toBe(0))
@@ -188,7 +198,7 @@ describe('Bulk return', () => {
 
     const fake = fakeBridge([])
     fake.bridge.statusLabels.mockResolvedValue([{ id: 2, name: 'Deployed' }, { id: 9, name: 'Ready to deploy (old)' }])
-    const missing = createBulkReturn(fake.bridge, { changed: () => {} })
+    const missing = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
     expect(await missing.start(ITOFFICE)).toBe("No Status Label named 'Ready to Deploy' in Snipe-IT")
     expect(missing.step).toEqual({ step: 'location' })
   })
@@ -197,7 +207,7 @@ describe('Bulk return', () => {
     const fake = fakeBridge([])
     let answer = (_: StatusLabel[]) => {}
     fake.bridge.statusLabels.mockImplementation(() => new Promise((r) => { answer = r }))
-    const flow = createBulkReturn(fake.bridge, { changed: () => {} })
+    const flow = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
     const first = flow.start(ITOFFICE)
     const firstAnswer = answer
     const second = flow.start(ROOM204)
@@ -208,7 +218,7 @@ describe('Bulk return', () => {
     expect(flow.step).toEqual({ step: 'scan', location: ROOM204 })
 
     flow.done()
-    const again = createBulkReturn(fake.bridge, { changed: () => {} })
+    const again = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
     const pending = again.start(ITOFFICE)
     again.done()
     answer(LABELS)

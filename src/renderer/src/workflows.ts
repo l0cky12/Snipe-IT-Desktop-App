@@ -21,10 +21,16 @@ const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 export const cleanTag = (raw: string) => raw.replace(/\p{Cc}/gu, '').trim()
 const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working'
 
+// The least time between one queued Asset starting and the next: a Bulk return is 3 requests, so 1.5s keeps a fast
+// scanner under Snipe-IT's default 120 requests a minute instead of turning the rest of the queue into throttled rows.
+// ponytail: fixed pace per Workflow; pausing and retrying on a 429 (or when two Workflows run at once) is #96.
+export const PACE_MS = 1500
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 // One Workflow's queue and Running list. Scans queue and run one at a time in order (Batch's eachInTurn, for a list
 // that keeps growing); a failure doesn't stop the next. In memory only: never saved or exported, like Recent scans.
 // ponytail: one request in flight per Workflow; 2–3 requests per Asset stays well inside Snipe-IT's 120 a minute.
-export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: Act<C>, events: Events, now = () => new Date()) {
+export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: Act<C>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let rows: Row<C>[] = []
   let queue: Row<C>[] = []
   let next = 0
@@ -32,6 +38,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
   let generation = 0
   let running = false
   let announce = ''
+  let lastStart = 0
 
   const update = (key: number, change: Partial<Row<C>>) => {
     rows = rows.map((r) => (r.key === key ? { ...r, ...change } : r))
@@ -48,6 +55,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     running = true
     const mine = generation
     for (let row = queue.shift(); row; row = queue.shift()) {
+      const wait = lastStart + pace - Date.now()
+      if (wait > 0) await sleep(wait)
+      if (mine !== generation) return
+      lastStart = Date.now()
       update(row.key, { result: { state: 'working' } })
       try {
         const asset = await bridge.assetByTag(row.tag)
@@ -111,7 +122,7 @@ export const READY = 'Ready to Deploy'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
 // once, set to Ready to Deploy and sent there. No confirm; Undo last (a later ticket) fixes mistakes.
-export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'statusLabels'>, events: Events, now = () => new Date()) {
+export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'statusLabels'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkReturnStep = { step: 'location' }
   // The Location picked last, highlighted when the next round starts.
   let last: StatusLabel | null = null
@@ -131,7 +142,7 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     const what = `From ${a.assignee.type === 'asset' ? 'Asset ' : ''}${a.assignee.name}`
     await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
     return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what }
-  }, events, now)
+  }, events, now, pace)
 
   return {
     runner,
