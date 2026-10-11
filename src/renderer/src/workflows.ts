@@ -797,7 +797,7 @@ function planOf({ supplier, cost, found }: IncomingCtx): { plan: Plan; supplier:
 // optional Repair cost and note), made Ready to Deploy, its return noted in History, and its open Repair Maintenance
 // closed with the Supplier and cost. Nothing after the status change undoes it.
 export function createIncomingRepair(
-  bridge: Pick<SnipeItBridge, 'assetByTag' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'updateMaintenance' | 'completeMaintenance' | 'deleteMaintenance' | 'supplierSelectlist'>,
+  bridge: Pick<SnipeItBridge, 'assetByTag' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'repairTypeId' | 'openMaintenances' | 'maintenance' | 'createMaintenance' | 'updateMaintenance' | 'completeMaintenance' | 'deleteMaintenance' | 'supplierSelectlist'>,
   events: Events, now = () => new Date(), pace = PACE_MS,
 ) {
   const setup = repairSetup(bridge, [DAMAGED, READY], events)
@@ -825,14 +825,16 @@ export function createIncomingRepair(
 
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      // Taken before the re-read, so Settings pointing at another server meanwhile stops it before the first write.
+      const mine = session
+      const still = () => sameSession(mine)
       // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
       const fresh = newest(await openRepairs())
       if (fresh?.id !== open?.id || fresh?.supplier?.id !== open?.supplier?.id || fresh?.cost !== open?.cost) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
       const { plan, supplier: s, cost } = planOf(ctx)
       // Built first, so a link in it refuses before anything is written.
       const note = workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
-      const mine = session
-      const still = () => sameSession(mine)
+      still()
       await bridge.updateStatus(a.id, ready)
       still()
       // "Ready, but <step> failed: <reason>" (#60 §2).
@@ -883,15 +885,25 @@ export function createIncomingRepair(
         const mine = session
         await bridge.updateStatus(a.id, a.statusId!)
         sameSession(mine)
-        const left: string[] = []
-        await bridge.addAssetNote(a.id, undoNote('Incoming repair')).catch((e: Error) => left.push(`the note failed: ${e.message}`))
+        const notBack: string[] = []
+        await bridge.addAssetNote(a.id, undoNote('Incoming repair')).catch((e: Error) => notBack.push(`the note failed: ${e.message}`))
         sameSession(mine)
-        if (closed || Object.keys(change).length) {
-          const earlier = { ...('supplierId' in change && { supplierId: open!.supplier?.id ?? null }), ...('cost' in change && { cost: open!.cost }), ...(closed && { reopen: true }) }
-          await bridge.updateMaintenance(open!.id, earlier).catch((e: Error) => left.push(`the Maintenance wasn't ${closed ? 'reopened' : 'put back'}: ${e.message}`))
+        const touched = closed || Object.keys(change).length > 0
+        if (touched || created !== null) {
+          // Read again first: a Supplier or Repair cost someone corrected since the return is never overwritten or deleted.
+          const id = created ?? open!.id
+          const wrote = { supplier: created !== null ? (s?.id ?? null) : (change.supplierId ?? open!.supplier?.id ?? null), cost: created !== null ? cost || null : (change.cost ?? open!.cost) }
+          try {
+            const m = await bridge.maintenance(id)
+            sameSession(mine)
+            if ((m.supplier?.id ?? null) !== wrote.supplier || m.cost !== wrote.cost) throw new Error('it was changed since the return, so it was left as is')
+            if (created !== null) await bridge.deleteMaintenance(created)
+            else await bridge.updateMaintenance(open!.id, { ...('supplierId' in change && { supplierId: open!.supplier?.id ?? null }), ...('cost' in change && { cost: open!.cost }), ...(closed && { reopen: true }) })
+          } catch (e) {
+            notBack.push(`the Maintenance wasn't ${created !== null ? 'deleted' : closed ? 'reopened' : 'put back'}: ${(e as Error).message}`)
+          }
         }
-        if (created !== null) await bridge.deleteMaintenance(created).catch((e: Error) => left.push(`the Maintenance wasn't deleted: ${e.message}`))
-        return left.join('; ')
+        return notBack.join('; ')
       }
       const says = `${a.assetTag} made Ready to Deploy${closed ? ', its Maintenance closed' : created !== null ? ', a Maintenance created' : ''}`
       return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: backFrom(plan === 'none' ? null : s, cost), sub, undo: { says, run } }

@@ -28,6 +28,7 @@ const snipeIt: SnipeItBridge = {
   operatorName: call('snipeit:operatorName'),
   repairTypeId: call('snipeit:repairTypeId'),
   openMaintenances: call('snipeit:openMaintenances'),
+  maintenance: call('snipeit:maintenance'),
   createMaintenance: call('snipeit:createMaintenance'),
   updateMaintenance: call('snipeit:updateMaintenance'),
   completeMaintenance: call('snipeit:completeMaintenance'),

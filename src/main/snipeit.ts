@@ -462,6 +462,12 @@ function overdueDaysOf(today: Date, due: string): number | null {
   return past ? late : null
 }
 
+// A Maintenance as Snipe-IT sends it, with its cost formatted ("1,234.50") and its notes rendered from Markdown.
+function toMaintenance(m: RawMaintenance): OpenMaintenance {
+  const named = (n: Named | undefined) => (n ? { id: n.id, name: n.name } : null)
+  return { id: m.id, type: named(m.maintenance_type_details), startDate: m.start_date?.date ?? null, notes: plainText(m.notes ?? ''), supplier: named(m.supplier), cost: costOf(m.cost) }
+}
+
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
 
@@ -1301,12 +1307,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(assetId)
       const body = await request<{ rows: RawMaintenance[] }>(`/maintenances?asset_id=${assetId}&completed=false&limit=50`)
       if (isError(body)) throw new Error(reason(body.messages))
-      const named = (n: Named | undefined) => (n ? { id: n.id, name: n.name } : null)
-      // Snipe-IT sends the cost formatted ("1,234.50") and the notes rendered from Markdown.
-      return body.rows.map((m) => ({
-        id: m.id, type: named(m.maintenance_type_details), startDate: m.start_date?.date ?? null, notes: plainText(m.notes ?? ''),
-        supplier: named(m.supplier), cost: costOf(m.cost),
-      }))
+      return body.rows.map(toMaintenance)
+    },
+    // One Maintenance, open or completed (Incoming repair's undo checks it's as it left it).
+    async maintenance(id: number): Promise<OpenMaintenance> {
+      checkId(id, 'Maintenance')
+      const body = await request<RawMaintenance>(`/maintenances/${id}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return toMaintenance(body)
     },
     // Opens a Maintenance on one Asset; resolves to its id. Needs `assets.edit`.
     async createMaintenance({ assetId, typeId, name, startDate, notes, supplierId, cost }: MaintenanceInput): Promise<number> {

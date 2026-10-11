@@ -1664,6 +1664,13 @@ describe('Incoming repair', () => {
     ])
   })
 
+  it('reads one Maintenance, open or completed', async () => {
+    const { fetch, calls } = fakeFetch({ '/maintenances/51': { body: { ...open, completed_at: { datetime: '2026-10-11 10:00:00', formatted: '2026-10-11' } } }, '/maintenances/9': { body: { status: 'error', messages: 'Maintenance not found.', payload: null } } })
+    expect(await createSnipeIt(config, fetch).maintenance(51)).toMatchObject({ id: 51, supplier: { id: 3, name: 'Campus Tech Supply' }, cost: '1234.50' })
+    await expect(createSnipeIt(config, fetch).maintenance(9)).rejects.toThrow('Maintenance not found.')
+    expect(calls).toEqual(['/maintenances/51', '/maintenances/9'])
+  })
+
   it('creates a Maintenance with a Supplier and Repair cost when given, never touching the purchase cost', async () => {
     const { fetch, requests } = fakeFetch({ 'POST /maintenances': { body: { status: 'success', messages: 'Created.', payload: { id: 62 } } } })
     const input = { assetId: 4812, typeId: 4, name: 'NOMMA-004812 repair', startDate: '2026-10-11', notes: '[Incoming repair] No Repair intake record', supplierId: 3, cost: '45.00' }

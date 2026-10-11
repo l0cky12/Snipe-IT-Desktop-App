@@ -39,6 +39,7 @@ function fakeBridge(assets: Asset[]) {
     updateMaintenance: vi.fn(async (id: number, c: MaintenanceChange) => { calls.push(`edit maintenance ${id} ${JSON.stringify(c)}`) }),
     completeMaintenance: vi.fn(async (id: number, note: string) => { calls.push(`complete maintenance ${id} ${note}`) }),
     deleteMaintenance: vi.fn(async (id: number) => { calls.push(`delete maintenance ${id}`) }),
+    maintenance: vi.fn(async (id: number): Promise<OpenMaintenance> => (calls.push(`maintenance ${id}`), maintenance(id))),
     supplierSelectlist: vi.fn(async (text: string): Promise<StatusLabel[]> => (calls.push(`suppliers ${text}`), [])),
     appendUserNotes: vi.fn(async (id: number, line: string) => { calls.push(`user notes ${id} ${line}`) }),
   }
@@ -1452,6 +1453,20 @@ describe('Incoming repair', () => {
     fake.bridge.statusLabels.mockImplementation(async () => (fake.calls.push('statusLabels'), [...LABELS, DAMAGED]))
     fake.bridge.repairTypeId.mockImplementation(async (fallback) => (fake.calls.push(`repair type ${fallback}`), typeId))
     fake.bridge.openMaintenances.mockImplementation(async (id) => (fake.calls.push(`open maintenances ${id}`), open[id] ?? []))
+    // Each Maintenance as Snipe-IT keeps it, edited, created and read back, open or completed.
+    const kept = new Map(Object.values(open).flat().map((m) => [m.id, { ...m }]))
+    fake.bridge.maintenance.mockImplementation(async (id) => (fake.calls.push(`read maintenance ${id}`), { ...kept.get(id)! }))
+    fake.bridge.createMaintenance.mockImplementation(async (m) => {
+      fake.calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}${m.supplierId ? ` supplier ${m.supplierId}` : ''}${m.cost ? ` cost ${m.cost}` : ''}`)
+      kept.set(61, maintenance(61, { supplier: m.supplierId ? ACME : null, cost: m.cost ?? null }))
+      return 61
+    })
+    fake.bridge.updateMaintenance.mockImplementation(async (id, c) => {
+      fake.calls.push(`edit maintenance ${id} ${JSON.stringify(c)}`)
+      const m = kept.get(id)!
+      if ('supplierId' in c) m.supplier = c.supplierId ? ACME : null
+      if ('cost' in c) m.cost = c.cost ?? null
+    })
     // A status change shows on the next lookup, as in Snipe-IT; the Asset the Workflow was given stays as it was.
     fake.bridge.updateStatus.mockImplementation(async (id, statusId) => {
       fake.calls.push(`status ${id} ${statusId}`)
@@ -1463,7 +1478,7 @@ describe('Incoming repair', () => {
     await flow.open(null)
     expect(flow.blocked).toBe('')
     fake.calls.length = 0
-    return { ...fake, flow, failed }
+    return { ...fake, flow, failed, kept }
   }
   const showing = async (flow: { runner: { open: unknown } }) => vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
   const settled = async (flow: { runner: { pending: number } }) => vi.waitFor(() => expect(flow.runner.pending).toBe(0))
@@ -1743,7 +1758,7 @@ describe('Incoming repair', () => {
       expect(flow.runner.askUndo()).toBe('')
       expect(flow.runner.confirm).toBe('Undo: NOMMA-1 made Ready to Deploy, its Maintenance closed? Enter to undo, Esc to cancel.')
       await flow.runner.undo()
-      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 3', 'note 1 [Undo] Incoming repair', 'edit maintenance 51 {"supplierId":null,"cost":"10.00","reopen":true}'])
+      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 3', 'note 1 [Undo] Incoming repair', 'read maintenance 51', 'edit maintenance 51 {"supplierId":null,"cost":"10.00","reopen":true}'])
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
     })
 
@@ -1753,7 +1768,7 @@ describe('Incoming repair', () => {
       await back(flow, 'NOMMA-1')
       calls.length = 0
       await undo(flow)
-      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 9', 'note 1 [Undo] Incoming repair', 'delete maintenance 61'])
+      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 9', 'note 1 [Undo] Incoming repair', 'read maintenance 61', 'delete maintenance 61'])
       bridge.completeMaintenance.mockRejectedValueOnce(new Error('This maintenance is already complete.'))
       await back(flow, 'NOMMA-2', '8')
       calls.length = 0
@@ -1772,6 +1787,35 @@ describe('Incoming repair', () => {
       expect((await undo(flow)).undoFailed).toBe("NOMMA-1 is 'Pending' now")
       bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { statusId: 1 }))
       expect((await undo(flow)).undoFailed).toBe('NOMMA-1 is checked out to Avery Testwell now')
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('leaves a Maintenance someone corrected since the return as it is, and says so', async () => {
+      const { flow, calls, kept } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      flow.setSupplier(ACME)
+      await back(flow, 'NOMMA-1', '45')
+      kept.get(51)!.cost = '54.00'
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: "the Maintenance wasn't reopened: it was changed since the return, so it was left as is" })
+      expect(calls.filter((c) => c.startsWith('edit') || c.startsWith('delete'))).toEqual([])
+      await back(flow, 'NOMMA-2')
+      kept.get(61)!.supplier = null
+      expect((await undo(flow)).undoFailed).toBe("the Maintenance wasn't deleted: it was changed since the return, so it was left as is")
+      expect(calls.filter((c) => c.startsWith('delete'))).toEqual([])
+    })
+
+    it('Settings pointing at another server while the Maintenances are read again stop it before any write', async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      let release = (_: OpenMaintenance[]) => {}
+      bridge.openMaintenances.mockImplementationOnce(() => new Promise((r) => { release = r }))
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(bridge.openMaintenances).toHaveBeenCalledTimes(2))
+      flow.reset()
+      release([maintenance(51)])
+      await flush()
+      await flush()
       expect(writes(calls)).toEqual([])
     })
 
