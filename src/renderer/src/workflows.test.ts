@@ -1008,6 +1008,13 @@ describe('Bulk checkout', () => {
       flow.runner.fixOpen()
       await settled(flow)
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: NOT_ALLOWED })
+      // The same label, made non-deployable since the scan.
+      flow.scan('NOMMA-1')
+      await opened(flow)
+      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-1', { statusType: 'undeployable' }))
+      flow.runner.fixOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
       expect(checkins).toEqual([])
     })
 
@@ -1097,7 +1104,7 @@ describe('Bulk checkout', () => {
         expect(f.checkouts).toHaveLength(1)
       })
 
-      it("refuses when the key may no longer check it in or out, and writes nothing", async () => {
+      it("refuses when the key may no longer check it in or out, or its label can't be checked out now, and writes nothing", async () => {
         const f = await choosing([blakes('NOMMA-1')])
         f.flow.runner.fixOpen()
         await settled(f.flow)
@@ -1105,6 +1112,10 @@ describe('Bulk checkout', () => {
         f.flow.runner.askUndo()
         await f.flow.runner.undo()
         expect(f.flow.runner.rows[0].undoFailed).toBe(NOT_ALLOWED)
+        f.bridge.assetByTag.mockResolvedValueOnce({ ...moved(blakes('NOMMA-1')), statusType: 'pending' })
+        f.flow.runner.askUndo()
+        await f.flow.runner.undo()
+        expect(f.flow.runner.rows[0].undoFailed).toBe("NOMMA-1 is 'Deployed' now")
         expect(f.checkins).toHaveLength(1)
       })
 

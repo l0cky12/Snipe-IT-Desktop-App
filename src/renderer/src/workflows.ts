@@ -448,7 +448,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       const from = assigneeName(was)
       const move = async (now: Asset): Promise<Done> => {
         // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
-        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
         if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
         const mine = session
         await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }) })
@@ -459,7 +459,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         // had. A time of day means it was a Temp checkout, so the undo makes it one again.
         const run = async (now: Asset) => {
           stillTheirs(now)
-          if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
+          // A label changed (or made non-deployable) since couldn't be checked out again.
+          if (now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} is '${now.status}' now`)
           // Both calls must be allowed before the first, so a refused Checkout never leaves it checked in.
           if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
           const { expectedCheckin: due } = a
