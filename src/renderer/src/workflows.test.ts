@@ -17,13 +17,19 @@ function fakeBridge(assets: Asset[]) {
   const calls: string[] = []
   const checkins: [number, CheckinOptions][] = []
   const checkouts: [number, CheckoutOptions][] = []
+  // Each Asset's History, newest first: the action and note of each entry.
+  const history: Record<number, { action: string; note: string }[]> = {}
   const bridge = {
     assetByTag: vi.fn(async (tag: string) => (calls.push(`bytag ${tag}`), assets.find((a) => a.assetTag === tag) ?? null)),
     checkin: vi.fn(async (id: number, o: CheckinOptions) => { calls.push(`checkin ${id}`); checkins.push([id, o]) }),
     checkout: vi.fn(async (id: number, o: CheckoutOptions) => { calls.push(`checkout ${id}`); checkouts.push([id, o]) }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
+    getAsset: vi.fn(async (id: number) => {
+      calls.push(`getAsset ${id}`)
+      return { ...assets.find((a) => a.id === id)!, fields: [], history: (history[id] ?? []).map((h) => ({ when: '', operator: '', detail: '', ...h })) }
+    }),
   }
-  return { bridge, calls, checkins, checkouts }
+  return { bridge, calls, checkins, checkouts, history }
 }
 
 describe('Workflow runner', () => {
@@ -390,10 +396,32 @@ describe('Bulk return', () => {
       expect(flow.runner.rows[0].result.state).toBe('undone')
     })
 
-    it('carries the Temp checkout tag when the Expected Checkin had a time of day', async () => {
-      const { flow, checkouts } = await returned(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+    it.each([
+      ['a Temp checkout', '[Temp checkout | due: 2026-10-13 14:50]'],
+      ['an undo that put one back', '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]'],
+    ])('carries the Temp checkout tag when the Checkout it puts back was %s', async (_, note) => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkin', note: '[Bulk return]' }, { action: 'Checkout', note }, { action: 'Checkout', note: '' }]
+      await fake.flow.runner.undo()
+      expect(fake.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]' })
+    })
+
+    it('puts back an ordinary Checkout with a time of day, or one whose History cannot be read, without the Temp checkout tag', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkin', note: '[Bulk return]' }, { action: 'Checkout', note: '[Bulk checkout]' }, { action: 'Checkout', note: '[Temp checkout | due: 2026-10-01 14:50]' }]
+      await fake.flow.runner.undo()
+      expect(fake.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return' })
+      const unread = await returned(asset('NOMMA-2', { expectedCheckin: '2026-10-13 14:50' }))
+      await unread.flow.runner.undo()
+      expect(unread.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return' })
+    })
+
+    it('reads no History for a date-only Expected Checkin', async () => {
+      const { flow, calls } = await returned(asset('NOMMA-1', { expectedCheckin: '2026-10-13' }))
       await flow.runner.undo()
-      expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]' })
+      expect(calls.filter((c) => c.startsWith('getAsset'))).toEqual([])
     })
 
     it('sends no Expected Checkin when it had none', async () => {

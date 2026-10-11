@@ -2,7 +2,7 @@
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
 import type { Asset, SnipeItBridge, StatusLabel } from '../../main/snipeit'
-import { undoNote, workflowNote } from '../../main/notes'
+import { parseWorkflowNote, undoNote, workflowNote } from '../../main/notes'
 import type { Outcome } from './BatchView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
@@ -205,7 +205,7 @@ export const READY = 'Ready to Deploy'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
 // once, set to Ready to Deploy and sent there. No confirm; Undo last fixes mistakes.
-export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'statusLabels'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'statusLabels' | 'getAsset'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkReturnStep = { step: 'location' }
   // The Location picked last, highlighted when the next round starts.
   let last: StatusLabel | null = null
@@ -226,13 +226,19 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     const from = `${was.type === 'asset' ? 'Asset ' : ''}${was.name}`
     await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
     // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
-    // the Location; the old one isn't forced back. A time of day means it was a Temp checkout, so the undo makes it one again.
+    // the Location; the old one isn't forced back. A Temp checkout is made one again (its tag back), but a time of day alone
+    // doesn't make one: an ordinary Checkout can have one too. So History says, only then: its newest Checkout is the one
+    // returned (it's still checked in, as left). History that can't be read puts back an ordinary Checkout.
     const left = ready
+    const wasTemp = async () => {
+      const n = parseWorkflowNote((await bridge.getAsset(a.id)).history.find((h) => h.action === 'Checkout')?.note ?? null)
+      return !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
+    }
     const run = async (now: Asset) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
       // A label someone set since the return isn't overwritten with the old one.
       if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
-      const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
+      const due = expectedCheckin && expectedCheckin.length > 10 && (await wasTemp()) ? expectedCheckin : undefined
       await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
     // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.
