@@ -787,6 +787,26 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(offsets('hardware')).toEqual([0, 0])
   })
 
+  it('Upcoming audits: next audit dates grouped by day, today to 12 months ahead inclusive, soonest first', async () => {
+    const next = (date: string | null) => ({ next_audit_date: date && { date, formatted: date } })
+    const { snipeIt } = fleet({ hardware: [
+      asset(1, next('2026-12-01')), asset(2, next('2026-09-24')), asset(3, next('2026-12-01')), asset(4, next('2026-09-23')),
+      asset(5, next('2027-09-24')), asset(6, next('2027-09-25')), asset(7, next(null)),
+    ] })
+    const { audits } = await snipeIt.dashboard(['audits'])
+    expect(audits).toMatchObject([
+      { day: '2026-09-24', assets: [{ id: 2, assetTag: 'NOMMA-2' }] },
+      { day: '2026-12-01', assets: [{ id: 1 }, { id: 3 }] },
+      { day: '2027-09-24', assets: [{ id: 5 }] },
+    ])
+  })
+
+  it("Upcoming audits reads the Asset list only; the Audit late and Audit due totals come from the Health check", async () => {
+    const { snipeIt, listsAsked } = fleet({ hardware: [asset(1)] })
+    await snipeIt.dashboard(['audits', 'categories'])
+    expect(listsAsked()).toEqual(['hardware'])
+  })
+
   it('a connection failure keeps its clear message, on every piece', async () => {
     const offline = (async () => {
       throw new TypeError('fetch failed')
@@ -830,11 +850,17 @@ it('tests authentication before reporting connection success and detects the ver
 describe('Health warnings', () => {
   const audits = { '/hardware/audit/overdue': { body: { total: 12, rows: [] } }, '/hardware/audit/due': { body: { total: 3, rows: [] } } }
 
-  it('probes /version for the version, and reads both audit totals with limit=1', async () => {
+  it('probes /version for the version, and reads both audit totals with limit=1 (Audit due latest first)', async () => {
     const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits })
-    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3 })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, dueThrough: null })
     expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/version'])
-    expect(queries.filter((q) => Object.keys(q).length)).toEqual([{ limit: '1' }, { limit: '1' }])
+    expect(queries.filter((q) => Object.keys(q).length)).toEqual(expect.arrayContaining([{ limit: '1' }, { limit: '1', sort: 'next_audit_date', order: 'desc' }]))
+  })
+
+  it("the Audit due check's one row is the latest Audit due date, where the timeline's Audit due shading ends", async () => {
+    const latest = { '/hardware/audit/due': { body: { total: 3, rows: [{ ...chromebook, next_audit_date: { date: '2026-10-19', formatted: '2026-10-19' } }] } } }
+    const { fetch } = fakeFetch({ '/version': { body: { version: 'v8.8.0' } }, ...audits, ...latest })
+    expect(await createSnipeIt(config, fetch).health()).toMatchObject({ auditDue: 3, dueThrough: '2026-10-19' })
   })
 
   it('classifies the probe: unreachable (network, timeout, 503), the key rejected (401) or refused key-wide (403)', async () => {
@@ -853,7 +879,7 @@ describe('Health warnings', () => {
   it('a check that fails says why on its own, leaving the others', async () => {
     const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'] })
     expect(await createSnipeIt(config, fetch).health()).toEqual({
-      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3,
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, dueThrough: null,
     })
   })
 

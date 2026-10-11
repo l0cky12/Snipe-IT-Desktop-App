@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartRows, fold } from './Charts'
+import { chartRows, fold, nextMajorAudit } from './Charts'
 
 const label = (id: number | null, name: string, type: string, color: string | null, count: number) => ({ id, name, type, color, count })
 
@@ -34,5 +34,17 @@ describe('dashboard chart rows', () => {
   it('folds nothing when there are N or fewer', () => {
     const rows = chartRows('assets', [label(1, 'Deployed', 'deployable', null, 3), label(2, 'Pending', 'pending', null, 1)])
     expect(fold(rows, 5, 'var(--dim)')).toBe(rows)
+  })
+})
+
+describe('Next major audit', () => {
+  const day = (d: string, n: number) => ({ day: d, assets: Array.from({ length: n }, (_, i) => ({ id: i }) as never) })
+
+  it('is the day with the most Assets due, the earlier day on a tie', () => {
+    expect(nextMajorAudit([day('2026-10-01', 2), day('2027-01-12', 9), day('2027-03-02', 4), day('2027-08-12', 9)])?.day).toBe('2027-01-12')
+  })
+
+  it('is no day when nothing is due', () => {
+    expect(nextMajorAudit([])).toBeUndefined()
   })
 })
