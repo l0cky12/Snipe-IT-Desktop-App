@@ -2,6 +2,9 @@
 // Run: node scripts/mock-snipeit.mjs [port]   then use http://127.0.0.1:<port> and any API token in Settings.
 // For timing, make it bigger and slower like a real server: MOCK_SCALE=20 (240 Assets and 64 Users each),
 // MOCK_LATENCY_MS=150 (every request) and MOCK_ROW_MS=5 (each row a list returns).
+// To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
+// 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
+// 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -10,13 +13,16 @@ const port = Number(process.argv[2] ?? 8765)
 const scale = Number(process.env.MOCK_SCALE ?? 1)
 const latency = Number(process.env.MOCK_LATENCY_MS ?? 0)
 const rowCost = Number(process.env.MOCK_ROW_MS ?? 0)
+const failAll = process.env.MOCK_FAIL
+const retryAfter = process.env.MOCK_RETRY_AFTER ?? '23'
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
   ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
-].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
+// status_type is the label's own type; status_meta says 'deployed' for a deployable label on a checked-out Asset.
+].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
 const categories = named(['Chromebook', 'Laptop', 'Projector', 'Tablet'])
@@ -30,21 +36,39 @@ const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
 const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
-  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
+  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), employee_num: i % 10 === 9 ? null : `E-${2001 + i}`, email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
+const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
+const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
+// A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
+const minutesAgo = (m) => new Date(Date.now() - (m + new Date().getTimezoneOffset()) * 6e4).toISOString().slice(0, 16).replace('T', ' ') + ':00'
+const dueOf = (i) => (i === 1 ? minutesAgo(40) : i === 19 ? minutesAgo(125) : i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30)))
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), employee_number: pick(users, i).employee_num, type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
+  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
+    rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
+    // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
+    last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
+    next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
+    // End of life from 90 days past to about 20 months ahead, a few with none.
+    asset_eol_date: i % 13 === 0 ? null : { date: day(((i * 53) % 700) - 90), formatted: day(((i * 53) % 700) - 90) },
+    // Snipe-IT formats money as text ("1,149.99") and sends null for none.
+    purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    last_checkout: holder ? { datetime: `${day(-1 - (i % 60))} 08:15:00`, formatted: day(-1 - (i % 60)) } : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -71,7 +95,9 @@ const lists = {
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
-  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial } },
+  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
+    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
+    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
@@ -116,6 +142,27 @@ Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id
 // A User made in the app may have no Location or department.
 Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
+// Snipe-IT's audit routes: next audit within its Audit warning setting (30 days here), or past; never Archived Assets.
+const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
+lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date >= day(0) && a.next_audit_date.date <= day(30)) }
+lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
+// Maintenances, shaped like Snipe-IT v8.7+ (cost as formatted text, the type under maintenance_type): one every few days
+// over the last four months, mostly Repairs, the newest still open.
+const maintenanceTypes = ['Repair', 'Repair', 'Repair', 'Upgrade', 'Software Support']
+const maintenances = Array.from({ length: 24 }, (_, i) => {
+  const a = assets[(i * 41 + 3) % assets.length]
+  const start = -120 + i * 5
+  const time = i % 4 === 1 ? 3 : 6 + (i % 9)
+  const open = start + time > -2
+  const type = pick(maintenanceTypes, i)
+  return {
+    id: i + 1, asset: { id: a.id, name: a.name, asset_tag: a.asset_tag }, title: `${type === 'Repair' ? pick(['Cracked screen', 'Keyboard replacement', 'Battery swap', 'Hinge repair'], i) : type} for ${a.name}`,
+    maintenance_type: type, asset_maintenance_type: '', supplier: pick(suppliers, i), is_warranty: i % 3 === 0, cost: i % 5 === 4 ? null : (35 + ((i * 173) % 1400) + 0.5 * (i % 2)).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    start_date: { date: day(start), formatted: day(start) }, completed_at: open ? null : { datetime: `${day(start + time)} 15:20:00`, formatted: day(start + time) },
+    completed_by: open ? null : { id: 900, name: 'Demo Operator' }, asset_maintenance_time: open ? 0 : time, created_by: { id: 900, name: 'Demo Operator' },
+  }
+})
+lists.maintenances = { rows: () => maintenances }
 
 // Creating, editing and deleting records, checked the way Snipe-IT checks them (a few of its rules).
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
@@ -140,6 +187,7 @@ function saveRecord(kind, body, row) {
     if (k === 'groups') { target.groups = groupsOf(v); continue }
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
+    else if (k === 'expected_checkin') target[k] = dueBack(v)
     else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
     else target[k] = v
   }
@@ -187,7 +235,7 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|hardware\/audit\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
@@ -196,6 +244,16 @@ const routes = [
 const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
 createServer(async (req, res) => {
+  if (failAll === 'hang') return
+  if (failAll) {
+    const [status, body, headers] = {
+      401: [401, { message: 'Unauthenticated.' }],
+      403: [403, refused],
+      429: [429, { message: 'Too Many Attempts.' }, retryAfter ? { 'Retry-After': retryAfter } : {}],
+      503: [503, { message: 'Service Unavailable' }],
+    }[failAll] ?? [500, { message: `Unknown MOCK_FAIL: ${failAll}` }]
+    return res.writeHead(status, { 'Content-Type': 'application/json', ...headers }).end(JSON.stringify(body))
+  }
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
   const raw = req.method === 'GET' ? '' : await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s)) })
@@ -275,13 +333,14 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
       const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
-      a.assigned_to = { ...target, type: body.checkout_to_type }
+      a.assigned_to = { ...target, ...(target.employee_num !== undefined && { employee_number: target.employee_num }), type: body.checkout_to_type }
+      a.last_checkout = { datetime: `${day(0)} ${new Date().toTimeString().slice(0, 8)}`, formatted: day(0) }
       a.status_label = statuses[1]
-      a.expected_checkin = body.expected_checkin ? { date: body.expected_checkin } : null
+      a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)

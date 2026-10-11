@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createSettingsStore } from './config'
+import { RANGED_REPORTS, REPORTS, takesRange } from './snipeit'
 
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
@@ -191,6 +192,19 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   relaunched.recordSend({ saved: saved.id }, { at: '2026-10-06T12:00:00.000Z', rows: 1 })
   relaunched.recordSend({ builtIn: 'overdue' }, { at: '2026-10-06T12:00:00.000Z', rows: 1 })
   expect(relaunched.schedules()).toEqual([])
+})
+
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
+  const { store } = setup()
+  for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
+  const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'maintenances'])
+  expect(ranged).toEqual(RANGED_REPORTS)
+  // The Schedule form shows the range choice by the same rule.
+  expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
+  expect(takesRange({ saved: 'x' })).toBe(false)
+  // The snapshot Reports send what's true at the time.
+  for (const builtIn of ['statusLocation', 'checkedOut'] as const) expect(store.schedules().find((s) => 'builtIn' in s.report && s.report.builtIn === builtIn)?.schedule).not.toHaveProperty('range')
 })
 
 it('refuses a schedule it could not keep', () => {
