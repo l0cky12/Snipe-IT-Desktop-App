@@ -193,7 +193,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
           <p className="message" role="status">{status}</p>
           {confirm && (
             // In place under the field, which keeps focus so no scan is lost; the buttons don't take it either.
-            <div className="confirm undo-confirm" role="group" aria-label="Undo last">
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
               <span>{confirm}</span>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
               <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
