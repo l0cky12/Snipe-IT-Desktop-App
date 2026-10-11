@@ -634,6 +634,16 @@ describe('checkout', () => {
       expect(requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${JSON.stringify(r.body)}`)).toEqual(['PATCH {"status_id":5}', expect.stringMatching(/^POST /), 'PATCH {"status_id":9}'])
     })
 
+    it("says so when the old label can't be put back either", async () => {
+      let patches = 0
+      const { fetch } = fakeFetch({
+        '/hardware/4812': { body: damaged },
+        'PATCH /hardware/4812': { body: () => (++patches === 1 ? statusSet.body : { status: 'error', messages: 'Snipe-IT said no', payload: null }) },
+        'POST /hardware/4812/checkout': { body: { status: 'error', messages: 'That asset is not available for checkout!', payload: null } },
+      })
+      await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 5 })).rejects.toThrow("That asset is not available for checkout! (its Status Label is still the new one: put back 'Damaged' by hand)")
+    })
+
     it("a refused override is never checked out", async () => {
       const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: damaged }, 'PATCH /hardware/4812': { body: { status: 'error', messages: { status_id: ['Choose a valid status.'] }, payload: null } } })
       await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2 })).rejects.toThrow('Choose a valid status.')

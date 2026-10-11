@@ -800,6 +800,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (written && /<\/?[a-z][^>]*>/i.test(notes)) throw new Error("the User's notes have formatting the app can't keep")
     return notes
   }
+  const checkLine = (line: string) => {
+    if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
+  }
   // Replaces a User's whole notes field.
   async function writeUserNotes(userId: number, notes: string): Promise<void> {
     try {
@@ -1238,7 +1241,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // nobody wrote in between. Any refusal throws, never retrying; the caller offers the line to copy instead.
     async appendUserNotes(userId: number, line: string): Promise<void> {
       checkId(userId, 'User')
-      if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
+      checkLine(line)
       const old = await userNotes(userId, true)
       await writeUserNotes(userId, old ? `${old}\n${line}` : line)
       const now = await userNotes(userId)
@@ -1249,17 +1252,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // anything written after it since, or the line edited, leaves the notes alone ("changed since").
     async removeUserNotesLine(userId: number, line: string): Promise<void> {
       checkId(userId, 'User')
-      if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
+      checkLine(line)
       const notes = await userNotes(userId, true)
       const rest = notes.slice(0, notes.length - line.length)
       if (!notes.endsWith(line) || (rest && !/\n$/.test(rest))) throw new Error('changed since')
       await writeUserNotes(userId, rest.replace(/\s+$/, ''))
     },
 
-    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
-    // unless another is given (Snipe-IT accepts only a deployable one). Snipe-IT checks out only an Asset whose label is
-    // deployable now, whatever is sent, so on one that isn't (an undo putting a Damaged Asset back) the given label is
-    // set first, and the old one put back if the Checkout is refused.
+    // Checkout allowed: no Assignee, and a deployable status or another one given. Snipe-IT requires a status, so the
+    // current one is sent unless another is given (Snipe-IT accepts only a deployable one). Snipe-IT checks out only an
+    // Asset whose label is deployable now, whatever is sent, so on one that isn't (an undo putting a Damaged Asset back)
+    // the given label is set first, and the old one put back if the Checkout is refused.
     async checkout(id: number, { targetType, targetId, statusId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
       if (!Object.hasOwn(TARGET_NAME, targetType)) throw new Error('An Asset can only be checked out to a User, a Location or another Asset.')
       checkId(targetId, TARGET_NAME[targetType])
@@ -1281,8 +1284,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         })
         if (isError(result)) throw new Error(reason(result.messages))
       } catch (e) {
-        // ponytail: best effort; if this fails too, the Asset is left at the given label, not checked out.
-        if (!deployable) await setStatus(id, label.id).catch(() => {})
+        // ponytail: one try; a Checkout that timed out but went through in Snipe-IT is refused here.
+        if (!deployable) await setStatus(id, label.id).catch(() => { throw new Error(`${(e as Error).message} (its Status Label is still the new one: put back '${label.name}' by hand)`) })
         throw e
       }
     },

@@ -526,15 +526,15 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let operator: Promise<string> | null = null
   const operatorName = () => (operator ??= bridge.operatorName().catch((e) => { operator = null; throw e }))
 
-  // The Maintenance step's sub-result, and the id of the Maintenance it opened, for Undo last to delete.
-  async function maintenance(a: Asset, typeId: number | null, notes: string, still: () => void): Promise<[string, number?]> {
-    if (typeId === null) return ['not opened: no Repair type found']
+  // The Maintenance step's sub-result; for Undo last, the id of the Maintenance it opened, or that one was open already.
+  async function maintenance(a: Asset, typeId: number | null, notes: string, still: () => void): Promise<{ text: string; made?: number; reused?: true }> {
+    if (typeId === null) return { text: 'not opened: no Repair type found' }
     try {
-      if ((await bridge.openMaintenances(a.id)).some((m) => isRepair(m.type, typeId))) return ['already open']
+      if ((await bridge.openMaintenances(a.id)).some((m) => isRepair(m.type, typeId))) return { text: 'already open', reused: true }
       still()
-      return ['opened', await bridge.createMaintenance({ assetId: a.id, typeId, name: `${a.assetTag} damaged`, startDate: localDate(now()), notes })]
+      return { text: 'opened', made: await bridge.createMaintenance({ assetId: a.id, typeId, name: `${a.assetTag} damaged`, startDate: localDate(now()), notes }) }
     } catch (e) {
-      return [`not opened: ${(e as Error).message}`]
+      return { text: `not opened: ${(e as Error).message}` }
     }
   }
 
@@ -561,7 +561,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       still()
       if (!held) await bridge.addAssetNote(a.id, note).catch((e: Error) => sub.push(`Asset note not added: ${e.message}`))
       still()
-      const [opened, made] = await maintenance(a, typeId, note, still)
+      const { text: opened, made, reused } = await maintenance(a, typeId, note, still)
       sub.push(`Maintenance ${opened}`)
       still()
       let copy: string | undefined
@@ -588,21 +588,21 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         if (current.statusId !== damaged) throw new Error(`${a.assetTag} is '${current.status}' now`)
         const mine = session
         const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
-        const back: string[] = []
+        const results: string[] = []
         // A time of day means it was a Temp checkout, so the undo makes it one again. Snipe-IT may send the checkout email again.
         const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
         if (held) await bridge.checkout(a.id, { targetType: held.type, targetId: held.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Repair intake', due) })
         else {
           await bridge.updateStatus(a.id, statusId!)
           still()
-          await bridge.addAssetNote(a.id, undoNote('Repair intake')).catch((e: Error) => back.push(`Asset note not added: ${e.message}`))
+          await bridge.addAssetNote(a.id, undoNote('Repair intake')).catch((e: Error) => results.push(`Asset note not added: ${e.message}`))
         }
         still()
-        if (made !== undefined) await bridge.deleteMaintenance(made).then(() => back.push('Maintenance deleted'), (e: Error) => back.push(`Maintenance not deleted: ${e.message}`))
-        else if (opened === 'already open') back.push('Maintenance left open: it was open before')
+        if (made !== undefined) await bridge.deleteMaintenance(made).then(() => results.push('Maintenance deleted'), (e: Error) => results.push(`Maintenance not deleted: ${e.message}`))
+        else if (reused) results.push('Maintenance left open: it was open before')
         still()
-        if (added) await bridge.removeUserNotesLine(user!.id, added).then(() => back.push('User note removed'), (e: Error) => back.push(`User note not removed: ${e.message}`))
-        return back
+        if (added) await bridge.removeUserNotesLine(user!.id, added).then(() => results.push('User note removed'), (e: Error) => results.push(`User note not removed: ${e.message}`))
+        return results
       }
       // Snipe-IT checks out only to a deployable Status Label, so an Asset that was out under another (Pending, or
       // already Damaged) can't be put back from the list.
