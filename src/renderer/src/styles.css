@@ -146,6 +146,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .codes .dim { margin: 0; max-width: 220px; text-align: center; }
 .section { padding: 18px 28px 6px; font: 600 16px var(--sans); color: var(--text); }
 .rail .section { font-size: 15px; }
+/* A section title with its own controls beside it (the dashboard Overdue list's Temp only). */
+.section-bar { display: flex; align-items: baseline; gap: 16px; }
+.section-bar label { display: inline-flex; align-items: center; gap: 6px; font: 400 13px var(--sans); cursor: pointer; }
+.history .flag { margin-left: 8px; }
 
 /* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
 .history { border-collapse: collapse; width: 100%; }
@@ -305,7 +309,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick button { height: 24px; font: 500 12.5px var(--sans); padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
-.list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
+.quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
 .pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }

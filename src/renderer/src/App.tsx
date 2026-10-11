@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
@@ -356,7 +356,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -688,16 +688,18 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 
 const healthName: Record<HealthLine['warning'], string> = {
   unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
+  temp: 'Temp checkouts Overdue',
 }
 // red: fix it now; amber: keep an eye on it.
-const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber' }
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', temp: 'red' }
 
 // The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
-function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
+function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly }: {
   health: { lines: HealthLine[]; at: string } | Failed | null
   onRetry: () => void
   onSettings: () => void
   onAssetView: (v: AssetView) => void
+  onTempOnly: () => void
 }) {
   if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
@@ -713,7 +715,10 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
         </span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
-    return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
+    if (l.warning === 'temp')
+      return <button className="link" onClick={onTempOnly}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Temp checkout is' : 'Temp checkouts are'} Overdue</button>
+    const view = l.warning
+    return <button className="link" onClick={() => onAssetView(view)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[view]}</button>
   }
   return (
     <section className="health" aria-label="Health warnings" aria-live="polite">
@@ -725,11 +730,14 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
 }
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
+function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabels, locations, defaultLocation }: {
   onPick: (id: number) => void
   onSegment: (s: AssetSegment) => void
   onAssetView: (v: AssetView) => void
   onSettings: () => void
+  statusLabels: StatusLabel[]
+  locations: StatusLabel[]
+  defaultLocation: StatusLabel | null
 }) {
   const [layout, setLayout] = useState(readLayout)
   const [customizing, setCustomizing] = useState(false)
@@ -738,15 +746,20 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
   // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
-  const [health, setHealth] = useState<(Health & { lines: HealthLine[]; at: string }) | Failed | null>(null)
+  const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
   const latestHealth = useRef(0)
+  // The Overdue list: only Temp checkouts, the row whose Checkin form is open, and what the last Checkin said.
+  const [tempOnly, setTempOnly] = useState(false)
+  const [checkingIn, setCheckingIn] = useState<number | null>(null)
+  const [overdueMessage, setOverdueMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
+  const overdueRef = useRef<HTMLDivElement>(null)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
 
   // On open and Refresh only, not when Customize shows a piece; the last result stays up while a new one loads.
   function check() {
     const mine = ++latestHealth.current
     window.snipeIt.health().then(
-      (h) => mine === latestHealth.current && setHealth({ ...h, lines: healthLines(h), at: new Date().toLocaleTimeString() }),
+      (h) => mine === latestHealth.current && setHealth({ ...h, at: new Date().toLocaleTimeString() }),
       (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
   }
   useEffect(check, [])
@@ -755,7 +768,8 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
     const mine = ++latest.current
     setLoading(true)
     // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
-    const shared = shown.filter((p) => ASSET_PIECES.includes(p))
+    // Overdue is always fetched, shown or not: Health warning 5 counts its Temp checkouts.
+    const shared = [...new Set([...shown.filter((p) => ASSET_PIECES.includes(p)), 'overdue' as const])]
     const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
     const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
     // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
@@ -792,6 +806,24 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
 
+  // A rejected Checkin keeps its form open with what was typed; a done one reloads the dashboard and the Health check.
+  const checkin = (assetTag: string) => async (id: number, o: CheckinOptions) => {
+    try {
+      await window.snipeIt.checkin(id, o)
+      setCheckingIn(null)
+      setOverdueMessage({ text: `Checked in ${assetTag}` })
+      load(), check()
+    } catch (e) {
+      setOverdueMessage({ text: (e as Error).message, error: true })
+    }
+  }
+  // Health warning 5 (and, later, the End-of-day reminder): the Overdue list with Temp only on, shown if Customize hid it.
+  function openTempOnly() {
+    setTempOnly(true)
+    setLayout((layout) => layout.map((p) => (p.piece === 'overdue' ? { ...p, show: true } : p)))
+    requestAnimationFrame(() => overdueRef.current?.scrollIntoView({ block: 'start' }))
+  }
+
   const tag = (a: AssetSummary) => (
     <td>
       <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
@@ -808,27 +840,47 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
         </div>
       )
     if (piece === 'overdue') {
-      const rows = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      const { rows: all, tempError } = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      const rows = overdueList(all, tempOnly && !tempError)
       return (
-        <div key={piece}>
-          <div className="section">Overdue ({rows.length})</div>
+        <div key={piece} ref={overdueRef}>
+          <div className="section section-bar">
+            {tempOnly ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
+            <label className="dim"><input type="checkbox" checked={tempOnly} onChange={(e) => setTempOnly(e.target.checked)} disabled={!!tempError} /> Temp only</label>
+          </div>
+          {tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {tempError}</p>}
+          {overdueMessage.text && <p className={overdueMessage.error ? 'message error' : 'message'} role={overdueMessage.error ? 'alert' : 'status'}>{overdueMessage.text}</p>}
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
+              <tr><th>Asset Tag</th><th>Asset</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th><th className="quick">Quick Actions</th></tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
+              {rows.map((a) => [
                 <tr key={a.id}>
-                  {tag(a)}
-                  <td>{a.name || '—'}</td>
+                  <td>
+                    <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
+                    {a.temp && <span className="flag c-blue">Temp</span>}
+                  </td>
+                  <td>{a.name || a.model || '—'}</td>
                   <td>{a.assignee?.name}</td>
                   <td>{a.expectedCheckin}</td>
                   <td className="late num">{lateness(a.overdue)}</td>
-                </tr>
-              ))}
+                  <td className="quick">
+                    <button disabled={!a.can.checkin} onClick={() => (setCheckingIn(checkingIn === a.id ? null : a.id), setOverdueMessage({ text: '' }))}
+                      className={checkingIn === a.id ? 'on' : undefined} title={checkinReason(a)}>Checkin</button>
+                  </td>
+                </tr>,
+                checkingIn === a.id && (
+                  <tr key={`${a.id}-quick`} className="quick-form">
+                    <td colSpan={6}>
+                      <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a.assetTag)} />
+                    </td>
+                  </tr>
+                ),
+              ])}
             </tbody>
           </table>
-          {rows.length === 0 && <p className="empty">Nothing Overdue</p>}
+          {rows.length === 0 && <p className="empty">{tempOnly ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
         </div>
       )
     }
@@ -870,7 +922,11 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
           <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
-      <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} />
+      <HealthStrip
+        // Checking until the Overdue list is in too, so "All clear" never shows before the Temp checkouts line can.
+        health={!health || !data.overdue ? null : 'error' in health ? health : { lines: healthLines(health, data.overdue), at: health.at }}
+        onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onTempOnly={openTempOnly}
+      />
       {customizing && (
         <div className="customize">
           {(['Chart', 'Tables'] as const).map((group) => (

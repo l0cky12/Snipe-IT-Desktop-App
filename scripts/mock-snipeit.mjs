@@ -39,6 +39,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// A datetime as Snipe-IT sends created_at and last_checkout.
+const stamp = (when) => when.toISOString().replace('T', ' ').slice(0, 19)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 // A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
@@ -57,6 +59,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
+    // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
+    last_checkout: holder ? { datetime: stamp(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
@@ -73,11 +77,21 @@ const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date()) =>
-  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: when.toISOString().replace('T', ' ').slice(0, 19) }, created_by: { id: 900, name: 'Demo Operator' },
+  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: stamp(when) }, created_by: { id: 900, name: 'Demo Operator' },
     item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
+// A checked-out Asset due at a time of day is a Temp checkout: its current Checkout carries the tag. Except NOMMA-001055,
+// checked in and out again in the web UI since its tagged Checkout; and NOMMA-001037's tag was put back by an undo.
 for (const a of assets.slice(0, 90).reverse()) {
-  const action = a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
-  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', new Date(Date.now() - a.id * 36e5))
+  const when = new Date(Date.now() - a.id * 36e5)
+  const temp = a.assigned_to && a.expected_checkin?.datetime.slice(11, 16) > '00:00'
+  const tag = temp && `[Temp checkout | due: ${a.expected_checkin.datetime.slice(0, 16)}]`
+  if (temp && a.id !== 56) {
+    act('checkout', a, a.assigned_to, a.id === 38 ? `[Undo] Bulk return ${tag}` : `${tag} Charger included`, when)
+    continue
+  }
+  if (temp) act('checkout', a, a.assigned_to, tag, new Date(when - 2 * 864e5))
+  const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
+  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
@@ -315,6 +329,7 @@ createServer(async (req, res) => {
       a.assigned_to = { ...target, type: body.checkout_to_type }
       a.status_label = statuses[1]
       a.expected_checkin = dueBack(body.expected_checkin)
+      a.last_checkout = { datetime: stamp(new Date()), formatted: day(0) }
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)
