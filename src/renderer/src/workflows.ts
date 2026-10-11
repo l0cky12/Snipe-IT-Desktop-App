@@ -144,7 +144,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       try {
         const now = await bridge.assetByTag(row.tag)
         if (mine !== generation) return
-        if (!now) throw new Error(`No Asset with tag ${row.tag}`)
+        // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
+        if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
         await run(now)
         if (mine !== generation) return
         announce = `${row.tag}: Undone`

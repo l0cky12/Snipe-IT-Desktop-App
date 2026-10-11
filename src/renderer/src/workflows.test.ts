@@ -209,6 +209,22 @@ describe('Undo last', () => {
     expect(runner.announce).toBe('NOMMA-1: NOMMA-1 is checked out to Avery Testwell now')
   })
 
+  it('refuses when the tag is gone or belongs to another Asset now', async () => {
+    const one = asset('NOMMA-1')
+    const { runner, undone, bridge } = undoable([one])
+    runner.scan('NOMMA-1', null)
+    await settled(runner)
+    bridge.assetByTag.mockResolvedValueOnce({ ...one, id: 99 })
+    runner.askUndo()
+    await runner.undo()
+    expect(runner.rows[0].undoFailed).toBe("NOMMA-1 is another Asset's tag now")
+    bridge.assetByTag.mockResolvedValueOnce(null)
+    runner.askUndo()
+    await runner.undo()
+    expect(runner.rows[0].undoFailed).toBe('No Asset with tag NOMMA-1 now')
+    expect(undone).toEqual([])
+  })
+
   it('a scan made while an undo is in flight waits for it', async () => {
     const order: string[] = []
     let release = () => {}
