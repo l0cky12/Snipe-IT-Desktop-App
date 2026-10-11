@@ -771,9 +771,10 @@ describe('dashboard (today is 2026-09-24)', () => {
   })
 
   it('an Activity Report Snipe-IT refuses still lists Overdue, with no Temp marks and the reason', async () => {
-    const { snipeIt } = fleet({ hardware: [checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12')], 'reports/activity': denied })
+    const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+    const { snipeIt } = fleet({ hardware: [checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12')], 'reports/activity': refused })
     expect((await snipeIt.dashboard(['overdue'])).overdue).toEqual({
-      rows: [expect.objectContaining({ id: 1, temp: false })], tempError: 'Snipe-IT returned HTTP 403: You do not have permission to view Licenses.',
+      rows: [expect.objectContaining({ id: 1, temp: false })], tempError: 'Snipe-IT returned HTTP 403: You do not have permission to view the Activity Report.',
     })
   })
 

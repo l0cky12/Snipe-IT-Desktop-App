@@ -824,9 +824,10 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
     requestAnimationFrame(() => overdueRef.current?.scrollIntoView({ block: 'start' }))
   }
 
-  const tag = (a: AssetSummary) => (
+  const tag = (a: AssetSummary, flag?: React.ReactNode) => (
     <td>
       <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
+      {flag}
     </td>
   )
   function table(piece: DashboardPiece) {
@@ -841,11 +842,13 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
       )
     if (piece === 'overdue') {
       const { rows: all, tempError } = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
-      const rows = overdueList(all, tempOnly && !tempError)
+      // The Temp marks failing turns Temp only off until they load again.
+      const only = tempOnly && !tempError
+      const rows = overdueList(all, only)
       return (
         <div key={piece}>
           <div className="section section-bar" ref={overdueRef}>
-            {tempOnly ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
+            {only ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
             <label className="dim"><input type="checkbox" checked={tempOnly} onChange={(e) => setTempOnly(e.target.checked)} disabled={!!tempError} /> Temp only</label>
           </div>
           {tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {tempError}</p>}
@@ -857,10 +860,7 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
             <tbody>
               {rows.map((a) => [
                 <tr key={a.id}>
-                  <td>
-                    <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
-                    {a.temp && <span className="flag c-blue">Temp</span>}
-                  </td>
+                  {tag(a, a.temp && <span className="flag c-blue">Temp</span>)}
                   <td>{a.name || a.model || '—'}</td>
                   <td>{a.assignee?.name}</td>
                   <td>{a.expectedCheckin}</td>
@@ -880,7 +880,7 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
               ])}
             </tbody>
           </table>
-          {rows.length === 0 && <p className="empty">{tempOnly ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
+          {rows.length === 0 && <p className="empty">{only ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
         </div>
       )
     }

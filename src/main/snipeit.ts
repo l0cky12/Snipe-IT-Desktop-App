@@ -191,7 +191,8 @@ export type OverdueRow = Asset & { expectedCheckin: string; overdue: Lateness; t
 export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly ? rows.filter((r) => r.temp) : rows)
 
 /**
- * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
+ * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
+ * dashboard's Overdue list instead). probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
  * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
  */
@@ -936,7 +937,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
   // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only tagged Checkouts are
-  // asked for, newest first, until past the oldest candidate's last Checkout: usually one request. Shared by the Workflows' readers.
+  // asked for, newest first, until past the oldest candidate's last Checkout: usually one request.
+  // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
+  // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
+  // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
     const since = new Map(assets.flatMap((a) => (a.assignee && a.lastCheckout && a.expectedCheckin && a.expectedCheckin.length > 10 ? [[a.id, a.lastCheckout]] : [])))
     const temp = new Set<number>()
