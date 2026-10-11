@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { allMatching } from '../renderer/src/ListView'
 import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -727,25 +728,24 @@ describe('dashboard (today is 2026-09-24)', () => {
     id, action_type: 'checkout', created_at: { datetime: when }, created_by: { id: 5, name: 'Demo Operator' },
     target: { id: 311, name: 'Jordan Reyes', type: 'user' }, note, item: { id: item, name: `NOMMA-${item}`, type: 'asset' },
   })
-  const tempFleet = (pageMax?: number) => fleet({
-    hardware: [
-      checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
-      checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
-      checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
-      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
-      checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
-    ],
-    // Newest first, as asked for.
-    'reports/activity': [
-      logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
-      logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
-      logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
-      logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
-      logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
-      logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
-      logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
-    ],
-  }, pageMax)
+  const tempHardware = [
+    checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
+    checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
+    checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
+    checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
+    checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
+  ]
+  // Newest first, as asked for.
+  const tempLog = [
+    logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
+    logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
+    logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
+    logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
+    logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
+    logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
+    logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
+  ]
+  const tempFleet = (pageMax?: number) => fleet({ hardware: tempHardware, 'reports/activity': tempLog }, pageMax)
   const temps = (overdue: Dashboard['overdue']) => (overdue && 'rows' in overdue ? overdue.rows.filter((a) => a.temp).map((a) => a.id).sort() : overdue)
 
   it('marks Overdue Temp checkouts: a tagged current Checkout or an undo-restored tag, not a later Checkout or a date-only one', async () => {
@@ -787,6 +787,83 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
     expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+  })
+
+  describe('the Out on temp and Overdue Views, computed in the app', () => {
+    it('Out on temp keeps the checked-out Assets the Temp lookup counts, fetched whole with the boxes, then sorted here', async () => {
+      const { snipeIt, urls } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': tempLog })
+      const page = await snipeIt.list('assets', { view: 'outOnTemp', search: 'nomma', filters: { location_id: '9' }, sort: 'assetTag', order: 'desc' })
+      expect(page).toMatchObject({ total: 2, rows: [{ id: 4, temp: true }, { id: 1, temp: true }] })
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware').map((u) => Object.fromEntries(u.searchParams))).toEqual([
+        { search: 'nomma', location_id: '9', status: 'Deployed', limit: '500', offset: '0', sort: 'id', order: 'asc' },
+      ])
+    })
+
+    it("Out on temp can't be shown without the Temp lookup, so the Activity Report refused fails it", async () => {
+      const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+      const { snipeIt } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': refused })
+      await expect(snipeIt.list('assets', { view: 'outOnTemp' })).rejects.toThrow('permission to view the Activity Report')
+    })
+
+    it("the other Views mark the page's Temp checkouts; a refused Activity Report leaves them unmarked, saying why", async () => {
+      const marked = await fleet({ hardware: tempHardware, 'reports/activity': tempLog }).snipeIt.list('assets')
+      expect(marked.rows.filter((a) => a.temp).map((a) => a.id)).toEqual([1, 4])
+      expect(marked).not.toHaveProperty('tempError')
+      const refused = { status: 403, body: { status: 'error', messages: 'No Activity Report for you.' } }
+      const unmarked = await fleet({ hardware: tempHardware, 'reports/activity': refused }).snipeIt.list('assets')
+      expect(unmarked).toMatchObject({ total: 5, tempError: 'Snipe-IT returned HTTP 403: No Activity Report for you.' })
+      expect(unmarked.rows.some((a) => a.temp)).toBe(false)
+    })
+
+    // Today is 2026-09-24 and it's 3 pm. Snipe-IT's /hardware/checkins/overdue answers what its own rule counts: a checked-out
+    // Asset whose Expected Checkin is before now, a date-only one from its midnight.
+    const afternoon = () => new Date(2026, 8, 24, 15, 0)
+    const due = [
+      checkedOut(1, '2026-09-24 00:00:00', '2026-09-20 08:00:00'), // date-only, due today: Snipe-IT says late, the app not yet
+      checkedOut(2, '2026-09-24 14:50:00', '2026-09-24 08:00:00'), // a time of day already past
+      checkedOut(3, '2026-09-23 00:00:00', '2026-09-20 08:00:00'), // date-only, due yesterday
+      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // a Temp checkout put back by an undo
+      checkedOut(5, '2026-09-24 15:30:00', '2026-09-24 08:00:00'), // due later today
+      asset(6, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, assigned_to: null }), // checked in
+    ]
+    const snipeItLate = due.slice(0, 4) // what Snipe-IT's rule answers: checked out and due before 3 pm
+    const overdueFleet = (rows = snipeItLate) => {
+      const { fetch, urls } = fleet({ hardware: due, 'hardware/checkins/overdue': rows, 'reports/activity': tempLog })
+      return { snipeIt: createSnipeIt(config, fetch, afternoon), urls }
+    }
+
+    it('Overdue drops a date-only Asset due today and keeps a time of day past its time; Temp checkouts carry their mark', async () => {
+      const { snipeIt, urls } = overdueFleet()
+      const page = await snipeIt.list('assets', { view: 'overdue', search: 'nomma', filters: { category_id: '3' }, sort: 'expectedCheckin', order: 'asc' })
+      expect(page.rows.map((a) => [a.id, a.expectedCheckin, a.temp])).toEqual([[3, '2026-09-23', false], [4, '2026-09-23 14:50', true], [2, '2026-09-24 14:50', false]])
+      expect(page.total).toBe(3)
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').map((u) => Object.fromEntries(u.searchParams))).toEqual([
+        { search: 'nomma', category_id: '3', limit: '500', offset: '0', sort: 'id', order: 'asc' },
+      ])
+    })
+
+    it('the Overdue View, the dashboard Overdue list and the Overdue Report list the same Assets', async () => {
+      const { snipeIt } = overdueFleet()
+      const view = (await snipeIt.list('assets', { view: 'overdue' })).rows.map((a) => a.assetTag)
+      const { overdue } = await snipeIt.dashboard(['overdue'])
+      const report = (await snipeIt.report('overdue')).rows.map((r) => r[0])
+      expect(view.sort()).toEqual(['NOMMA-2', 'NOMMA-3', 'NOMMA-4'])
+      expect(overdue && 'rows' in overdue && overdue.rows.map((a) => a.assetTag).sort()).toEqual(view)
+      expect(report.sort()).toEqual(view)
+    })
+
+    it('sorts and pages the whole set here, and "Select all N matching" gets every one of it', async () => {
+      const many = Array.from({ length: 60 }, (_, i) => checkedOut(i + 1, `2026-09-${String(1 + (i % 20)).padStart(2, '0')} 00:00:00`, '2026-08-31 08:00:00'))
+      const { snipeIt, urls } = overdueFleet(many)
+      const second = await snipeIt.list('assets', { view: 'overdue', sort: 'expectedCheckin', order: 'desc', offset: 50 })
+      expect(second.total).toBe(60)
+      // Three Assets due each day from the 1st to the 20th, latest first: the last ten are due on the 4th to the 1st.
+      expect(second.rows.map((a) => a.expectedCheckin!.slice(8))).toEqual(['04', '03', '03', '03', '02', '02', '02', '01', '01', '01'])
+      const all = await allMatching((offset) => snipeIt.list('assets', { view: 'overdue', sort: 'id', order: 'asc', offset }))
+      expect([...all!.keys()]).toEqual(many.map((a) => a.id))
+      // Each page asks Snipe-IT for the whole set again, never for a page of it.
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').every((u) => u.searchParams.get('offset') === '0')).toBe(true)
+    })
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
