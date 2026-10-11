@@ -59,6 +59,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
+    // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
+    rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
     // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
     last_checkout: holder ? { datetime: stamp(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
@@ -324,7 +326,7 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
       const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')

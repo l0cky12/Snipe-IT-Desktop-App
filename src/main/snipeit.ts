@@ -18,6 +18,8 @@ export type Asset = {
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
   location: string
+  /** Where Snipe-IT puts the Asset on a Checkin with no Location (its rtd_location); '' when it has none */
+  defaultLocation: string
   category: string
   serial: string
   purchaseDate: string | null
@@ -368,6 +370,7 @@ type RawAsset = {
   status_label: { id: number; name: string; status_meta: string } | null
   category: Named
   location: Named
+  rtd_location: Named
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
@@ -535,6 +538,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
+    defaultLocation: raw.rtd_location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
