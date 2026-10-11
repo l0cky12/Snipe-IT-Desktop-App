@@ -63,6 +63,8 @@ describe('the School calendar text', () => {
     expect(formatCalendar(entries)).toBe('2026-11-23 to 2026-11-27 Thanksgiving break\n2026-11-26 Thanksgiving\n2026-12-14 to 2026-12-16 half day 09:30 Exams\n2026-12-18 half day 12:00 Winter concert')
     expect(parseCalendar(formatCalendar(entries))).toEqual(entries)
     expect(parseCalendar('  \n')).toEqual([])
+    // A label may start with "to": only "to" and a date makes a range.
+    expect(parseCalendar('2026-11-26 To be announced')).toEqual([{ from: '2026-11-26', to: '2026-11-26', label: 'To be announced' }])
   })
 
   it('refuses the whole text at the first bad line, naming it and what is wrong', () => {

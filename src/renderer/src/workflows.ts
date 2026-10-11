@@ -405,7 +405,7 @@ export type BulkReturn = ReturnType<typeof createBulkReturn>
 
 export type BulkCheckoutStep = { step: 'user' } | { step: 'scan'; user: UserCard; round: number }
 /** Bulk checkout's Options: a date-only Expected Checkin and a note, each '' when not set. Temp checkout uses only the
- *  note; its scans carry the due time as their Expected Checkin. */
+ *  note; its Expected Checkin is always the due time. */
 export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
 export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
@@ -420,17 +420,19 @@ type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' 
 export const createBulkCheckout = (bridge: CheckoutBridge, events: Events, now = () => new Date(), pace = PACE_MS) =>
   checkoutFlow('Bulk checkout', bridge, events, now, pace)
 
-// Temp checkout (#61 §7): Bulk checkout's steps, each Checkout due back at the end-of-day time (worked out at each scan
-// from times(), the Settings as they are now), or at the time the Operator changed it to for this User.
+// Temp checkout (#61 §7): Bulk checkout's steps, each Checkout due back at the end-of-day time (worked out as it's
+// written, from times(): the Settings as they are then), or at the time the Operator changed it to for this User.
 export const createTempCheckout = (bridge: CheckoutBridge, events: Events, times: () => SchoolTimes, now = () => new Date(), pace = PACE_MS) =>
   checkoutFlow('Temp checkout', bridge, events, now, pace, times)
 
 function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: CheckoutBridge, events: Events, now: () => Date, pace: number, times?: () => SchoolTimes) {
   let step: BulkCheckoutStep = { step: 'user' }
-  // Temp checkout: the due time the Operator set for this User, until Done or another User.
-  let dueSet: string | null = null
+  // Temp checkout: the due time the Operator set, for the round (User) it was set in; Done or another User ends it.
+  let dueSet: { round: number; to: string } | null = null
+  // Temp checkout: the due time a Checkout in this round gets if written now, or null when the School calendar leaves none.
+  const dueFor = (r?: number) => (!times ? null : dueSet && dueSet.round === r ? dueSet.to : dueAt(now(), times()))
   // Temp checkout: "Temp, due 2:50 pm"; Bulk checkout: "To <User>".
-  const whatFor = (user: UserCard, due: string) => (times ? `Temp, due ${dueLabel(due, now(), true)}` : `To ${user.name}`)
+  const whatFor = (user: UserCard, due: string | null) => (!times ? `To ${user.name}` : due ? `Temp, due ${dueLabel(due, now(), true)}` : 'Temp')
   let options = NO_OPTIONS
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
@@ -443,7 +445,7 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
   }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
-    const what = whatFor(user, expectedCheckin)
+    const what = whatFor(user, dueFor(round))
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
     // Checked before a choice too: a Move checks out again, so it needs a deployable label and a key that may check out.
     if (a.statusType !== 'deployable') throw new Error(`"${a.assetTag}" is "${a.status}", which can't be checked out`)
@@ -459,8 +461,17 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
     const stillTheirs = (now: Asset) => {
       if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
     }
+    // The Expected Checkin a Checkout written now sends: Temp checkout's due time, worked out at each Checkout (so a
+    // confirm left open past 2:50 pm rolls over), or Bulk checkout's Options date. Throws, writing nothing, when there's none.
+    const dueNow = () => {
+      if (!times) return expectedCheckin
+      const due = dueFor(round)
+      if (!due) throw new Error(NO_SCHOOL_DAY)
+      if (due <= stamp(now())) throw new Error('The due time has passed. Change it, then scan again')
+      return due
+    }
     // Temp checkout's tag records the due time it sent (#63 §2).
-    const checkout = () => bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote(workflow, { text: note, due: times && expectedCheckin }) })
+    const checkout = (due: string) => bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: due || undefined, note: workflowNote(workflow, { text: note, due: times && due }) })
     if (was) {
       // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
       const from = assigneeName(was)
@@ -468,11 +479,12 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
         if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
         if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
+        const due = dueNow()
         const mine = session
         await bridge.checkin(a.id, { note: workflowNote(workflow, { move: true }) })
         sameSession(mine)
         // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
-        await checkout().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
+        await checkout(due).catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
         // had. A time of day means it was a Temp checkout, so the undo makes it one again.
         const run = async (now: Asset) => {
@@ -488,13 +500,14 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
           await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote(workflow, due && due.length > 10 ? due : undefined) })
             .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
         }
-        return { text: 'Checked out', what: times ? `${what}, moved from ${from}` : `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
+        return { text: 'Checked out', what: times ? `${whatFor(user, due)}, moved from ${from}` : `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
       }
       return { what, choice: { fix: 'Move to this User', blocked: a.can.checkin ? '' : NOT_ALLOWED, stop: stop!, write: move } }
     }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      await checkout()
+      const due = dueNow()
+      await checkout(due)
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
         stillTheirs(now)
@@ -502,19 +515,15 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote(workflow) })
       }
-      return { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }
+      return { text: 'Checked out', what: whatFor(user, due), undo: { says: `${a.assetTag} → ${user.name}`, run } }
     }
     return { what, confirm: { write } }
   }, events, now, pace)
 
   function choose(user: UserCard) {
-    dueSet = null
     step = { step: 'scan', user, round: ++round }
     events.changed()
   }
-
-  // Temp checkout: the due time a Checkout made now gets, or null when the School calendar leaves none.
-  const due = () => (times ? dueSet ?? dueAt(now(), times()) : null)
 
   return {
     runner,
@@ -522,13 +531,14 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
     get step() { return step },
     get options() { return options },
     /** Temp checkout: the due time a Checkout now gets ("YYYY-MM-DD HH:MM"), or null (none within a year, or Bulk checkout). */
-    get due() { return due() },
-    /** Temp checkout: changes the due time ("YYYY-MM-DD HH:MM") until Done or another User; returns why not ('' when set). */
+    get due() { return dueFor(step.step === 'scan' ? step.round : undefined) },
+    /** Temp checkout: changes this User's due time ("YYYY-MM-DD HH:MM") until Done or another User; returns why not ('' when set). */
     setDue(to: string): string {
+      if (step.step !== 'scan') return 'Find the User first'
       const [date = '', time = ''] = to.split(' ')
       if (!realDate(date) || !realTime(time)) return 'Choose a due date and time'
       if (to <= stamp(now())) return 'That due time has already passed'
-      dueSet = to
+      dueSet = { round: step.round, to }
       events.changed()
       return ''
     },
@@ -575,9 +585,9 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
     },
     scan(raw: string): string {
       if (step.step !== 'scan') return 'Find the User first'
-      if (!times) return runner.scan(raw, { ...options, user: step.user, round: step.round })
-      const expectedCheckin = due()
-      return expectedCheckin ? runner.scan(raw, { ...options, expectedCheckin, user: step.user, round: step.round }) : NO_SCHOOL_DAY
+      // Temp checkout: refused before any lookup when there's no due time to give it.
+      if (times && !dueFor(step.round)) return NO_SCHOOL_DAY
+      return runner.scan(raw, { ...options, user: step.user, round: step.round })
     },
     /** "Checked out N Assets to <User>" for a round's line: its done rows, counted as they land. */
     summary(line: Row<CheckoutCtx>) {
@@ -591,7 +601,6 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       runner.cancelUndo()
       if (step.step === 'scan') runner.addLine({ ...options, user: step.user, round: step.round })
       step = { step: 'user' }
-      dueSet = null
       events.changed()
     },
     reset() {

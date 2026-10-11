@@ -103,10 +103,10 @@ export function App() {
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
   // Temp checkout reads the end-of-day time and School calendar as saved now, at each scan.
-  const timesFrom = useRef<Settings | null>(null)
-  timesFrom.current = settings
+  const savedSettings = useRef<Settings | null>(null)
+  savedSettings.current = settings
   const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
-    () => ({ endOfDay: timesFrom.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: timesFrom.current?.schoolCalendar ?? [] })))
+    () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)

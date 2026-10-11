@@ -367,7 +367,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const dueText = (d: string | null) => (d ? `Due ${dueLabel(d, new Date())}` : 'No School day in the next year')
   const said = open && (choice
     ? `${open.row.tag} is checked out to ${a?.assignee ? assigneeName(a.assignee) : 'someone else'}. ${choice.fix}: click it, or Tab then Enter. Esc to Stop.`
-    : `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}${temp ? `, ${dueText(open.row.ctx.expectedCheckin).toLowerCase()}` : ''}? Enter or rescan to confirm, Esc to cancel.`)
+    : `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}${temp ? `, ${dueText(due).toLowerCase()}` : ''}? Enter or rescan to confirm, Esc to cancel.`)
   return (
     <div className="workflow">
       <div className="workflow-main">
@@ -420,8 +420,9 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
                 {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
               </dl>
               <p>→ {choice ? 'Move' : 'Checkout'} to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
-              {(ctx!.expectedCheckin || ctx!.note) && (
-                <p className="dim">{[ctx!.expectedCheckin && (temp ? dueText(ctx!.expectedCheckin) : `Expected Checkin ${ctx!.expectedCheckin}`), ctx!.note && `Note: ${workflowNote(flow.workflow, { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
+              {/* Temp checkout's due time is worked out again as it's written, so this is the one it gets if confirmed now. */}
+              {(temp || ctx!.expectedCheckin || ctx!.note) && (
+                <p className="dim">{[temp ? dueText(due) : ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote(flow.workflow, { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
               )}
               {choice ? (
                 <div className="actions">

@@ -14,11 +14,12 @@ const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
 /** A moment as "YYYY-MM-DD HH:MM", the way due times are written. */
 export const stamp = (d: Date) => `${ymd(d)} ${hhmm(d)}`
 const dateOf = (s: string) => new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)))
-export const realDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && ymd(dateOf(s)) === s
+const DATE = /^\d{4}-\d{2}-\d{2}$/
+export const realDate = (s: string) => DATE.test(s) && ymd(dateOf(s)) === s
 export const realTime = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s)
 
-// A line: a date, optionally "to" an end date, optionally "half day" and a time, then the label.
-const LINE = /^(\S+)(?:\s+to\s+(\S+))?(\s+half\s+day\b\s*(\d{1,2}:\d{2}\b)?)?\s*(.*)$/i
+// A line: a date, optionally "to" an end date (a label may start with the word: "to" and no digit isn't a range), optionally "half day" and a time, then the label.
+const LINE = /^(\S+)(?:\s+to\s+(\d\S*))?(\s+half\s+day\b\s*(\d{1,2}:\d{2}\b)?)?\s*(.*)$/i
 
 /** The School calendar's text, one entry per line, checked and sorted by date. Throws "Line N: …" at the first bad line. */
 export function parseCalendar(text: string): CalendarEntry[] {
@@ -28,9 +29,9 @@ export function parseCalendar(text: string): CalendarEntry[] {
     const no = (why: string): never => { throw new Error(`Line ${i + 1}: ${why}`) }
     const [, from, to = from, half, typed, label] = LINE.exec(line)!
     const time = typed?.padStart(5, '0')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) no('start with a date like 2026-11-26')
+    if (!DATE.test(from)) no('start with a date like 2026-11-26')
     if (!realDate(from)) no(`${from} isn't a real date`)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) no('the end date must be a date like 2026-11-27')
+    if (!DATE.test(to)) no('the end date must be a date like 2026-11-27')
     if (!realDate(to)) no(`${to} isn't a real date`)
     if (to < from) no('the end date is before the start date')
     if (half && !time) no('a half day needs its time, like half day 12:00')
