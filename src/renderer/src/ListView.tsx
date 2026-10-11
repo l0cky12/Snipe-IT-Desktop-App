@@ -19,6 +19,9 @@ const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K])
   assets: { status: (a) => <StatusChip asset={a} /> },
   activity: { note: (r) => r.note && <span className="note">{r.note}</span> },
 }
+/** The keys of the columns that hold numbers (counts like Assets, Seats, Remaining), which right-align. */
+export const numericColumns = (columns: AnyColumn[], rows: object[]) =>
+  new Set(columns.filter((c) => rows.some((r) => typeof (r as Record<string, unknown>)[c.key] === 'number')).map((c) => c.key))
 // Stored per computer and per List: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
 function readColumns(kind: ListKind): string[] {
@@ -305,12 +308,13 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     const shownValue = value === '' || value == null ? '—' : value
     // The row's way in: the first column, or for the Activity Report the Asset it names.
     const go = (first && kind !== 'activity') || (kind === 'activity' && c.key === 'item') ? open(row) : undefined
-    // Space Mono only for Asset Tags and Serials; the link inherits it.
-    return <td key={c.key} className={c.key === 'assetTag' || c.key === 'serial' ? 'mono' : undefined}>{go ? <button className="link" onClick={go}>{shownValue}</button> : shownValue}</td>
+    // Space Mono only for Asset Tags and Serials; the link inherits it. Numbers right-align.
+    return <td key={c.key} className={c.key === 'assetTag' || c.key === 'serial' ? 'mono' : numeric.has(c.key) ? 'num' : undefined}>{go ? <button className="link" onClick={go}>{shownValue}</button> : shownValue}</td>
   }
 
   const rows = page?.rows ?? []
   const total = page?.total ?? 0
+  const numeric = numericColumns(columns, rows)
   // Activity Report rows are log entries, not Records: nothing to select.
   const selectable = kind !== 'activity'
   const ticks = pageTicks(selection, rows)
@@ -418,12 +422,13 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
           <tr>
             {selectable && (
               <th className="tick">
-                <input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
-                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" />
+                {/* The label fills the cell, so the whole cell ticks the box. */}
+                <label><input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
+                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" /></label>
               </th>
             )}
             {columns.map((c) => (
-              <th key={c.key} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
+              <th key={c.key} className={numeric.has(c.key) ? 'num' : undefined} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
                 {Object.hasOwn(sortable, c.key)
                   ? <button className="sort" onClick={() => toggleSort(c.key)}>{c.label}{sort?.key === c.key ? (sort.order === 'asc' ? ' ▲' : ' ▼') : ''}</button>
                   : c.label}
@@ -442,8 +447,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               <tr key={row.id} className={q ? 'sel' : selection.has(row.id) ? 'ticked' : undefined}>
                 {selectable && (
                   <td className="tick">
-                    <input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
-                      aria-label={`Select ${rowName(row)}`} />
+                    <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
+                      aria-label={`Select ${rowName(row)}`} /></label>
                   </td>
                 )}
                 {columns.map((c, i) => cell(c, row, i === 0))}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -152,5 +152,13 @@ describe('Export CSV', () => {
   it('Lists whose rows hold Users or Assignees need the FERPA confirmation', () => {
     expect(['assets', 'users', 'activity', 'departments'].every((k) => holdsStudentInfo(k as 'assets'))).toBe(true)
     expect(['suppliers', 'locations', 'licenses', 'statuslabels'].some((k) => holdsStudentInfo(k as 'assets'))).toBe(false)
+  })
+})
+
+describe('columns', () => {
+  it('count columns right-align; text columns and empty ones do not', () => {
+    const columns = [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }, { key: 'parent', label: 'Parent' }]
+    const rows = [{ name: 'Library', assets: 12, parent: null }, { name: 'Gym', assets: 0, parent: null }]
+    expect([...numericColumns(columns, rows)]).toEqual(['assets'])
   })
 })
