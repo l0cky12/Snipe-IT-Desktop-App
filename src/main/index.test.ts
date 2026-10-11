@@ -160,7 +160,12 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
   await import('../preload/index')
   const snipeIt = exposed.snipeIt as SnipeItBridge
   request.mockImplementation(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '23' } }))
-  await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 })
+  // A 429 is sent again up to three times, after each wait, before it fails; fake timers skip the waits.
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  const throttled = expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 })
+  await vi.runAllTimersAsync()
+  await throttled
+  vi.useRealTimers()
   request.mockImplementation(async () => new Response('{}', { status: 401 }))
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: expect.stringMatching(/^Snipe-IT rejected your API key\./), kind: 'key' })
   request.mockImplementation(async () => new Response(JSON.stringify({ status: 'error', messages: 'No Status Labels for you.' })))
