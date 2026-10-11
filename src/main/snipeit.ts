@@ -474,8 +474,8 @@ export const LIST_SORTS = {
 } satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
 
 // Snipe-IT action_type values the Activity Report can be filtered by.
-// Not item_type: Snipe-IT only applies it together with one item_id.
-export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
+// Not item_type: Snipe-IT only applies it together with one item_id. Repair intake and Incoming repair write `note added` on an Asset.
+export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit', 'note added'] as const
 const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note']
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.

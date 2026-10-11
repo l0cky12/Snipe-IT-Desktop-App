@@ -994,6 +994,13 @@ describe('report', () => {
     expect(offsets).toEqual([0, 200, 400])
   })
 
+  it('the Activity Report filters by note added, which Repair intake and Incoming repair write on an Asset', async () => {
+    const { fetch, queries } = fakeFetch({ '/reports/activity': { body: { total: 1, rows: [{ ...entry(5, '2026-10-10 09:00:00', 'asset', 'note added'), note: '[Incoming repair] screen replaced' }] } } })
+    const r = await createSnipeIt(config, fetch).report('activity', { actionType: 'note added' })
+    expect(queries[0]).toMatchObject({ action_type: 'note added' })
+    expect(r.rows).toEqual([['2026-10-10 09:00', 'Note added', 'E. Caldwell', 'Assets', 'NOMMA-5', 'Jordan Reyes', '[Incoming repair] screen replaced']])
+  })
+
   it('an unknown report, action, record type or a malformed date is refused without asking Snipe-IT', async () => {
     const { fetch, calls } = fakeFetch({})
     const snipeIt = createSnipeIt(config, fetch)
