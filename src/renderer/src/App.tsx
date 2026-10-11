@@ -4,7 +4,7 @@ import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, Fi
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type HealthPiece, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
-import { ListView, drillTo, listName, missingLabel, type BulkAction, type BulkRun, type Drill } from './ListView'
+import { ListView, drillTo, listName, missingWhat, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 import { ReportsView } from './ReportsView'
 import { ImportView } from './ImportView'
@@ -726,7 +726,7 @@ function HealthStrip({ health, lists, onRetry, onSettings, onAssetView, onDrill 
         {many(l.assets, 'Asset', 'Assets')} with {many(l.users, 'deactivated User', 'deactivated Users')}
       </button>
     if (l.warning === 'missing')
-      return <button className="link" onClick={() => onDrill('assets', { filters: { missing: l.field } })}>{many(l.count, 'Asset is', 'Assets are')} {missingLabel[l.field].replace(/^M/, 'm')}</button>
+      return <button className="link" onClick={() => onDrill('assets', { filters: { missing: l.field } })}>{many(l.count, 'Asset is', 'Assets are')} missing {missingWhat[l.field]}</button>
     if (l.warning === 'runningOut')
       return <button className="link" onClick={() => onDrill('licenses', { filters: {}, sort: { key: 'free', order: 'asc' } })}>{many(l.count, 'License is', 'Licenses are')} Running out</button>
     const view = l.warning
@@ -776,9 +776,10 @@ function DashboardView({ onPick, onSegment, onAssetView, onDrill, onSettings }: 
     setLoading(true)
     // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
     // The Health warnings worked out from a list go with its pieces, and are fetched on their own when those are hidden.
-    const others = shown.filter((p) => !ASSET_PIECES.includes(p))
-    const groups: (DashboardPiece | HealthPiece)[][] = [[...shown.filter((p) => ASSET_PIECES.includes(p)), 'missing'],
-      ...others.map((p) => (p === 'licenses' ? [p, 'runningOut' as const] : [p])), ...(others.includes('licenses') ? [] : [['runningOut' as const]])]
+    const groups: (DashboardPiece | HealthPiece)[][] = [
+      [...shown.filter((p) => ASSET_PIECES.includes(p)), 'missing'], [...shown.filter((p) => p === 'licenses'), 'runningOut'],
+      ...shown.filter((p) => !ASSET_PIECES.includes(p) && p !== 'licenses').map((p) => [p]),
+    ]
     const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
     // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
     // "Loaded" means something arrived: a total failure leaves the last load time alone.

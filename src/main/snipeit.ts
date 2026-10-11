@@ -213,16 +213,18 @@ export function healthLines({ probe, auditLate, auditDue, deactivated, missing, 
     : older ? [{ warning: 'tooOld', version: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue' | 'runningOut', t: number | Failed | undefined): HealthLine[] =>
     t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  const gaps: HealthLine[] = !missing ? [] : 'error' in missing ? [{ warning: 'missing', error: missing.error }]
+  const missingLines: HealthLine[] = !missing ? [] : 'error' in missing ? [{ warning: 'missing', error: missing.error }]
     : MISSING_FIELDS.flatMap((field) => (missing[field] ? [{ warning: 'missing' as const, field, count: missing[field] }] : []))
-  const held: HealthLine[] = 'error' in deactivated ? [{ warning: 'deactivated', error: deactivated.error }] : deactivated.assets ? [{ warning: 'deactivated', ...deactivated }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue), ...gaps, ...held, ...total('runningOut', runningOut)]
+  const deactivatedLine: HealthLine[] = 'error' in deactivated ? [{ warning: 'deactivated', error: deactivated.error }] : deactivated.assets ? [{ warning: 'deactivated', ...deactivated }] : []
+  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue), ...missingLines, ...deactivatedLine, ...total('runningOut', runningOut)]
 }
 
 /** How many listed Assets miss a Serial (a blank one too) or an Asset Model, checked out or not, or a Location while not
- * checked out (one that is is found through whoever has it). Archived Assets count only if the list holds them. */
+ * checked out (one that is is found through whoever has it): what the Assets List's missing filter shows. Archived Assets
+ * count only if the list holds them. Snipe-IT won't delete an Asset Model that has Assets and still sends a deleted one, so
+ * a missing Asset Model is one left out at import or purged. */
 export const missingFields = (assets: Asset[]): Record<MissingField, number> => ({
-  serial: assets.filter((a) => !a.serial.trim()).length,
+  serial: assets.filter((a) => !a.serial).length,
   model: assets.filter((a) => !a.model).length,
   location: assets.filter((a) => !a.location && !a.assignee).length,
 })
@@ -1317,7 +1319,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         return body.total
       }
       // Deactivated Users, most Assets first, counted until one holds none: usually one page. Only Assets count, not seats.
-      const deactivated = async () => {
+      const countDeactivated = async () => {
         let assets = 0, users = 0
         for (let offset = 0; ; ) {
           const page = await request<{ total: number; rows: { assets_count?: unknown }[] }>(`/users?activated=0&sort=assets_count&order=desc&limit=${PAGE_LIMIT}&offset=${offset}`)
@@ -1331,7 +1333,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           if (!page.rows.length || offset >= page.total) return { assets, users }
         }
       }
-      const [probe, auditLate, auditDue, held] = await Promise.all([
+      const [probe, auditLate, auditDue, deactivated] = await Promise.all([
         request<{ version?: unknown }>('/version').then(
           (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
             : typeof body.version === 'string' ? { version: body.version } : { error: "Snipe-IT didn't say which version it runs." },
@@ -1342,9 +1344,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             : failed(e)),
         total('/hardware/audit/overdue').catch(failed),
         total('/hardware/audit/due').catch(failed),
-        deactivated().catch(failed),
+        countDeactivated().catch(failed),
       ])
-      return { probe, auditLate, auditDue, deactivated: held }
+      return { probe, auditLate, auditDue, deactivated }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.

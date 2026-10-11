@@ -55,7 +55,7 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
       { key: 'location_id', label: 'Any Location', options: toOptions(locations) },
       { key: 'model_id', label: 'Any Asset Model', options: toOptions(names.models) },
       { key: 'category_id', label: 'Any category', options: toOptions(names.categories) },
-      { key: 'missing', label: 'Missing a field or not', options: MISSING_FIELDS.map((f) => ({ value: f, label: missingLabel[f] })) },
+      { key: 'missing', label: 'Missing a field or not', options: MISSING_FIELDS.map((f) => ({ value: f, label: `Missing ${missingWhat[f]}` })) },
     ]
     case 'users': return [
       { key: 'location_id', label: 'Any Location', options: toOptions(locations) },
@@ -70,8 +70,8 @@ function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], l
   }
 }
 
-/** "Missing a Serial": the Assets List's missing filter, and the Health warning that opens it. */
-export const missingLabel: Record<MissingField, string> = { serial: 'Missing a Serial', model: 'Missing an Asset Model', location: 'Missing a Location' }
+/** What an Asset is missing, for the Assets List's missing filter ("Missing a Serial") and the Health warning that opens it. */
+export const missingWhat: Record<MissingField, string> = { serial: 'a Serial', model: 'an Asset Model', location: 'a Location' }
 
 /** A List opened already filtered to one record, e.g. a Location's Assets; label names a filter that has no filter box.
  * sort: where it starts sorted (a Health warning's most urgent first). */

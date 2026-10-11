@@ -819,7 +819,7 @@ describe('dashboard (today is 2026-09-24)', () => {
   it('missing fields: a blank Serial counts, a missing Asset Model counts checked out or not, a Location only when not checked out', async () => {
     const { snipeIt } = fleet({
       hardware: [
-        asset(1), asset(2, { serial: null }), asset(3, { serial: '  ', assigned_to: null, status_label: ready }), asset(4, { model: null }),
+        asset(1), asset(2, { serial: null }), asset(3, { serial: '', assigned_to: null, status_label: ready }), asset(4, { model: null }),
         // Checked out with no Location: found through whoever has it, so not counted.
         asset(5, { location: null }),
         asset(6, { location: null, assigned_to: null, status_label: ready }), asset(7, { location: null, assigned_to: null, status_label: repair, serial: '' }),
