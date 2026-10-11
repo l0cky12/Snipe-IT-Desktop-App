@@ -342,7 +342,7 @@ export function App() {
                   {m.rows.map((t) => {
                     const text = <>
                       <span className="t">{t.name}</span>
-                      {t.detail && <span className="n mono">{t.detail}</span>}
+                      {t.detail && <span className="n">{t.detail}</span>}
                       {t.matched && <span className="n">Found in {t.matched}</span>}
                     </>
                     const kind = m.kind
@@ -356,7 +356,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -543,12 +543,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? '', true],
+    ['Expected checkin', a.expectedCheckin ?? ''],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial, true],
-    ['Purchased', a.purchaseDate ?? '', true],
-    ['Warranty ends', a.warrantyEnd ?? '', true],
+    ['Purchased', a.purchaseDate ?? ''],
+    ['Warranty ends', a.warrantyEnd ?? ''],
   ]
   return (
     <>
@@ -737,7 +737,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
       }))
     const { used, available } = entry as { used: number; available: number }
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
-    return [{ name: usedName, count: used, color: 'var(--bar-used)' }, { name: freeName, count: available, color: 'var(--bar-free)' }]
+    return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
 
   const tag = (a: AssetSummary) => (
@@ -811,7 +811,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
     <>
       <header className="head">
         <h1>Dashboard</h1>
-        <span className="dim mono">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
+        <span className="dim">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Customize</button>
           <button onClick={load} disabled={loading}>Refresh</button>

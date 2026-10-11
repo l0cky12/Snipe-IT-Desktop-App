@@ -55,7 +55,7 @@ export function ImportView() {
           <thead><tr><th>File</th><th>Uploaded</th><th>Size</th><th>Last imported as</th><th /></tr></thead>
           <tbody>{files.map((f) => (
             <tr key={f.id} className={f.id === active?.id ? 'sel' : undefined}>
-              <td className="mono">{f.name}</td><td>{f.uploaded}</td><td>{f.size || '—'}</td><td>{f.type ? IMPORT_TYPES[f.type] : '—'}</td>
+              <td>{f.name}</td><td>{f.uploaded}</td><td>{f.size || '—'}</td><td>{f.type ? IMPORT_TYPES[f.type] : '—'}</td>
               <td><div className="actions">
                 <button className="quiet" onClick={() => setActive(f)}>{f.type ? 'Import again…' : 'Import…'}</button>
                 <DeleteUpload file={f} onDeleted={() => (active?.id === f.id && setActive(null), refresh())} onFailed={refresh} />
@@ -105,7 +105,7 @@ function ImportForm({ file, onRan, onClose }: { file: ImportFile; onRan: () => v
   return (
     <form className="import-form" onSubmit={run}>
       <div className="actions">
-        <b className="mono">{file.name}</b>
+        <b>{file.name}</b>
         <select value={type} required disabled={busy} onChange={(e) => choose(e.target.value as ImportType)} aria-label="What it imports">
           <option value="" disabled>Choose what it imports…</option>
           {(Object.keys(IMPORT_TYPES) as ImportType[]).map((t) => <option key={t} value={t}>{IMPORT_TYPES[t]}</option>)}

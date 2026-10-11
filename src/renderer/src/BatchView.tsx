@@ -61,7 +61,7 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
     <>
       <header className="head">
         <h1>Batch</h1>
-        <span className="dim mono">{batch.length} {batch.length === 1 ? 'Asset' : 'Assets'}</span>
+        <span className="dim">{batch.length} {batch.length === 1 ? 'Asset' : 'Assets'}</span>
         <div className="actions">
           {/* Retry repeats the same action; to change it (another User, a Location…), keep only the failed ones and act again. */}
           {last && failed.length > 0 && !busy && <button title="Runs the same Checkout or Checkin again on the ones that failed" onClick={() => onRun(last, failed.map((a) => a.id))}>Retry failed ({failed.length})</button>}
