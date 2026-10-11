@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt } from './snipeit'
@@ -88,6 +88,8 @@ app.whenReady().then(() => {
     return saved
   })
   ipcMain.handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
+  ipcMain.handle('settings:saveTempCheckout', (_e, input: TempCheckout) => store.saveTempCheckout(input))
+  ipcMain.handle('settings:saveSchoolCalendar', (_e, text: string) => store.saveSchoolCalendar(text))
   ipcMain.handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()

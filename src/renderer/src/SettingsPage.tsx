@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Appearance, Background, MailInput, Settings, SettingsInput } from '../../main/config'
+import { formatCalendar } from '../../main/calendar'
 
 // onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
 export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
@@ -10,7 +11,9 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar'>('connection')
+  const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
+  const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
@@ -108,6 +111,35 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </section>
     </fieldset>
     {place === 'background' && notes}
+    {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ endOfDay })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>Temp checkout</h2><p className="dim">When Temp checkouts are due back.</p>
+          <label htmlFor="end-of-day">End-of-day time</label>
+          <input id="end-of-day" type="time" required value={endOfDay} onChange={(e) => { setEndOfDay(e.target.value); setMessage('') }} />
+          <p className="hint">A Temp checkout is due at this time on a School day, or on the next School day once it has passed. A half day in the School calendar ends at its own time.</p>
+        </section>
+        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save Temp checkout settings'}</button></div>
+      </fieldset>
+    </form>
+    {place === 'temp' && notes}
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
+      const saved = await window.settings.saveSchoolCalendar(calendar)
+      onSaved(saved); setCalendar(formatCalendar(saved.schoolCalendar)); setMessage('School calendar saved.')
+    }, 'calendar') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>School calendar</h2><p className="dim">Holidays, breaks and half days, typed in once a year. This PC keeps its own copy: to share it, copy the text into the same box on another PC.</p>
+          <label htmlFor="school-calendar">One entry per line, each with a label</label>
+          <textarea id="school-calendar" rows={8} spellCheck={false} value={calendar} onChange={(e) => { setCalendar(e.target.value); setMessage('') }}
+            placeholder={'2026-11-26 Thanksgiving\n2026-11-23 to 2026-11-27 Thanksgiving break\n2026-12-18 half day 12:00 Winter concert'} />
+          <p className="hint">A date, a range (date to date), or a half day with its end time; a range can be a half day too. Weekends are never School days. Leave it empty and every weekday is a School day.</p>
+        </section>
+        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save School calendar'}</button></div>
+      </fieldset>
+    </form>
+    {place === 'calendar' && notes}
     <section className="settings-section settings-appearance">
       <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
       <label htmlFor="appearance">Theme</label>

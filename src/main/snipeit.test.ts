@@ -611,10 +611,10 @@ describe('checkout', () => {
     expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'asset', assigned_asset: 77 })
   })
 
-  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day', async () => {
+  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day (Central, to the second)', async () => {
     const { fetch, requests } = checkoutWith(ready)
     await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, expectedCheckin: '2026-10-13 14:50' })
-    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50:00' })
   })
 
   it('refuses another target type, a bad Status Label id or a malformed Expected Checkin without asking Snipe-IT', async () => {

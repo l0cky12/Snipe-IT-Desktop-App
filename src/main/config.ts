@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
+import { END_OF_DAY, parseCalendar, realTime, type CalendarEntry } from './calendar'
 import { LIST_SORTS, REPORT_NAMES, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance }
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance
+  tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[] }
+/** Temp checkout's settings on this PC. endOfDay: when Temp checkouts are due on a School day without a half day ("HH:MM"). */
+export type TempCheckout = { endOfDay: string }
+const TEMP_CHECKOUT: TempCheckout = { endOfDay: END_OF_DAY }
 /** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
@@ -26,6 +31,9 @@ export type SettingsApi = {
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
   saveAppearance(input: Appearance): Promise<Settings>
+  saveTempCheckout(input: TempCheckout): Promise<Settings>
+  /** The School calendar box's text; throws "Line N: …" and saves nothing when a line is bad. */
+  saveSchoolCalendar(text: string): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
   testMail(input: MailInput): Promise<string>
   savedReports(): Promise<SavedReport[]>
@@ -56,7 +64,8 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance }
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
+  tempCheckout?: TempCheckout; schoolCalendar?: CalendarEntry[] }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -142,7 +151,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system' }
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system',
+      tempCheckout: value.tempCheckout ?? TEMP_CHECKOUT, schoolCalendar: value.schoolCalendar ?? [] }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -215,6 +225,16 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     saveAppearance(appearance: Appearance) {
       if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
+      return get()
+    },
+    saveTempCheckout({ endOfDay }: TempCheckout) {
+      if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')
+      write({ ...read(), tempCheckout: { endOfDay } })
+      return get()
+    },
+    saveSchoolCalendar(text: string) {
+      if (typeof text !== 'string') throw new Error('Invalid School calendar')
+      write({ ...read(), schoolCalendar: parseCalendar(text) })
       return get()
     },
     savedReports,

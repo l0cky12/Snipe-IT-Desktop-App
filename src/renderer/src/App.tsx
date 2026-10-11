@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
@@ -13,7 +14,7 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, NOT_ALLOWED } from './workflows'
+import { createBulkCheckout, createBulkReturn, createTempCheckout, NOT_ALLOWED } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
 const statusColor: Record<string, string> = {
@@ -101,6 +102,11 @@ export function App() {
   const [, changed] = useReducer((n: number) => n + 1, 0)
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  // Temp checkout reads the end-of-day time and School calendar as saved now, at each scan.
+  const timesFrom = useRef<Settings | null>(null)
+  timesFrom.current = settings
+  const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
+    () => ({ endOfDay: timesFrom.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: timesFrom.current?.schoolCalendar ?? [] })))
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -177,6 +183,7 @@ export function App() {
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
+    tempCheckout.reset()
     cancel(); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
@@ -314,7 +321,7 @@ export function App() {
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
-  const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending
+  const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending + tempCheckout.runner.pending
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -406,8 +413,8 @@ export function App() {
         </div>}
       </aside>
       <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
-        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
-        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : w === 'Temp checkout' ? tempCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
+        : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />

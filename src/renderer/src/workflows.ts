@@ -3,6 +3,7 @@
 // through the bridge passed in, so the tests drive it with a fake.
 import type { Asset, Assignee, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
 import { undoNote, workflowNote } from '../../main/notes'
+import { dueAt, dueLabel, realDate, realTime, stamp, type SchoolTimes } from '../../main/calendar'
 import type { Outcome } from './BatchView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
@@ -403,17 +404,33 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
 export type BulkReturn = ReturnType<typeof createBulkReturn>
 
 export type BulkCheckoutStep = { step: 'user' } | { step: 'scan'; user: UserCard; round: number }
-/** Bulk checkout's Options: a date-only Expected Checkin and a note, each '' when not set. */
+/** Bulk checkout's Options: a date-only Expected Checkin and a note, each '' when not set. Temp checkout uses only the
+ *  note; its scans carry the due time as their Expected Checkin. */
 export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
 export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
 const NO_OPTIONS: CheckoutSession = { expectedCheckin: '', note: '' }
 export const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 
+export const NO_SCHOOL_DAY = 'No School day in the next year. Check the School calendar in Settings.'
+type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'exactUsers' | 'userSelectlist' | 'userCard'>
+
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
 // Someone else's Asset opens a choice instead: Move to this User, or Stop.
-export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export const createBulkCheckout = (bridge: CheckoutBridge, events: Events, now = () => new Date(), pace = PACE_MS) =>
+  checkoutFlow('Bulk checkout', bridge, events, now, pace)
+
+// Temp checkout (#61 §7): Bulk checkout's steps, each Checkout due back at the end-of-day time (worked out at each scan
+// from times(), the Settings as they are now), or at the time the Operator changed it to for this User.
+export const createTempCheckout = (bridge: CheckoutBridge, events: Events, times: () => SchoolTimes, now = () => new Date(), pace = PACE_MS) =>
+  checkoutFlow('Temp checkout', bridge, events, now, pace, times)
+
+function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: CheckoutBridge, events: Events, now: () => Date, pace: number, times?: () => SchoolTimes) {
   let step: BulkCheckoutStep = { step: 'user' }
+  // Temp checkout: the due time the Operator set for this User, until Done or another User.
+  let dueSet: string | null = null
+  // Temp checkout: "Temp, due 2:50 pm"; Bulk checkout: "To <User>".
+  const whatFor = (user: UserCard, due: string) => (times ? `Temp, due ${dueLabel(due, now(), true)}` : `To ${user.name}`)
   let options = NO_OPTIONS
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
@@ -426,7 +443,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
-    const what = `To ${user.name}`
+    const what = whatFor(user, expectedCheckin)
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
     // Checked before a choice too: a Move checks out again, so it needs a deployable label and a key that may check out.
     if (a.statusType !== 'deployable') throw new Error(`"${a.assetTag}" is "${a.status}", which can't be checked out`)
@@ -442,7 +459,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     const stillTheirs = (now: Asset) => {
       if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
     }
-    const checkout = () => bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+    // Temp checkout's tag records the due time it sent (#63 §2).
+    const checkout = () => bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote(workflow, { text: note, due: times && expectedCheckin }) })
     if (was) {
       // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
       const from = assigneeName(was)
@@ -451,7 +469,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
         if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
         const mine = session
-        await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }) })
+        await bridge.checkin(a.id, { note: workflowNote(workflow, { move: true }) })
         sameSession(mine)
         // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
         await checkout().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
@@ -465,12 +483,12 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
           if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
           const { expectedCheckin: due } = a
           const mine = session
-          await bridge.checkin(a.id, { note: undoNote('Bulk checkout') })
+          await bridge.checkin(a.id, { note: undoNote(workflow) })
           sameSession(mine)
-          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote('Bulk checkout', due && due.length > 10 ? due : undefined) })
+          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote(workflow, due && due.length > 10 ? due : undefined) })
             .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
         }
-        return { text: 'Checked out', what: `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
+        return { text: 'Checked out', what: times ? `${what}, moved from ${from}` : `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
       }
       return { what, choice: { fix: 'Move to this User', blocked: a.can.checkin ? '' : NOT_ALLOWED, stop: stop!, write: move } }
     }
@@ -482,7 +500,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         stillTheirs(now)
         // A label someone set since the Checkout isn't overwritten with the old one.
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
-        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
+        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote(workflow) })
       }
       return { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }
     }
@@ -490,18 +508,34 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   }, events, now, pace)
 
   function choose(user: UserCard) {
+    dueSet = null
     step = { step: 'scan', user, round: ++round }
     events.changed()
   }
 
+  // Temp checkout: the due time a Checkout made now gets, or null when the School calendar leaves none.
+  const due = () => (times ? dueSet ?? dueAt(now(), times()) : null)
+
   return {
     runner,
+    workflow,
     get step() { return step },
     get options() { return options },
+    /** Temp checkout: the due time a Checkout now gets ("YYYY-MM-DD HH:MM"), or null (none within a year, or Bulk checkout). */
+    get due() { return due() },
+    /** Temp checkout: changes the due time ("YYYY-MM-DD HH:MM") until Done or another User; returns why not ('' when set). */
+    setDue(to: string): string {
+      const [date = '', time = ''] = to.split(' ')
+      if (!realDate(date) || !realTime(time)) return 'Choose a due date and time'
+      if (to <= stamp(now())) return 'That due time has already passed'
+      dueSet = to
+      events.changed()
+      return ''
+    },
     /** Sets the Options for every Checkout from now on; returns why not ('' when set). */
     setOptions(o: CheckoutSession): string {
       try {
-        workflowNote('Bulk checkout', { text: o.note })
+        workflowNote(workflow, { text: o.note })
       } catch (e) {
         return (e as Error).message
       }
@@ -539,7 +573,12 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       if (mine === attempt) choose(user)
       return { status: '' }
     },
-    scan: (raw: string) => (step.step === 'scan' ? runner.scan(raw, { ...options, user: step.user, round: step.round }) : 'Find the User first'),
+    scan(raw: string): string {
+      if (step.step !== 'scan') return 'Find the User first'
+      if (!times) return runner.scan(raw, { ...options, user: step.user, round: step.round })
+      const expectedCheckin = due()
+      return expectedCheckin ? runner.scan(raw, { ...options, expectedCheckin, user: step.user, round: step.round }) : NO_SCHOOL_DAY
+    },
     /** "Checked out N Assets to <User>" for a round's line: its done rows, counted as they land. */
     summary(line: Row<CheckoutCtx>) {
       const n = runner.rows.filter((r) => !r.line && r.ctx.round === line.ctx.round && r.result.state === 'done').length
@@ -552,12 +591,14 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       runner.cancelUndo()
       if (step.step === 'scan') runner.addLine({ ...options, user: step.user, round: step.round })
       step = { step: 'user' }
+      dueSet = null
       events.changed()
     },
     reset() {
       attempt++
       session++
       step = { step: 'user' }
+      dueSet = null
       options = NO_OPTIONS
       runner.reset()
     },
