@@ -3,12 +3,12 @@
 // through the bridge passed in, so the tests drive it with a fake.
 import type { Asset, Assignee, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
 import { undoNote, workflowNote } from '../../main/notes'
-import type { Outcome } from './BatchView'
+import type { Outcome } from './ListView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
 export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 
-/** A Running list row's result: Batch's outcome states, plus waiting its turn in the queue, open in a confirm, put back
+/** A Running list row's result: a Bulk Action's outcome states, plus waiting its turn in the queue, open in a confirm, put back
  *  by Undo last, and neutral (nothing written, nothing wrong: "Already theirs", "Skipped: not confirmed").
  *  Refused and failed are both 'failed'. */
 export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'undone' } | { state: 'neutral'; text: string } | Outcome
@@ -45,7 +45,7 @@ const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'wor
 export const PACE_MS = 1500
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// One Workflow's queue and Running list. Scans queue and run one at a time in order (Batch's eachInTurn, for a list
+// One Workflow's queue and Running list. Scans queue and run one at a time in order (like a Bulk Action's eachInTurn, for a list
 // that keeps growing); a failure doesn't stop the next. In memory only: never saved or exported, like Recent scans.
 // ponytail: one request in flight per Workflow; 2–3 requests per Asset stays well inside Snipe-IT's 120 a minute.
 export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: Act<C>, events: Events, now = () => new Date(), pace = PACE_MS) {

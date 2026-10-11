@@ -249,13 +249,12 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
 .quick-form td { background: var(--side); padding: 14px 28px; white-space: normal; }
-.quick-form .checkout { padding: 0; border: 0; background: none; }
+.quick-form .checkout, .selection .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--bg); border-left: 3px solid var(--green); font-weight: 600; display: inline-block; }
 .pager { justify-content: flex-end; padding: 14px 28px; }
-.batch td { white-space: nowrap; }
-.batch td[role=status] { white-space: normal; width: 100%; }
 .form-grid.bulk-form { padding: 12px 0 4px; }
 .bulk-rows { max-height: 40vh; overflow: auto; margin-top: 8px; }
+.bulk td { white-space: nowrap; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
