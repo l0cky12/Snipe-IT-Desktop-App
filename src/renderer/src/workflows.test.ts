@@ -824,8 +824,8 @@ describe('Bulk checkout', () => {
   })
 
   describe('Undo last', () => {
-    async function checkedOut() {
-      const f = await scanning([ready('NOMMA-1')])
+    async function checkedOut(more: Partial<Asset> = {}) {
+      const f = await scanning([ready('NOMMA-1', more)])
       f.flow.scan('NOMMA-1')
       await opened(f.flow)
       f.flow.runner.confirmOpen()
@@ -860,6 +860,25 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].undoFailed).toBe("NOMMA-1 is 'Deployed' now")
       expect(checkins).toEqual([])
       expect(flow.runner.rows[0].result.state).toBe('done')
+    })
+
+    // Snipe-IT's Checkin moves an Asset sent with no Location to its Default Location (#72), so "no Location" only comes back when it has none.
+    it('refuses for an Asset that had no Location but has a Default Location, since a Checkin would move it there', async () => {
+      const { flow, bridge, checkins } = await checkedOut({ location: '', locationId: null, defaultLocation: 'IT Office' })
+      bridge.assetByTag.mockResolvedValueOnce(now({ defaultLocation: 'IT Office' }))
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; a Checkin would move it to its Default Location, IT Office')
+      expect(checkins).toEqual([])
+    })
+
+    it('checks in with no Location an Asset that had none and has no Default Location', async () => {
+      const { flow, bridge, checkins } = await checkedOut({ location: '', locationId: null, defaultLocation: '' })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(checkins).toEqual([[1, { statusId: 1, locationId: undefined, note: '[Undo] Bulk checkout' }]])
+      expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
   })
 
