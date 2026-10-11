@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ifShowing, opensAt, opensPanel, panelTakesFocus } from './App'
+import { defaultLocationChoice, ifShowing, opensAt, opensPanel, panelTakesFocus } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -71,5 +71,16 @@ describe('the Asset panel when a Bulk Action ends', () => {
     expect(ifShowing(newer, 7, reload)).toBe(newer)
     expect(ifShowing(newer, 7, () => null)).toBe(newer)
     expect(ifShowing(null, 7, reload)).toBeNull()
+  })
+})
+
+describe("the Checkin form's empty Location choice", () => {
+  // Snipe-IT moves an Asset checked in with no Location to its Default Location, or to none.
+  it("names the Asset's Default Location when it has one", () => {
+    expect(defaultLocationChoice('IT Office')).toBe('Default Location (IT Office)')
+  })
+
+  it('says No Location when the Asset has no Default Location', () => {
+    expect(defaultLocationChoice('')).toBe('No Location')
   })
 })

@@ -2,6 +2,9 @@
 // Run: node scripts/mock-snipeit.mjs [port]   then use http://127.0.0.1:<port> and any API token in Settings.
 // For timing, make it bigger and slower like a real server: MOCK_SCALE=20 (240 Assets and 64 Users each),
 // MOCK_LATENCY_MS=150 (every request) and MOCK_ROW_MS=5 (each row a list returns).
+// To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
+// 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
+// 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -10,6 +13,8 @@ const port = Number(process.argv[2] ?? 8765)
 const scale = Number(process.env.MOCK_SCALE ?? 1)
 const latency = Number(process.env.MOCK_LATENCY_MS ?? 0)
 const rowCost = Number(process.env.MOCK_ROW_MS ?? 0)
+const failAll = process.env.MOCK_FAIL
+const retryAfter = process.env.MOCK_RETRY_AFTER ?? '23'
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
@@ -33,6 +38,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
+const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
@@ -46,7 +53,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
+    rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30))) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
@@ -150,6 +159,7 @@ function saveRecord(kind, body, row) {
     if (k === 'groups') { target.groups = groupsOf(v); continue }
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
+    else if (k === 'expected_checkin') target[k] = dueBack(v)
     else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
     else target[k] = v
   }
@@ -206,6 +216,16 @@ const routes = [
 const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
 createServer(async (req, res) => {
+  if (failAll === 'hang') return
+  if (failAll) {
+    const [status, body, headers] = {
+      401: [401, { message: 'Unauthenticated.' }],
+      403: [403, refused],
+      429: [429, { message: 'Too Many Attempts.' }, retryAfter ? { 'Retry-After': retryAfter } : {}],
+      503: [503, { message: 'Service Unavailable' }],
+    }[failAll] ?? [500, { message: `Unknown MOCK_FAIL: ${failAll}` }]
+    return res.writeHead(status, { 'Content-Type': 'application/json', ...headers }).end(JSON.stringify(body))
+  }
   const url = new URL(req.url, 'http://x')
   const path = url.pathname.replace(/^\/api\/v1\//, '')
   const raw = req.method === 'GET' ? '' : await new Promise((ok) => { let s = ''; req.on('data', (c) => (s += c)).on('end', () => ok(s)) })
@@ -285,13 +305,13 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
       const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
       a.assigned_to = { ...target, type: body.checkout_to_type }
       a.status_label = statuses[1]
-      a.expected_checkin = body.expected_checkin ? { date: body.expected_checkin } : null
+      a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)
