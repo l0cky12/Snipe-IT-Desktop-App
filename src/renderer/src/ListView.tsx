@@ -175,11 +175,14 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 // report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel }: {
+export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, onRefreshPanel, onDropPanel }: {
   onNew: (kind: EditKind) => void
   // The Asset panel (Assets only): what it shows, and closing it.
   panel: ListPanel | null
   onClosePanel: () => void
+  // When a Bulk Action ends: reload the panel's Asset, or close the panel after a delete; neither cancels an open still loading.
+  onRefreshPanel: (id: number) => void
+  onDropPanel: (id: number) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
   onBulk: (action: BulkAction, run: BulkRun) => void
@@ -234,7 +237,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     const gone = new Set(mine?.records.filter((r) => r.outcome?.state === 'done').map((r) => r.id))
     if (gone.size) setSelection((s) => ([...gone].some((id) => s.has(id)) ? new Map([...s].filter(([id]) => !gone.has(id))) : s))
     // A deleted Asset can't stay in the Asset panel.
-    if (panel && gone.has(panel.sheet.asset.id)) onClosePanel()
+    if (panel && gone.has(panel.sheet.asset.id)) onDropPanel(panel.sheet.asset.id)
   }, [mine])
   // The List refreshes when its run ends (finished or stopped), and so does the Asset panel if the run included its Asset.
   const running = !!mine?.busy
@@ -243,7 +246,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     if (wasRunning.current && !running) {
       setReloads((n) => n + 1)
       const shown = panel?.sheet.asset.id
-      if (shown !== undefined && !mine?.deletes && mine?.records.some((r) => r.id === shown)) onOpenAsset(shown)
+      if (shown !== undefined && !mine?.deletes && mine?.records.some((r) => r.id === shown)) onRefreshPanel(shown)
     }
     wasRunning.current = running
   }, [running])

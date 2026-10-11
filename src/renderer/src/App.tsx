@@ -52,6 +52,13 @@ export const keyPlace = (target: EventTarget | null): KeyPlace =>
 export const opensAt = <V extends { page: string }>(view: V | null, showSettings: boolean): { docked: true; view: V } | { docked: false; view: null } =>
   !showSettings && view?.page === 'assets' ? { docked: true, view } : { docked: false, view: null }
 
+/** The Asset panel once something done to Asset id ends (a Bulk Action, a delete): changed only while it still shows that Asset,
+ * so an open that landed meanwhile stays. It never touches `latest`, so an open still loading isn't cancelled either. */
+export const ifShowing = <P extends { asset: { id: number } }>(p: P | null, id: number, next: (p: P) => P | null): P | null => (p?.asset.id === id ? next(p) : p)
+
+/** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
+export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
+
 // Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
 const PANEL_KEY = 'scanPanelOpen'
 
@@ -301,7 +308,10 @@ export function App() {
     onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
   })
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
-  const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => (p?.asset.id === a.id ? null : p)), setMessage({ text: `Deleted ${a.assetTag}` }))
+  const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
+  // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
+  const refreshPanel = (id: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }))), (e: Error) => setMessage({ text: e.message, error: true }))
+  const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
@@ -393,7 +403,7 @@ export function App() {
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
-          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))}
+          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet key={opened} {...sheetProps(asset, () => deleted('assets', asset.id, asset.assetTag))} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
@@ -603,7 +613,10 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
   // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
-  useEffect(() => { if (docked && !initialForm) root.current?.focus() }, [])
+  useEffect(() => {
+    const active = document.activeElement
+    if (docked && !initialForm && panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')) root.current?.focus()
+  }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
   // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
   const onKeyDown = (e: React.KeyboardEvent) => {
