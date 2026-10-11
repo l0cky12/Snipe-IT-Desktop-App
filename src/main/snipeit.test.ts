@@ -464,6 +464,49 @@ describe('checkin', () => {
   })
 })
 
+describe("Finding a Workflow's User", () => {
+  const avery = { id: 311, name: 'Avery Testwell', username: 'atestwell', email: 'avery.testwell@example.org', employee_num: '20417', assets_count: 2 }
+  const card = { id: 311, name: 'Avery Testwell', username: 'atestwell', employeeNum: '20417', assets: 2 }
+
+  it('all digits is tried as an exact employee number, then a username', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/users': { body: { total: 1, rows: [avery] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers(' 20417 ')).toEqual([card])
+    expect(calls).toEqual(['/users'])
+    expect(queries[0]).toMatchObject({ employee_num: '20417' })
+  })
+
+  it('text with @ is tried as an exact email, then a username; nothing found is an empty list', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('avery.testwell@example.org')).toEqual([])
+    expect(queries.map((q) => Object.keys(q).filter((k) => k !== 'limit'))).toEqual([['email'], ['username']])
+  })
+
+  it('other text is tried as a username only', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 1, rows: [avery] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('ATestwell')).toEqual([card])
+    expect(queries).toEqual([{ username: 'ATestwell', limit: '2' }])
+  })
+
+  it("keeps only rows whose field really matches, in case a server ignores the filter or matches loosely", async () => {
+    const other = { ...avery, id: 312, employee_num: '204170' }
+    const { fetch } = fakeFetch({ '/users': { body: { total: 2, rows: [other] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('20417')).toEqual([])
+  })
+
+  it("the User picker list is Snipe-IT's selectlist text, Users only", async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/users/selectlist': { body: { results: [{ id: 311, text: 'Testwell, Avery (atestwell) - #20417', image: null }], pagination: { more: false } } } })
+    expect(await createSnipeIt(config, fetch).userSelectlist(' test ')).toEqual([{ id: 311, name: 'Testwell, Avery (atestwell) - #20417' }])
+    expect(calls).toEqual(['/users/selectlist'])
+    expect(queries[0]).toEqual({ search: 'test' })
+    expect(await createSnipeIt(config, fetch).userSelectlist('  ')).toEqual([])
+  })
+
+  it("a picked User's header: name, username, employee number and how many Assets they hold", async () => {
+    const { fetch } = fakeFetch({ '/users/311': { body: { ...avery, employee_num: null } } })
+    expect(await createSnipeIt(config, fetch).userCard(311)).toEqual({ ...card, employeeNum: '' })
+  })
+})
+
 describe('Checkout targets', () => {
   it('searching Users returns each User by id and name, with their username to tell namesakes apart', async () => {
     const users = { total: 1, rows: [{ id: 311, name: 'Jordan Reyes', first_name: 'Jordan', last_name: 'Reyes', username: 'jreyes' }] }

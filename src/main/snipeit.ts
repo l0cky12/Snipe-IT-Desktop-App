@@ -19,6 +19,8 @@ export type Asset = {
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
   location: string
+  /** The Location's id, so an undo can put it back */
+  locationId: number | null
   category: string
   serial: string
   purchaseDate: string | null
@@ -54,6 +56,9 @@ export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?:
 export type StatusLabel = { id: number; name: string }
 
 export type CheckinOptions = { statusId?: number; locationId?: number; note?: string }
+
+/** The User a Workflow's first step found, for its header. assets: how many Assets they hold. */
+export type UserCard = { id: number; name: string; username: string; employeeNum: string; assets: number }
 
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
@@ -413,6 +418,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
+    locationId: raw.location?.id ?? null,
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
@@ -456,7 +462,8 @@ const toImportFile = (r: RawImport): ImportFile => ({
   headers: strings(r.header_row), firstRow: strings(r.first_row),
   mapping: r.field_map && typeof r.field_map === 'object' ? Object.fromEntries(Object.entries(r.field_map).filter(([, f]) => typeof f === 'string')) : {},
 })
-type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
+type RawUser = { id: number; name: string; username: string | null; email: string | null; employee_num?: string | null; department: Named; location: Named; assets_count: number | null }
+const toUserCard = (r: RawUser): UserCard => ({ id: r.id, name: r.name, username: r.username ?? '', employeeNum: r.employee_num ?? '', assets: r.assets_count ?? 0 })
 type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
 type RawModel = { id: number; name: string; model_number: string | null; manufacturer: Named; category: Named; assets_count: number | null; remaining?: number | null }
 
@@ -1121,6 +1128,35 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     searchUsers: (text: string) => searchTargets('users', text),
+
+    // A Workflow's exact User match on Enter (#57): a whole employee number (all digits, e.g. a scanned ID card) or an
+    // email first, then a username. Only rows whose field really is the text count, whatever the server's filter does.
+    async exactUsers(text: string): Promise<UserCard[]> {
+      const q = String(text).trim()
+      if (!q) return []
+      const fields: ('employee_num' | 'email' | 'username')[] = [...(/^\d+$/.test(q) ? ['employee_num' as const] : q.includes('@') ? ['email' as const] : []), 'username']
+      for (const field of fields) {
+        const body = await request<{ rows: RawUser[] }>(`/users?${field}=${encodeURIComponent(q)}&limit=2`)
+        if (isError(body)) throw new Error(reason(body.messages))
+        const rows = body.rows.filter((r) => String(r[field] ?? '').toLowerCase() === q.toLowerCase())
+        if (rows.length) return rows.map(toUserCard)
+      }
+      return []
+    },
+    // Snipe-IT's User picker (Users only): each row's text tells namesakes apart, "name (username) - #employee number".
+    async userSelectlist(text: string): Promise<StatusLabel[]> {
+      const q = String(text).trim()
+      if (!q) return []
+      const body = await request<{ results: { id: number; text: string }[] }>(`/users/selectlist?search=${encodeURIComponent(q)}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.results.map((r) => ({ id: r.id, name: r.text }))
+    },
+    async userCard(id: number): Promise<UserCard> {
+      checkId(id, 'User')
+      const body = await request<RawUser>(`/users/${id}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return toUserCard(body)
+    },
     searchLocations: (text: string) => searchTargets('locations', text),
 
     // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent

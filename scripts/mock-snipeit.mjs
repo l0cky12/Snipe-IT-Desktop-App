@@ -30,7 +30,7 @@ const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
 const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
-  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
+  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), employee_num: String(20400 + i * 7), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
@@ -78,7 +78,8 @@ const lists = {
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
-    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
+    // Like Snipe-IT, username, email and employee_num are exact matches.
+    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v, username: (u, v) => u.username === v, email: (u, v) => u.email === v, employee_num: (u, v) => u.employee_num === v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
   models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model.id === m.id).length, remaining: assets.filter((a) => a.model.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
@@ -193,7 +194,7 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
@@ -251,6 +252,12 @@ createServer(async (req, res) => {
     const column = head.findIndex((h) => body['column-mappings']?.[h] === required || h.toLowerCase() === required)
     const errors = Object.fromEntries(rows.flatMap((r, n) => (column >= 0 && r[column] ? [] : [[r.find(Boolean) ?? `Row ${n + 2}`, { [required]: { [required]: [`The ${required.replace(/_/g, ' ')} field is required.`] } }]])))
     return Object.keys(errors).length ? send({ status: 'import-errors', messages: errors, payload: null }, 500) : send({ status: 'success', messages: { redirect_url: '' }, payload: null })
+  }
+  // Snipe-IT's User picker: "Last, First (username) - #employee number", Users only.
+  if (path === 'users/selectlist') {
+    const q = (url.searchParams.get('search') ?? '').toLowerCase()
+    const found = users.filter((u) => text(u.name, u.username, u.email, u.employee_num).includes(q)).slice(0, 50)
+    return send({ results: found.map((u) => ({ id: u.id, text: `${u.name.split(' ').reverse().join(', ')} (${u.username}) - #${u.employee_num}`, image: null })), pagination: { more: false } })
   }
   if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
   if (path === 'hardware/labels') {
