@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
-import { listName } from './ListView'
+import { choices as filterChoices, listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, AUDIT_REPORTS, itemTypeName, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
-// What the date range bounds in each report; Damaged is a snapshot with no filters.
-const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited' }
+// What the date range bounds in each report; a snapshot Report has none.
+const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life' }
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
@@ -106,7 +106,7 @@ function ScheduleForm({ report, schedule, name, onDone }: { report: ScheduleKey;
       </div>
       {s.every === 'month' && s.day! > 28 && <span className="dim">In a shorter month it sends on the month's last day.</span>}
       {'builtIn' in report && report.builtIn === 'activity' && <span className="dim">It sends every record type and action.</span>}
-      {'builtIn' in report && AUDIT_REPORTS.includes(report.builtIn) && <span className="dim">It sends every Location and Category.</span>}
+      {'builtIn' in report && LOCATION_CATEGORY_REPORTS.includes(report.builtIn) && <span className="dim">It sends every Location and Category.</span>}
       <div className="actions">
         <button disabled={busy}>Save schedule</button>
         {schedule && <button type="button" className="quiet danger" disabled={busy} onClick={() => save(null)}>Stop schedule</button>}
@@ -135,6 +135,11 @@ function EmailNow({ report, name, onDone }: { report: ReportRef; name: string; o
 }
 
 // Runs when asked (a report can page through a lot), not on every change of a filter. A Saved Report opens as its List.
+// A Location or Category picker's options: names shared by two choices (two buildings' "Room 101") get their ids, as in the list filters.
+export function pickerOptions(label: string, list: StatusLabel[] = []) {
+  return filterChoices({ label, options: list.map((l) => ({ value: String(l.id), label: l.name })) })
+}
+
 export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport) => void }) {
   const [kind, setKind] = useState<ReportKind>('activity')
   const [query, setQuery] = useState<ReportQuery>({})
@@ -155,7 +160,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   const scheduleOf = (r: ScheduleKey) => schedules.find((s) => keyOf(s.report) === keyOf(r))?.schedule
   // Whether the chosen report narrows to a Location and a Category, and their choices, loaded the first time one is chosen;
   // a list that doesn't load just leaves fewer choices.
-  const placeFilters = AUDIT_REPORTS.includes(kind)
+  const placeFilters = LOCATION_CATEGORY_REPORTS.includes(kind)
   const [choices, setChoices] = useState<{ locations: StatusLabel[]; categories: StatusLabel[] } | null>(null)
   useEffect(() => {
     if (!placeFilters || choices) return
@@ -163,10 +168,9 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     window.snipeIt.locations().then((locations) => setChoices((c) => ({ categories: [], ...c, locations })), () => {})
     window.snipeIt.names('categories').then((categories) => setChoices((c) => ({ locations: [], ...c, categories })), () => {})
   }, [placeFilters, choices])
-  // The filters the chosen report has: only the Activity Report narrows by record type and action, only the audit Reports by Location and Category.
-  const dated = !!rangeName[kind]
+  // The filters the chosen report has: only the Activity Report narrows by record type and action, only LOCATION_CATEGORY_REPORTS by Location and Category.
   const sent: ReportQuery = {
-    ...(dated && { from: query.from, to: query.to }),
+    ...(rangeName[kind] && { from: query.from, to: query.to }),
     ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
     ...(placeFilters && { locationId: query.locationId, categoryId: query.categoryId }),
   }
@@ -205,7 +209,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     <>
       <header className="head">
         <h1>Reports</h1>
-        <span className="dim mono">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
+        <span className="dim">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
           <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
           <EmailNow report={{ builtIn: kind, query: sent }} name={REPORT_NAMES[kind]} onDone={setNotice} />
@@ -214,7 +218,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
           <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), stale())} aria-label="Report">
             {(Object.keys(REPORT_NAMES) as ReportKind[]).map((k) => <option key={k} value={k}>{REPORT_NAMES[k]}</option>)}
           </select>
-          {dated && (
+          {rangeName[kind] && (
             <>
               <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
               <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
@@ -236,11 +240,11 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
             <>
               <select value={query.locationId ?? ''} onChange={(e) => set({ locationId: e.target.value })} aria-label="Location">
                 <option value="">Any Location</option>
-                {choices?.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {pickerOptions('Any Location', choices?.locations).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
               <select value={query.categoryId ?? ''} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
                 <option value="">Any Category</option>
-                {choices?.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {pickerOptions('Any Category', choices?.categories).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </>
           )}

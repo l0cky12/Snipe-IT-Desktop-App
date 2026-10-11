@@ -18,17 +18,24 @@ export type Asset = {
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
   location: string
+  /** Where Snipe-IT puts the Asset on a Checkin with no Location (its rtd_location); '' when it has none */
+  defaultLocation: string
   category: string
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
   /** The date of the Asset's last Audit, or null when it has never been Audited */
   lastAudited: string | null
   /** The date Snipe-IT expects its next Audit, or null when it has none */
   nextAudit: string | null
-  /** Days past the Expected Checkin, or null when not Overdue */
-  overdueDays: number | null
+  /** Its End of life date, or null when Snipe-IT has none */
+  endOfLife: string | null
+  /** What it cost, as a plain number ("1234.56"), or null when Snipe-IT has none */
+  purchaseCost: string | null
+  /** How late, or null when not Overdue */
+  overdue: Lateness | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
   /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
@@ -59,6 +66,16 @@ export type CheckinOptions = { statusId?: number; locationId?: number; note?: st
 
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
+
+/**
+ * How late an Overdue Asset is: whole days past its Expected Checkin's date (0 on the due day, once its time of day has
+ * passed), and minutes past the moment it became Overdue, which lists sort by.
+ */
+export type Lateness = { days: number; minutes: number }
+
+/** How late, for display: "40 min" or "2 h" on the due day, "3d" after it. */
+export const lateness = ({ days, minutes }: Lateness) =>
+  days ? `${days}d` : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
 
 /** Checkout targets are Users and Locations only; Asset-to-Asset isn't supported. expectedCheckin is "YYYY-MM-DD". */
 export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
@@ -152,31 +169,34 @@ export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
     assets: AssetSegment[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
-    overdue: (AssetSummary & { overdueDays: number })[]
+    overdue: (AssetSummary & { expectedCheckin: string; overdue: Lateness })[]
     expiring: (AssetSummary & { daysLeft: number })[]
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, and Damaged. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'damaged'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, and Damaged. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'damaged'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
-  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', damaged: 'Damaged',
+  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
+  statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', damaged: 'Damaged',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
 /** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
 export const takesRange = (report: unknown) =>
   !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
-/** The Reports narrowed to a Location and a Category. */
+/** The audit Reports, which ask Snipe-IT for its audit dates. */
 export const AUDIT_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited']
+/** The Reports narrowed to a Location and a Category. */
+export const LOCATION_CATEGORY_REPORTS: readonly ReportKind[] = [...AUDIT_REPORTS, 'endOfLife', 'statusLocation', 'checkedOut']
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ * end, next audit, last audit, End of life). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS.
  */
 export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
@@ -250,6 +270,28 @@ export type ImportFile = { id: number; name: string; size: string; uploaded: str
 /** Imported, or Snipe-IT's errors for each row that failed, keyed by the row's name, exactly as Snipe-IT sent them. */
 export type ImportResult = { ok: true } | { ok: false; errors: Record<string, unknown> }
 
+/**
+ * What kind of failure a call hit, so the window can tell one every following request would hit too (Snipe-IT
+ * unreachable or too slow, the API key rejected, a refusal, or a request limit) from one about this request alone (refused).
+ */
+export type FailureKind = 'unreachable' | 'timeout' | 'key' | 'forbidden' | 'rateLimited' | 'refused'
+/**
+ * A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait.
+ * A plain object, not an Error: the bridge to the window copies an Error's message only, but an object's every field.
+ */
+export type Failure = { message: string; kind: FailureKind; retryAfter?: number }
+
+// Electron passes only an error's message from the main process, so it writes the kind into it ("[rateLimited 23] …")
+// and the preload reads it back out. An error with no kind is about this request alone.
+export function toWire(e: unknown): Error {
+  const { kind = 'refused', retryAfter } = e as Partial<Failure>
+  return new Error(`[${kind}${retryAfter === undefined ? '' : ` ${retryAfter}`}] ${e instanceof Error ? e.message : String(e)}`)
+}
+export function fromWire(message: string): Failure {
+  const [, kind = 'refused', seconds, text = message] = /^\[(\w+)(?: (\d+))?\] ([\s\S]*)$/.exec(message) ?? []
+  return { message: text, kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) }
+}
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 /** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
@@ -262,16 +304,23 @@ type RawAsset = {
   name: string | null
   serial: string | null
   model: Named
-  status_label: { id: number; name: string; status_meta: string } | null
+  status_label: { id: number; name: string; status_type?: string; status_meta: string } | null
   category: Named
   location: Named
-  assigned_to: { id: number; name: string; type: Assignee['type'] } | null
+  rtd_location: Named
+  // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
+  assigned_to: { id: number; name: string; type: Assignee['type']; employee_number?: string | null } | null
+  last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
-  expected_checkin: { date: string } | null
+  // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
+  expected_checkin: { date?: string; datetime?: string } | null
   // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
   last_audit_date?: { date?: string; datetime?: string } | null
   next_audit_date?: { date?: string; datetime?: string } | null
+  asset_eol_date?: { date: string } | null
+  // Formatted text, e.g. "1,234.56"; null when none.
+  purchase_cost?: string | number | null
   available_actions?: unknown
 }
 // Snipe-IT v8.6+ names a Maintenance's type in maintenance_type; earlier versions kept it in asset_maintenance_type.
@@ -294,6 +343,8 @@ type RawActivity = {
 }
 
 const EXPIRING_DAYS = 90
+// End of life is a buying horizon, so its Report looks a year ahead.
+const END_OF_LIFE_DAYS = 365
 // Rows per List page.
 export const LIST_PAGE = 50
 // Kinds counted by quantity: their list, and the fields for the whole quantity and the available part. Used is the rest.
@@ -401,13 +452,31 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
 export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
   ({ id, assetTag, name, status, statusMeta, assignee, can })
 
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day.
+// ponytail: 00:00 means date-only, so a real midnight due time is Overdue only from the next day; no Workflow sets one.
+function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
+  const when = v?.datetime ?? v?.date
+  if (!when) return null
+  const time = when.slice(11, 16)
+  return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
+}
+
+// How late an Expected Checkin is, or null until it has passed: its time of day when it has one, else the last moment of its date.
+// A started minute counts as 1, so an Asset just past due reads "1 min", never "0 min".
+function overdueOf(now: Date, due: string): Lateness | null {
+  const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
+  const at = due.length > 10 ? new Date(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d + 1, 0, 0, 0, -1)
+  const ms = now.getTime() - at.getTime()
+  if (ms <= 0) return null
+  return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.max(1, Math.floor(ms / 6e4)) } // || 0: not -0
+}
+
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
 
 function toAsset(raw: RawAsset, today: Date): Asset {
-  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
-  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
   const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
@@ -420,6 +489,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
+    defaultLocation: raw.rtd_location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
@@ -427,7 +497,9 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     expectedCheckin,
     lastAudited: dayOf(raw.last_audit_date),
     nextAudit: dayOf(raw.next_audit_date),
-    overdueDays: overdue > 0 ? overdue : null,
+    endOfLife: raw.asset_eol_date?.date ?? null,
+    purchaseCost: plainNumber(raw.purchase_cost) || null,
+    overdue: expectedCheckin && raw.assigned_to ? overdueOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
@@ -471,7 +543,7 @@ type RawModel = { id: number; name: string; model_number: string | null; manufac
 
 // Which row fields each List can sort by, and Snipe-IT's name for that sort. The screen offers only these.
 export const LIST_SORTS = {
-  assets: { assetTag: 'asset_tag', name: 'name', status: 'status', model: 'model', category: 'category', location: 'location', assignee: 'assigned_to', serial: 'serial', expectedCheckin: 'expected_checkin', purchaseDate: 'purchase_date' },
+  assets: { assetTag: 'asset_tag', name: 'name', status: 'status', model: 'model', category: 'category', location: 'location', assignee: 'assigned_to', serial: 'serial', expectedCheckin: 'expected_checkin', purchaseDate: 'purchase_date', purchaseCost: 'purchase_cost', endOfLife: 'asset_eol_date' },
   users: { name: 'last_name', username: 'username', email: 'email', department: 'department', location: 'location', assets: 'assets_count' },
   locations: { name: 'name', parent: 'parent', city: 'city', assets: 'assets_count', checkedOut: 'assigned_assets_count', users: 'users_count' },
   models: { name: 'name', modelNumber: 'model_number', manufacturer: 'manufacturer', category: 'category', assets: 'assets_count', available: 'remaining' },
@@ -592,14 +664,20 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
-// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+// Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
+// Assumes 1,234.56, not 1.234,56.
+const plainNumber = (v: unknown) => (v === null || v === undefined ? '' : String(v).replace(/[^\d.-]/g, ''))
+
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
-  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
-  // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
+  if (typeof v === 'object') {
+    const o = v as { id?: unknown; date?: unknown; datetime?: unknown }
+    return String(o.id ?? o.date ?? (typeof o.datetime === 'string' ? o.datetime.slice(0, 10) : ''))
+  }
   // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
-  if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
+  if (f.type === 'number') return plainNumber(v)
   return f.type === 'textarea' ? markdownOf(String(v)) : String(v)
 }
 
@@ -648,11 +726,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
+  // Each thrown Error carries its FailureKind, and an HTTP error its status.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+    const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
+    const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
-      ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
-      : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+      ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
+      : unreachable()
     const send = async () => {
       try {
         return await fetch(api + path, {
@@ -673,8 +754,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       await new Promise((done) => setTimeout(done, Math.min(Number.isNaN(wait) ? 5 : wait, 60) * 1000))
       res = await send()
     }
+    // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
-      throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
+      throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
+    // Still over Snipe-IT's requests a minute after those tries. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    if (res.status === 429) {
+      const header = res.headers.get('Retry-After')?.trim() ?? ''
+      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
+    }
+    // The proxy in front of Snipe-IT can't reach it.
+    if ([502, 503, 504].includes(res.status)) throw unreachable({ status: res.status })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     // The timeout covers the body too: a slow server can stall after the headers.
     try {
@@ -694,9 +784,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // An Import with rows that failed answers 500 with each row's errors; processImport, the only caller it reaches, reads them.
     if ((body as { status?: unknown } | undefined)?.status === 'import-errors') return body as T
     if (!res.ok) {
-      const failure = body as { messages?: unknown; message?: unknown } | undefined
-      const snipeItReason = reason(failure?.messages ?? failure?.message)
-      throw Object.assign(new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`), { status: res.status })
+      const answer = body as { messages?: unknown; message?: unknown } | undefined
+      const snipeItReason = reason(answer?.messages ?? answer?.message)
+      throw failure(res.status === 403 ? 'forbidden' : 'refused', `Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`, { status: res.status })
     }
     if (body === undefined)
       throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
@@ -807,8 +897,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return true
     } catch (e) {
-      // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
-      if (/HTTP 403\b/.test((e as Error).message)) return false
+      // A refusal is the answer; anything else (offline…) is an error.
+      if ((e as Partial<Failure>).kind === 'forbidden') return false
       throw e
     }
   }
@@ -947,7 +1037,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
-    // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited is every Asset.
+    // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited and End of life read every Asset.
     async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
@@ -978,11 +1068,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const now = today()
-      if (AUDIT_REPORTS.includes(kind)) {
-        const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
+      const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
+      const inPlace = (path: string) => (params.size ? `${path}?${params}` : path)
+      if (AUDIT_REPORTS.includes(kind) || kind === 'endOfLife') {
         const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
         // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
-        const assets = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+        const assets = (await allRows<RawAsset>(inPlace(path))).map((r) => toAsset(r, now))
+        if (kind === 'endOfLife')
+          return {
+            columns: ['Asset Tag', 'Name', 'Asset Model', 'Status Label', 'Assignee', 'Location', 'Purchase date', 'End of life', 'Days left'],
+            // Snipe-IT may list Archived Assets (its "show archived" setting). Oldest first puts the past ones first, then the soonest.
+            rows: assets.filter((a) => a.endOfLife && a.statusMeta !== 'archived' && inRange(a.endOfLife) && daysFrom(now, a.endOfLife) <= END_OF_LIFE_DAYS)
+              .sort((x, y) => x.endOfLife!.localeCompare(y.endOfLife!))
+              .map((a) => [a.assetTag, a.name, a.model, a.status, a.assignee?.name ?? '', a.location, a.purchaseDate ?? '', a.endOfLife!, String(daysFrom(now, a.endOfLife!))]),
+            capped: false,
+          }
         // Every audit Report starts with these columns; the to-do ones add the Assignee before the audit dates.
         const assetColumns = ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location']
         const assetCells = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
@@ -1004,13 +1104,48 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           capped: false,
         }
       }
+      if (kind === 'statusLocation') {
+        // One row per Location and Status Label pair. Archived Assets are left out, as Snipe-IT's own listing leaves them out by default.
+        const pairs = new Map<string, { location: string; status: string; type: string; assets: number; cost: number }>()
+        for (const r of await allRows<RawAsset>(inPlace('/hardware'))) {
+          const type = r.status_label?.status_type ?? ''
+          if (type === 'archived') continue
+          const location = r.location?.name || '(no Location)'
+          const status = r.status_label?.name ?? ''
+          // By id, so two Locations with the same name stay apart.
+          const key = `${r.location?.id ?? ''}:${r.status_label?.id ?? ''}`
+          const pair = pairs.get(key) ?? pairs.set(key, { location, status, type, assets: 0, cost: 0 }).get(key)!
+          pair.assets++
+          // In cents, so the total doesn't drift; a blank or unreadable cost adds nothing.
+          pair.cost += Math.round(Number(plainNumber(r.purchase_cost ?? '')) * 100) || 0
+        }
+        return {
+          columns: ['Location', 'Status Label', 'Status type', 'Assets', 'Purchase cost (total)'],
+          rows: [...pairs.values()].sort((a, b) => a.location.localeCompare(b.location) || b.assets - a.assets || a.status.localeCompare(b.status))
+            .map((p) => [p.location, p.status, p.type, String(p.assets), (p.cost / 100).toFixed(2)]),
+          capped: false,
+        }
+      }
+      if (kind === 'checkedOut') {
+        // Who holds what: Assets checked out to a Location are left out.
+        const held = (await allRows<RawAsset>(inPlace('/hardware'))).filter((r) => r.assigned_to?.type === 'user')
+        const byTag = (a: RawAsset, b: RawAsset) => a.asset_tag.localeCompare(b.asset_tag, undefined, { numeric: true })
+        return {
+          columns: ['User', 'Employee No.', 'Asset Tag', 'Name', 'Asset Model', 'Category', 'Checked out', 'Expected Checkin'],
+          rows: held.sort((a, b) => a.assigned_to!.name.localeCompare(b.assigned_to!.name) || a.assigned_to!.id - b.assigned_to!.id || byTag(a, b)).map((r) => {
+            const a = toAsset(r, now)
+            return [r.assigned_to!.name, r.assigned_to!.employee_number ?? '', a.assetTag, a.name, a.model, a.category, dayOf(r.last_checkout) ?? '', a.expectedCheckin ?? '']
+          }),
+          capped: false,
+        }
+      }
       if (kind === 'damaged') return damaged(now)
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {
-          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
-            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
+          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],
+          rows: assets.filter((a) => a.overdue !== null && inRange(a.expectedCheckin!.slice(0, 10))).sort((a, b) => b.overdue!.minutes - a.overdue!.minutes)
+            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, lateness(a.overdue!)]),
           capped: false,
         }
       return {
@@ -1263,8 +1398,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           return [...segments.values()].sort((a, b) => b.count - a.count)
         }),
         entry('overdue', async () => (await assets!)
-          .flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
-          .sort((a, b) => b.overdueDays - a.overdueDays)),
+          .flatMap((a) => (a.overdue === null ? [] : [{ ...toSummary(a), expectedCheckin: a.expectedCheckin!, overdue: a.overdue }]))
+          .sort((a, b) => b.overdue.minutes - a.overdue.minutes)),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),

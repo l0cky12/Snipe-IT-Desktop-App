@@ -16,7 +16,7 @@ const COST = /^\d+(\.\d{1,2})?$/
 /** One line of free text as Snipe-IT will show it: no markup characters, no links. Throws with a message on a link. */
 export function cleanText(s: string): string {
   // Snipe-IT turns a link into an anchor, and strips <…>; the rest is Markdown.
-  // Checked after cleaning: dropping a character can join a link back together (https*://).
+  // Checked after cleaning, so `http\://` or `https*://` can't turn into a link once the markup goes.
   const t = s.replace(/[<>*_`~\\[\]|]/g, '').replace(/\s+/g, ' ').trim()
   if (/https?:\/\//i.test(t)) throw new Error('Notes can’t contain links (http:// or https://).')
   return t
@@ -60,7 +60,8 @@ export const userNotesLine = (date: string, assetTag: string, text: string, oper
 const loosely = (list: readonly string[]) => list.map((w) => w.replace(/ /g, '\\s+')).join('|')
 const NAME = loosely(WORKFLOWS)
 const TAG = new RegExp(`^\\[\\s*(${NAME})\\s*((?:\\|[^|\\]]*)*)\\]\\s*(.*)$`, 'is')
-const UNDO = new RegExp(`^\\[\\s*undo\\s*\\]\\s*(${NAME})\\s*(.*)$`, 'is')
+// The name must end there: `[Undo] Bulk checkouts` isn't an undo of Bulk checkout.
+const UNDO = new RegExp(`^\\[\\s*undo\\s*\\]\\s*(${NAME})(?=[\\s[]|$)\\s*(.*)$`, 'is')
 const APP = new RegExp(`^\\[\\s*(${loosely(APP_TAGS)})\\s*\\]\\s*(.*)$`, 'is')
 const canon = <T extends string>(list: readonly T[], s: string) => list.find((w) => w.toLowerCase() === s.toLowerCase().replace(/\s+/g, ' '))!
 
