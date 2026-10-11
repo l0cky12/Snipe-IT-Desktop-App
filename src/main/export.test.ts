@@ -13,7 +13,7 @@ describe('CSV export', () => {
 })
 
 describe('Export CSV', () => {
-  const can = { checkout: true, checkin: true, update: true, delete: true }
+  const can = { checkout: true, checkin: true, update: true, delete: true, audit: true }
   const asset = {
     id: 1, assetTag: 'NOMMA-1', name: 'CB-01', model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed',
     assignee: { type: 'user' as const, id: 311, name: 'Jordan Reyes' }, checkoutAllowed: false, location: 'Library', category: 'Chromebook',

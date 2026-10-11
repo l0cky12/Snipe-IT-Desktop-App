@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultLocationChoice, ifShowing, opensAt, opensPanel, panelTakesFocus } from './App'
+import { auditedLine, auditedResult, defaultLocationChoice, ifShowing, opensAt, opensPanel, panelTakesFocus } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -82,5 +82,19 @@ describe("the Checkin form's empty Location choice", () => {
 
   it('says No Location when the Asset has no Default Location', () => {
     expect(defaultLocationChoice('')).toBe('No Location')
+  })
+})
+
+describe('what an Audit says it did', () => {
+  it('gives the next audit date and the one it was, so a mistake can be put back', () => {
+    expect(auditedLine({ was: '2026-10-01', next: '2027-10-10' })).toBe('Audited. Next audit 2027-10-10 (was 2026-10-01)')
+    expect(auditedLine({ was: null, next: '2027-10-10' })).toBe('Audited. Next audit 2027-10-10 (had none)')
+    expect(auditedResult({ was: '2026-10-01', next: '2027-10-10' })).toBe('Audited, next 2027-10-10, was 2026-10-01')
+  })
+
+  it('warns when Snipe-IT sent back no next audit date, because it has no audit interval set', () => {
+    const warning = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+    expect(auditedLine({ was: '2026-10-01', next: null })).toBe(warning)
+    expect(auditedResult({ was: '2026-10-01', next: null })).toBe(warning)
   })
 })

@@ -18,6 +18,12 @@ describe('batch', () => {
     ])
   })
 
+  it("a run whose work answers with its own text (an Audit's dates) reports that instead of the run's", async () => {
+    const reports: [number, Outcome][] = []
+    await eachInTurn([1], async () => 'Audited, next 2027-10-10, was 2026-10-01', 'Audited', (id, o) => reports.push([id, o]))
+    expect(reports[1]).toEqual([1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }])
+  })
+
   it('stops before the next Asset once told to, e.g. when Settings point at another server', async () => {
     const asked: number[] = []
     let stopped = false

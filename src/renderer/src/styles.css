@@ -104,6 +104,9 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* Lucide's icons as masks, so the edge color fills them. */
 .list-message::before, .settings-success::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 .notice::before, .ferpa::before { -webkit-mask-image: url(./icons/info.svg); }
+/* A done line, like an Audit's: the notice in green, with a check. */
+.notice.said { --edge: var(--green); }
+.notice.said::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 
 /* Sheet: page header, then content. */
 .sheet { overflow: auto; }
@@ -379,3 +382,7 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .saved-reports .history td { vertical-align: middle; }
 /* A Report's schedule and last send, or the form changing it. */
 .schedule { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; white-space: normal; }
+/* Audit…'s form, in the Asset sheet or over a Selection. */
+.list-panel > .audit { padding: 8px 16px; }
+.audit > p { margin: 6px 0 0; font-size: 12px; }
+.audit label input { margin-left: 6px; }

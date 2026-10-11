@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { cleanText } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -35,6 +36,13 @@ export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
+
+// What an Audit did: the next audit date it moved to and from, or Snipe-IT's missing audit interval, which leaves none.
+const NO_INTERVAL = 'Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+/** The Asset sheet's line after an Audit. */
+export const auditedLine = ({ was, next }: Audited) => (next ? `Audited. Next audit ${next} (${was ? `was ${was}` : 'had none'})` : `Audited. ${NO_INTERVAL}`)
+/** One Asset's result in the Audit Bulk Action. */
+export const auditedResult = ({ was, next }: Audited) => (next ? `Audited, next ${next}, ${was ? `was ${was}` : 'had none'}` : `Audited. ${NO_INTERVAL}`)
 
 // Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
@@ -113,6 +121,8 @@ export function App() {
   const [opened, setOpened] = useState(0)
   // The Asset docked in the Asset panel on the Assets List, the form a Quick Action opened in it, and n, bumped on every open so it starts fresh.
   const [panel, setPanel] = useState<Panel | null>(null)
+  // What the last Audit of the Asset shown did, for the sheet's line; cleared by the next open.
+  const [audited, setAudited] = useState<{ id: number; result: Audited } | null>(null)
   // Set when an open docks in the Asset panel, which then takes focus instead of the Scan box.
   const docking = useRef(false)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
@@ -196,6 +206,7 @@ export function App() {
       setOpened((n) => n + 1)
     }
     setMessage({ text: '' })
+    setAudited(null)
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
   }
 
@@ -250,17 +261,20 @@ export function App() {
   }
 
   // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
-  const act = (id: number, done: string, work: Promise<void>) =>
+  // after: what to do with the action's answer once the refreshed Asset shows.
+  const act = <T,>(id: number, done: string, work: Promise<T>, after?: (result: T) => void) =>
     run(async (isStale) => {
-      await work
+      const result = await work
       // Don't let a failed refresh read as a failed action; retrying would only be refused.
       await open(id, isStale).catch((e: Error) => {
         throw new Error(`${done}, but couldn't refresh the Asset: ${e.message}`)
       })
+      if (!isStale()) after?.(result)
     })
   const checkin = (id: number, options: CheckinOptions) => act(id, 'Checked in', window.snipeIt.checkin(id, options))
   const checkout = (id: number, options: CheckoutOptions) => act(id, 'Checked out', window.snipeIt.checkout(id, options))
   const changeStatus = (id: number, statusId: number) => act(id, 'Changed the status', window.snipeIt.updateStatus(id, statusId))
+  const audit = (id: number, options: AuditOptions) => act(id, 'Audited', window.snipeIt.audit(id, options), (result) => setAudited({ id, result }))
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -305,7 +319,8 @@ export function App() {
   // What the Asset sheet needs for one Asset; the full sheet and the Asset panel get the same, so the two act alike.
   const sheetProps = (a: AssetWithHistory, onDeleted: () => void): SheetProps => ({
     asset: a, baseUrl: settings?.baseUrl ?? '', defaultLocation: settings?.defaultLocation ?? null, locations, statusLabels,
-    onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
+    audited: audited?.id === a.id ? audited.result : undefined,
+    onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onAudit: audit, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
   })
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
@@ -590,8 +605,46 @@ export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; s
   )
 }
 
+// Audit…'s form, in the Asset sheet or for a Selection (count): Next audit, left blank for Snipe-IT's audit interval, and an
+// optional one-line note. It is the confirmation: Enter or Audit sends it, Esc cancels. A note with a link is refused here.
+export function AuditForm({ count, onAudit, onCancel }: { count?: number; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void }) {
+  const [nextAudit, setNextAudit] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      cleanText(note)
+    } catch (err) {
+      return setError((err as Error).message)
+    }
+    setError('')
+    setBusy(true)
+    await onAudit({ ...(nextAudit && { nextAudit }), ...(note.trim() && { note }) })
+    setBusy(false)
+  }
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    onCancel()
+  }
+  return (
+    <form className="audit" onSubmit={onSubmit} onKeyDown={onKeyDown} aria-label={count === undefined ? 'Audit' : 'Audit the Selection'}>
+      <div className="actions">
+        <label className="dim">Next audit <input autoFocus type="date" value={nextAudit} onChange={(e) => setNextAudit(e.target.value)} title="Left blank, Snipe-IT's audit interval sets it" /></label>
+        <input value={note} onChange={(e) => (setNote(e.target.value), setError(''))} placeholder="Note (optional)" aria-label="Audit note" />
+        <button disabled={busy}>{busy ? 'Auditing…' : count === undefined ? 'Audit' : `Audit ${count.toLocaleString()} ${count === 1 ? 'Asset' : 'Assets'}`}</button>
+        <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
+      </div>
+      <p className="dim">{nextAudit ? `Next audit ${nextAudit}.` : "Next audit left blank: Snipe-IT's audit interval sets it."} Records an Audit in History; it can't be undone.</p>
+      {error && <p className="message error" role="alert">{error}</p>}
+    </form>
+  )
+}
+
 /** The forms the Asset sheet opens under its header; a Quick Action opens one in the Asset panel. */
-export type SheetForm = 'checkin' | 'checkout' | 'status'
+export type SheetForm = 'checkin' | 'checkout' | 'status' | 'audit'
 /** What the Asset sheet needs; App builds it, so the full sheet and the Asset panel act the same way. */
 export type SheetProps = {
   asset: AssetWithHistory
@@ -602,6 +655,9 @@ export type SheetProps = {
   onCheckin: (id: number, o: CheckinOptions) => Promise<void>
   onCheckout: (id: number, o: CheckoutOptions) => Promise<void>
   onStatus: (id: number, statusId: number) => Promise<void>
+  onAudit: (id: number, o: AuditOptions) => Promise<void>
+  /** What the last Audit of this Asset did, shown as a line until the next open. */
+  audited?: Audited
   onOpenRecord: (kind: RecordKind, id: number) => void
   onOpenAsset: (id: number) => void
   onEdit: () => void
@@ -612,7 +668,7 @@ export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void;
 
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
-export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
+export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
   // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
@@ -664,6 +720,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
           <button className={checkinReason(a) ? 'quiet' : undefined} disabled={!!checkinReason(a)} title={checkinReason(a)} aria-expanded={form === 'checkin'} onClick={() => toggle('checkin')}>Checkin</button>
           <button className={canCheckout ? undefined : 'quiet'} disabled={!canCheckout} title={checkoutReason(a)} aria-expanded={form === 'checkout'} onClick={() => toggle('checkout')}>Checkout…</button>
           <button className={`quiet${form === 'status' ? ' on' : ''}`} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED} aria-expanded={form === 'status'} onClick={() => toggle('status')}>Status</button>
+          {a.can.audit && <button className={`quiet${form === 'audit' ? ' on' : ''}`} aria-expanded={form === 'audit'} onClick={() => toggle('audit')}>Audit…</button>}
           <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
           <PrintLabel baseUrl={baseUrl} assets={[a]} />
           <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
@@ -671,11 +728,13 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
         </div>
       </header>
       {docked?.notInView && <p className="notice">Not in this View</p>}
+      {audited && <p className={`notice${audited.next ? ' said' : ''}`} role="status">{auditedLine(audited)}</p>}
       {form && (
         <div className="sheet-form">
           {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />}
           {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
           {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} />}
+          {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} />}
         </div>
       )}
       <div className="grid">
