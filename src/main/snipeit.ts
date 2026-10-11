@@ -174,13 +174,13 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances and Temp checkout history. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history and Damaged. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
   statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', maintenances: 'Maintenances',
-  tempHistory: 'Temp checkout history',
+  tempHistory: 'Temp checkout history', damaged: 'Damaged',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory']
@@ -337,7 +337,7 @@ type RawActivity = {
 }
 type RawMaintenance = {
   id: number
-  asset: { name: string | null; asset_tag: string } | null
+  asset: { id: number; name: string | null; asset_tag: string } | null
   // Snipe-IT v8 renamed `title` to `name` and still sends both.
   title: string | null
   // v8.6+ sends the type as maintenance_type (and asset_maintenance_type empty); earlier versions only asset_maintenance_type.
@@ -747,24 +747,36 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
       ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
       : unreachable()
-    let res: Response, text: string
-    try {
-      res = await fetch(api + path, {
-        signal: AbortSignal.timeout(timeout),
-        redirect: 'error',
-        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && !(post instanceof FormData) && { 'Content-Type': 'application/json' }) },
-        ...(post && { method, body: post instanceof FormData ? post : JSON.stringify(post) }),
-      })
-    } catch (e) {
-      throw failed(e)
+    const send = async () => {
+      try {
+        return await fetch(api + path, {
+          signal: AbortSignal.timeout(timeout),
+          redirect: 'error',
+          headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json', ...(post && !(post instanceof FormData) && { 'Content-Type': 'application/json' }) },
+          ...(post && { method, body: post instanceof FormData ? post : JSON.stringify(post) }),
+        })
+      } catch (e) {
+        throw failed(e)
+      }
+    }
+    let res = await send(), text: string
+    // Retry-After is in seconds; without a readable one, Snipe-IT's throttle window is a minute.
+    const retryAfter = (r: Response) => {
+      const header = r.headers.get('Retry-After')?.trim() ?? ''
+      return /^\d+$/.test(header) ? Number(header) : 60
+    }
+    // Snipe-IT throttles its API (120 requests a minute by default) and refuses the rest before doing anything, so a refused
+    // request is safe to send again once the wait it names is over. A Report reads one Asset at a time.
+    for (let tries = 0; res.status === 429 && tries < 3; tries++) {
+      await new Promise((done) => setTimeout(done, Math.min(retryAfter(res), 60) * 1000))
+      res = await send()
     }
     // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
       throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
-    // Over Snipe-IT's requests a minute. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    // Still over Snipe-IT's requests a minute after those tries.
     if (res.status === 429) {
-      const header = res.headers.get('Retry-After')?.trim() ?? ''
-      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      const wait = retryAfter(res)
       throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
     }
     // The proxy in front of Snipe-IT can't reach it.
@@ -817,6 +829,54 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     for (let i = 0; i < offsets.length; i += PAGE_BATCH)
       for (const p of await Promise.all(offsets.slice(i, i + PAGE_BATCH).map(page))) rows.push(...p.rows)
     return rows
+  }
+
+  // The Damaged Report (#69 §3): Assets whose Status Label is Damaged (by name, as #59 decided), when they became
+  // Damaged, and what their newest live Repair intake recorded. Damaged since is the open Repair Maintenance's start, else
+  // that Repair intake's date, else not recorded (set Damaged by hand). Each Asset's Activity is searched PAGE_BATCH at a time.
+  async function damaged(now: Date): Promise<Report> {
+    const label = (await allRows<StatusLabel>('/statuslabels')).find((l) => l.name.trim().toLowerCase() === 'damaged')
+    if (!label) throw new Error('Snipe-IT has no Status Label named Damaged.')
+    const [assets, openMaintenances] = await Promise.all([allRows<RawAsset>(`/hardware?status_id=${label.id}`), allRows<RawMaintenance>('/maintenances?completed=false')])
+    // Repair intake opens one Repair Maintenance (#59); should an Asset have more, the newest start is the one Incoming repair closes (#60).
+    const started = new Map<number, string>()
+    for (const m of openMaintenances) {
+      const start = dayOf(m.start_date)
+      if (m.asset && start && (m.maintenance_type || m.asset_maintenance_type || '').trim().toLowerCase() === 'repair' && start > (started.get(m.asset.id) ?? ''))
+        started.set(m.asset.id, start)
+    }
+    // "repair" finds Repair intake and Incoming repair notes however their spacing was typed, and their undos; the parser
+    // picks them out (#63 §5). A live Incoming repair ends a Damaged spell, so only a Repair intake after the newest one counts.
+    // ponytail: the newest 20 hits, far more than one Asset's repairs; an undo whose step is older than those would
+    // leave that step live. Page further if that ever happens.
+    const intakeOf = async (id: number) => {
+      const body = await request<{ rows: RawActivity[] }>(`/reports/activity?item_type=asset&item_id=${id}&search=repair&sort=created_at&order=desc&limit=20`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      // item_id also matches entries that only target the Asset, such as its Maintenance's; only the Asset's own count.
+      const oldestFirst = body.rows.filter((r) => r.item?.type === 'asset' && r.item.id === id).sort((a, b) => (a.created_at?.datetime ?? '').localeCompare(b.created_at?.datetime ?? '') || a.id - b.id)
+      let intake: (HistoryEntry & { from: string; text: string }) | undefined
+      for (const e of liveEntries(oldestFirst.map((r) => ({ ...toHistoryEntry(r), from: r.target?.name ?? '' })))) {
+        const n = parseWorkflowNote(e.note)
+        if (!n || n.undo) continue
+        if (n.workflow === 'Incoming repair') intake = undefined
+        else if (n.workflow === 'Repair intake') intake = { ...e, text: n.text ?? '' }
+      }
+      return intake
+    }
+    const intakes: Awaited<ReturnType<typeof intakeOf>>[] = []
+    for (let i = 0; i < assets.length; i += PAGE_BATCH) intakes.push(...await Promise.all(assets.slice(i, i + PAGE_BATCH).map((a) => intakeOf(a.id))))
+    const rows = assets.map((raw, i) => {
+      const a = toAsset(raw, now), intake = intakes[i]
+      const since = started.get(a.id) ?? (intake?.when.slice(0, 10) || null)
+      return { since, cells: [a.assetTag, a.name, a.model, since ?? 'Not recorded', since ? String(Math.max(0, -daysFrom(now, since))) : 'Not recorded',
+        intake?.from ?? '', intake?.operator ?? '', intake?.text ?? '', started.has(a.id) ? 'Open' : 'None'] }
+    })
+    return {
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Damaged since', 'Days Damaged', 'Taken in from', 'Operator', 'What happened', 'Maintenance'],
+      // Oldest since is longest Damaged; not recorded goes last.
+      rows: rows.sort((x, y) => (x.since ?? '9').localeCompare(y.since ?? '9')).map((r) => r.cells),
+      capped: false,
+    }
   }
 
   // The Activity Report newest first, down to its first entry before `from`. Each page starts where the last one's rows
@@ -1167,6 +1227,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           capped: false,
         }
       }
+      if (kind === 'damaged') return damaged(now)
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {

@@ -302,6 +302,37 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, offline).getAsset(4812)).rejects.toThrow(/Can't reach Snipe-IT/)
   })
 
+  it('a request Snipe-IT throttles is sent again after the wait it asks for', async () => {
+    const sent: string[] = []
+    const throttled = (async (input: string | URL | Request) => {
+      sent.push(String(input))
+      return sent.length < 3
+        ? new Response(JSON.stringify({ message: 'Too Many Attempts.' }), { status: 429, headers: { 'Retry-After': '0' } })
+        : new Response(JSON.stringify(chromebook))
+    }) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, throttled).lookup('NOMMA-004812')).resolves.toMatchObject({ exact: true })
+    expect(sent).toHaveLength(3)
+    // Not for ever: still throttled after three more tries, it fails as rateLimited.
+    const always = (async () => new Response(JSON.stringify({ message: 'Too Many Attempts.' }), { status: 429, headers: { 'Retry-After': '0' } })) as typeof globalThis.fetch
+    await expect(createSnipeIt(config, always).lookup('NOMMA-004812')).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 0 seconds.', kind: 'rateLimited' })
+  })
+
+  it('a throttled request without a Retry-After waits out the minute-long throttle window before it is sent again', async () => {
+    let sent = 0
+    const throttled = (async () => (++sent === 1 ? new Response('{}', { status: 429 }) : new Response(JSON.stringify(chromebook)))) as typeof globalThis.fetch
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const result = createSnipeIt(config, throttled).lookup('NOMMA-004812')
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(sent).toBe(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(result).resolves.toMatchObject({ exact: true })
+      expect(sent).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a Snipe-IT too slow to answer says so, rather than blaming the network', async () => {
     const slow = (async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
@@ -353,7 +384,15 @@ describe('connection errors', () => {
     ['a 200 with status: "error"', fakeFetch({ '/statuslabels': { body: { status: 'error', messages: 'You do not have permission to view Status Labels.' } } }).fetch,
       { message: 'You do not have permission to view Status Labels.', kind: 'refused' }],
   ])('%s says so, with its kind', async (_what, fetch, failure) => {
-    expect(await failureOf(fetch)).toEqual(failure)
+    // A 429 is sent again up to three times, after each wait, before it fails; fake timers skip the waits.
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const result = failureOf(fetch)
+      await vi.runAllTimersAsync()
+      expect(await result).toEqual(failure)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("field-by-field messages from Snipe-IT are joined into one readable reason", async () => {
@@ -1323,6 +1362,139 @@ describe('report', () => {
     const again = [entry(6, 'checkout', '2026-09-24 09:00:10', temp('2026-09-24 12:00')), entry(6, 'checkin from', '2026-09-24 09:00:30', ''), entry(6, 'checkout', '2026-09-24 09:00:50', temp('2026-09-24 18:00'))]
     log.unshift(...again.reverse())
     expect((await snipeIt.report('tempHistory', { from: '2026-09-24' })).rows.map((row) => row.slice(5, 7))).toEqual([['2026-09-24 18:00', 'Still out'], ['2026-09-24 12:00', '2026-09-24 09:00']])
+  })
+
+  // #69 §3. Shaped like Snipe-IT v8.7+: a Maintenance names its Asset and its type; Repair intake's Activity entries carry its Workflow note.
+  describe('Damaged', () => {
+    const damagedAsset = (id: number) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, assigned_to: null, status_label: { id: 6, name: 'Damaged', status_meta: 'undeployable' } })
+    const maintenance = (id: number, assetId: number, start: string, type = 'Repair') =>
+      ({ id, asset: { id: assetId, asset_tag: `NOMMA-${assetId}` }, maintenance_type: type, asset_maintenance_type: '', start_date: { date: start, formatted: start }, completed_at: null })
+    const intake = (id: number, assetId: number, datetime: string, note: string, from: string | null, action_type = from ? 'checkin from' : 'note added') => ({
+      id, action_type, created_at: { datetime }, created_by: { id: 900, name: 'Demo Operator' }, target: from && { id: 311, name: from, type: 'user' }, note, item: { id: assetId, name: `NOMMA-${assetId}`, type: 'asset' },
+    })
+    // Answers each Asset's Activity search from logs; hold keeps those answers back until released, to count how many are open at once.
+    function damagedFetch(hardware: object[], maintenances: object[], logs: Record<number, object[]>, hold = false) {
+      const { fetch: base, calls, queries } = fakeFetch({
+        '/statuslabels': { body: { total: 2, rows: [{ id: 2, name: 'Deployed' }, { id: 6, name: 'damaged' }] } },
+        '/hardware': { body: { total: hardware.length, rows: hardware } },
+        '/maintenances': { body: { total: maintenances.length, rows: maintenances } },
+      })
+      const activity: Record<string, string>[] = []
+      const waiting: (() => void)[] = []
+      let open = 0
+      let most = 0
+      const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input))
+        if (!url.pathname.endsWith('/reports/activity')) return base(input, init)
+        const q = Object.fromEntries(url.searchParams)
+        activity.push(q)
+        most = Math.max(most, ++open)
+        if (hold) await new Promise<void>((done) => waiting.push(done))
+        open--
+        // Snipe-IT's search is a case-insensitive substring match, here on the note.
+        const rows = (logs[Number(q.item_id)] ?? []).filter((r) => String((r as { note: unknown }).note).toLowerCase().includes(q.search.toLowerCase()))
+        return new Response(JSON.stringify({ total: rows.length, rows }))
+      }
+      const release = () => waiting.splice(0).forEach((done) => done())
+      return { fetch: fetch as typeof globalThis.fetch, calls, queries, activity, release, most: () => most }
+    }
+
+    it('lists each Damaged Asset with since when, from whom and what happened, longest Damaged first and Not recorded last', async () => {
+      const { fetch, calls, queries, activity } = damagedFetch([damagedAsset(1), damagedAsset(2), damagedAsset(3), damagedAsset(4)], [
+        maintenance(10, 1, '2026-09-01'),
+        // Not a repair: Damaged since falls back to the Repair intake.
+        maintenance(11, 2, '2026-08-01', 'Upgrade'),
+        maintenance(12, 99, '2026-07-01'),
+      ], {
+        1: [
+          // Opening the Maintenance logs the same note on the Maintenance, with the Asset as its target; Snipe-IT's item_id
+          // filter matches targets too.
+          { ...intake(101, 1, '2026-09-01 10:01:00', '[Repair intake] cracked screen', null, 'create'), created_by: { id: 901, name: 'Other Operator' },
+            item: { id: 10, name: 'NOMMA-1 damaged', type: 'maintenance' }, target: { id: 1, name: 'NOMMA-1', type: 'asset' } },
+          intake(100, 1, '2026-09-01 10:00:00', '[Repair intake] cracked screen', 'Avery Testwell'),
+        ],
+        // Newest first, as Snipe-IT sends it; an Asset that wasn't checked out has no one it was taken in from.
+        2: [intake(201, 2, '2026-09-20 13:00:00', 'Repair intake form signed', null), intake(200, 2, '2026-09-20 12:30:00', '[Repair intake] won’t power on', null)],
+        // The search also matched something that isn't a Workflow note: Damaged by hand in the web UI.
+        3: [intake(300, 3, '2026-09-22 09:00:00', 'Checked for the Repair intake desk', 'Blake Sampleton', 'checkout')],
+        // The newer Repair intake was undone, so the older one stands.
+        4: [
+          intake(402, 4, '2026-09-12 10:05:00', '[Undo] Repair intake', 'Casey Mockford', 'checkout'),
+          intake(401, 4, '2026-09-12 10:00:00', '[Repair intake] wrong Asset scanned', 'Casey Mockford'),
+          intake(400, 4, '2026-09-05 08:00:00', '[repair intake] keyboard missing keys', 'Devon Demoski'),
+        ],
+      })
+      const r = await createSnipeIt(config, fetch, today).report('damaged')
+      expect(r).toEqual({
+        columns: ['Asset Tag', 'Name', 'Asset Model', 'Damaged since', 'Days Damaged', 'Taken in from', 'Operator', 'What happened', 'Maintenance'],
+        rows: [
+          ['NOMMA-1', 'CB-1', 'HP Chromebook 14 G7', '2026-09-01', '23', 'Avery Testwell', 'Demo Operator', 'cracked screen', 'Open'],
+          ['NOMMA-4', 'CB-4', 'HP Chromebook 14 G7', '2026-09-05', '19', 'Devon Demoski', 'Demo Operator', 'keyboard missing keys', 'None'],
+          ['NOMMA-2', 'CB-2', 'HP Chromebook 14 G7', '2026-09-20', '4', '', 'Demo Operator', 'won’t power on', 'None'],
+          ['NOMMA-3', 'CB-3', 'HP Chromebook 14 G7', 'Not recorded', 'Not recorded', '', '', '', 'None'],
+        ],
+        capped: false,
+      })
+      // The Damaged Status Label is found by name, then its Assets and every open Maintenance, one list each.
+      expect(calls.slice(0, 3)).toEqual(['/statuslabels', '/hardware', '/maintenances'])
+      expect(queries[1]).toMatchObject({ status_id: '6' })
+      expect(queries[2]).toMatchObject({ completed: 'false' })
+      expect(activity.map((q) => q.item_id)).toEqual(['1', '2', '3', '4'])
+      expect(activity[0]).toMatchObject({ item_type: 'asset', search: 'repair', order: 'desc', limit: '20' })
+    })
+
+    it('an undo typed by hand with odd spacing still cancels its Repair intake', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1)], [], { 1: [
+        intake(101, 1, '2026-09-12 10:05:00', '[undo]  Repair   intake', null),
+        intake(100, 1, '2026-09-12 10:00:00', '[Repair intake] wrong Asset scanned', null),
+      ] })
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3)).toEqual(['Not recorded', 'Not recorded', '', '', '', 'None'])
+    })
+
+    it('the open Repair Maintenance’s start date wins over the Repair intake’s date', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1)], [maintenance(10, 1, '2026-09-03')], { 1: [intake(100, 1, '2026-09-10 10:00:00', '[Repair intake] cracked screen', null)] })
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3, 5)).toEqual(['2026-09-03', '21'])
+    })
+
+    it('a Repair intake from before a finished Incoming repair doesn’t count when the Asset is set Damaged again by hand', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1), damagedAsset(2)], [], {
+        1: [
+          intake(101, 1, '2026-09-15 09:00:00', '[Incoming repair | supplier: Demo Repairs] screen replaced', null),
+          intake(100, 1, '2026-09-01 10:00:00', '[Repair intake] cracked screen', 'Avery Testwell'),
+        ],
+        // An undone Incoming repair leaves the Repair intake standing.
+        2: [
+          intake(202, 2, '2026-09-15 09:05:00', '[Undo] Incoming repair', null),
+          intake(201, 2, '2026-09-15 09:00:00', '[Incoming repair] wrong Asset scanned', null),
+          intake(200, 2, '2026-09-02 10:00:00', '[Repair intake] won’t power on', null),
+        ],
+      })
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows.map((r) => r.slice(0, 1).concat(r.slice(3, 8)))).toEqual([
+        ['NOMMA-2', '2026-09-02', '22', '', 'Demo Operator', 'won’t power on'],
+        ['NOMMA-1', 'Not recorded', 'Not recorded', '', '', ''],
+      ])
+    })
+
+    it('Days Damaged is 0, not negative, when the Repair Maintenance starts in the future', async () => {
+      const { fetch } = damagedFetch([damagedAsset(1)], [maintenance(10, 1, '2026-10-01')], {})
+      expect((await createSnipeIt(config, fetch, today).report('damaged')).rows[0].slice(3, 5)).toEqual(['2026-10-01', '0'])
+    })
+
+    it('searches each Damaged Asset’s Activity four at a time', async () => {
+      const { fetch, activity, release, most } = damagedFetch([1, 2, 3, 4, 5, 6].map(damagedAsset), [], {}, true)
+      const r = createSnipeIt(config, fetch, today).report('damaged')
+      await vi.waitFor(() => expect(activity).toHaveLength(4))
+      release()
+      await vi.waitFor(() => expect(activity).toHaveLength(6))
+      release()
+      expect((await r).rows).toHaveLength(6)
+      expect(most()).toBe(4)
+    })
+
+    it('says so when Snipe-IT has no Damaged Status Label', async () => {
+      const { fetch } = fakeFetch({ '/statuslabels': { body: { total: 1, rows: [{ id: 2, name: 'Deployed' }] } } })
+      await expect(createSnipeIt(config, fetch).report('damaged')).rejects.toThrow('Damaged')
+    })
   })
 })
 
