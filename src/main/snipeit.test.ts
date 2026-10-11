@@ -546,11 +546,26 @@ describe('checkout', () => {
     expect(posted(requests)).toEqual([])
   })
 
-  it('Checkout to another Asset is refused', async () => {
+  it('to another Asset sends the assigned asset', async () => {
     const { fetch, requests } = checkoutWith(ready)
-    const toAsset = { targetType: 'asset', targetId: 77 } as unknown as CheckoutOptions
-    await expect(createSnipeIt(config, fetch).checkout(4812, toAsset)).rejects.toThrow(/User or a Location/)
-    expect(posted(requests)).toEqual([])
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'asset', targetId: 77 })
+    expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'asset', assigned_asset: 77 })
+  })
+
+  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, expectedCheckin: '2026-10-13 14:50' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50' })
+  })
+
+  it('refuses another target type, a bad Status Label id or a malformed Expected Checkin without asking Snipe-IT', async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    const snipeIt = createSnipeIt(config, fetch)
+    const toDepartment = { targetType: 'department', targetId: 77 } as unknown as CheckoutOptions
+    await expect(snipeIt.checkout(4812, toDepartment)).rejects.toThrow(/User, a Location or another Asset/)
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, statusId: 1.5 })).rejects.toThrow(/Invalid status id/)
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, expectedCheckin: 'next Tuesday' })).rejects.toThrow(/YYYY-MM-DD/)
+    expect(requests).toEqual([])
   })
 
   it("a Checkout Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {

@@ -1,9 +1,9 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useState, type ReactNode, type RefObject } from 'react'
 import { ArchiveRestore, type LucideIcon } from 'lucide-react'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import type { BulkReturn, Row } from './workflows'
+import { cleanTag, type BulkReturn, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk return']
@@ -60,23 +60,31 @@ function KeysPanel({ keys, hint }: { keys: [key: string, does: string][]; hint: 
   )
 }
 
-const settled = (r: Row) => r.result.state === 'done' || r.result.state === 'failed'
+const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working'
+export const UNDO_KEY = 'Ctrl Z'
+const UNDO_TIP = `${UNDO_KEY}: puts the newest done row back. Snipe-IT's History keeps both entries, and emails Snipe-IT already sent stay sent.`
 
-// One Workflow's Running list, newest first. what: the Workflow's "what" cell for a row.
-export function RunningList<C>({ rows, doneLabel, what, onOpenAsset, onClear }: {
+// One Workflow's Running list, newest first, with Undo last and Clear. what: the Workflow's "what" cell for a row.
+// undoBlocked: why Undo last is off ('' when it isn't).
+export function RunningList<C>({ rows, doneLabel, what, undoBlocked, onUndo, onOpenAsset, onClear }: {
   rows: Row<C>[]
   doneLabel: string
-  what: (r: Row<C>) => string
+  what: (r: Row<C>) => ReactNode
+  undoBlocked: string
+  onUndo: () => void
   onOpenAsset: (id: number) => void
   onClear: () => void
 }) {
   const done = rows.filter((r) => r.result.state === 'done').length
-  const busy = rows.some((r) => !settled(r))
+  const working = rows.some(busy)
   return (
     <>
       <div className="section running-head">
         <span>{done} {doneLabel}</span>
-        <div className="actions"><button className="quiet" disabled={busy || rows.length === 0} title={busy ? 'Waits until nothing is waiting or working' : undefined} onClick={onClear}>Clear</button></div>
+        <div className="actions">
+          <button className="quiet" disabled={!!undoBlocked} title={undoBlocked ? `${undoBlocked}. ${UNDO_TIP}` : UNDO_TIP} onClick={onUndo}>Undo last</button>
+          <button className="quiet" disabled={working || rows.length === 0} title={working ? 'Waits until nothing is waiting or working' : undefined} onClick={onClear}>Clear</button>
+        </div>
       </div>
       <table className="history running">
         <thead><tr><th>Time</th><th>Asset Tag</th><th>Name</th><th>What</th><th>Result</th></tr></thead>
@@ -87,7 +95,10 @@ export function RunningList<C>({ rows, doneLabel, what, onOpenAsset, onClear }: 
               <td>{r.assetId === null ? <span className="mono">{r.tag}</span> : <button className="link mono" onClick={() => onOpenAsset(r.assetId!)}>{r.tag}</button>}</td>
               <td>{r.name || '—'}</td>
               <td>{what(r)}</td>
-              <td>{r.result.state === 'waiting' ? <span className="dim">Waiting…</span> : <OutcomeText outcome={r.result} />}</td>
+              <td>
+                {r.result.state === 'waiting' ? <span className="dim">Waiting…</span> : r.result.state === 'undone' ? <span className="dim">Undone</span> : <OutcomeText outcome={r.result} />}
+                {r.undoFailed && <> <span className="late">Undo failed: {r.undoFailed}</span></>}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -115,7 +126,11 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
   // Worked out while rendering, not in an effect, so an Enter typed straight after the text sees the right one.
   const [moved, setMoved] = useState<{ q: string; i: number } | null>(null)
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : q ? 0 : shown.findIndex((l) => l.id === flow.last?.id)
-  useEffect(() => { setText(''); setMoved(null); field.current?.focus() }, [step])
+  // Leaving the step (Change Location, Done, another page) closes an open Undo confirm without writing.
+  useEffect(() => {
+    setText(''); setMoved(null); field.current?.focus()
+    return () => flow.runner.cancelUndo()
+  }, [step])
   useEffect(() => {
     const back = () => document.activeElement === document.body && field.current?.focus()
     window.addEventListener('focus', back)
@@ -126,13 +141,26 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
     setStatus('')
     setStatus(await flow.start(location).catch((e: Error) => e.message))
   }
+  // Undo last: Ctrl+Z on the empty field (with text in it, it's the usual text undo) or the button opens its confirm.
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // Enter on the empty field confirms an open Undo; a scan closes it.
+    if (step.step === 'scan' && !cleanTag(text) && flow.runner.confirm) return undo()
     if (step.step === 'scan') return setStatus(flow.scan(text)), setText('')
     if (shown[hi]) return pick(shown[hi])
     setStatus(q ? 'Pick the Location first.' : 'Pick the Location returns go to.')
   }
   function onKeyDown(e: React.KeyboardEvent) {
+    if (step.step === 'scan' && e.key === 'Escape' && flow.runner.confirm) return flow.runner.cancelUndo()
+    if (step.step === 'scan' && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
     if (step.step !== 'location' || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !shown.length) return
     e.preventDefault()
     setMoved({ q, i: e.key === 'ArrowDown' ? Math.min(hi + 1, shown.length - 1) : Math.max(hi - 1, 0) })
@@ -140,6 +168,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
 
   const scanning = step.step === 'scan'
   const here = scanning ? step.location : null
+  const confirm = scanning ? flow.runner.confirm : null
   return (
     <div className="workflow">
       <div className="workflow-main">
@@ -163,11 +192,25 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
             {...(!here && { role: 'combobox', 'aria-expanded': true, 'aria-controls': 'return-locations', 'aria-activedescendant': shown[hi] ? `return-location-${shown[hi].id}` : undefined })}
           />
           <p className="message" role="status">{status}</p>
+          {confirm && (
+            // In place under the field, which keeps focus so no scan is lost; the buttons don't take it either.
+            <div className="confirm undo-confirm" role="group" aria-label="Undo last">
+              <span>{confirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
         </form>
         {here ? (
-          <RunningList rows={flow.runner.rows} doneLabel="checked in" onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
-            // A row's Location shows only when it differs from the current one (after Change Location).
-            what={(r) => (r.ctx.id === here.id ? r.what : [r.what, `to ${r.ctx.name}`].filter(Boolean).join(', '))} />
+          <RunningList rows={flow.runner.rows} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+            what={(r) => (
+              <>
+                {/* A row's Location shows only when it differs from the current one (after Change Location). */}
+                {r.ctx.id === here.id ? r.what : [r.what, `to ${r.ctx.name}`].filter(Boolean).join(', ')}
+                {/* Came back after its Expected Checkin, from the lookup answer. */}
+                {r.before?.overdueDays != null && <> <span className="chip c-red">Overdue</span></>}
+              </>
+            )} />
         ) : (
           <>
             <ul className="pick-list" id="return-locations" role="listbox" aria-label="Locations">
@@ -179,10 +222,12 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
             {q && shown.length === 0 && <p className="empty">No Location matches '{text.trim()}'</p>}
           </>
         )}
-        <p className="sr-only" aria-live="polite">{flow.runner.announce}</p>
+        <p className="sr-only" aria-live="polite">{confirm ?? flow.runner.announce}</p>
       </div>
-      {here
-        ? <KeysPanel keys={[['Enter', 'Check in']]} hint="Each scanned Asset is checked in at once, set to Ready to Deploy." />
+      {confirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : here
+        ? <KeysPanel keys={[['Enter', 'Check in'], [UNDO_KEY, 'Undo last']]} hint="Each scanned Asset is checked in at once, set to Ready to Deploy. Undo last puts the newest one back." />
         : <KeysPanel keys={[['Enter', 'Pick Location'], ['↑ ↓', 'Move the highlight']]} hint="Type to filter the Locations." />}
     </div>
   )

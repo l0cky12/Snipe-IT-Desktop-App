@@ -58,8 +58,10 @@ export type CheckinOptions = { statusId?: number; locationId?: number; note?: st
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
 
-/** Checkout targets are Users and Locations only; Asset-to-Asset isn't supported. expectedCheckin is "YYYY-MM-DD". */
-export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
+/** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
+ *  must be deployable). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
+export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; expectedCheckin?: string; note?: string }
+const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
@@ -1121,16 +1123,19 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     searchUsers: (text: string) => searchTargets('users', text),
     searchLocations: (text: string) => searchTargets('locations', text),
 
-    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent.
-    async checkout(id: number, { targetType, targetId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
-      if (targetType !== 'user' && targetType !== 'location') throw new Error('An Asset can only be checked out to a User or a Location.')
-      checkId(targetId, targetType === 'user' ? 'User' : 'Location')
+    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
+    // unless another is given (Snipe-IT accepts only a deployable one).
+    async checkout(id: number, { targetType, targetId, statusId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
+      if (!Object.hasOwn(TARGET_NAME, targetType)) throw new Error('An Asset can only be checked out to a User, a Location or another Asset.')
+      checkId(targetId, TARGET_NAME[targetType])
+      if (statusId !== undefined) checkId(statusId, 'status')
+      if (expectedCheckin && !/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(expectedCheckin)) throw new Error(`Expected Checkin must be YYYY-MM-DD or YYYY-MM-DD HH:MM, not ${expectedCheckin}`)
       const body = await current(id)
       if (body.assigned_to) throw new Error(`${body.asset_tag} is already checked out to ${body.assigned_to.name}. Check it in first.`)
       if (body.status_label?.status_meta !== 'deployable')
         throw new Error(`${body.asset_tag} is "${body.status_label?.name ?? 'no status'}", which can't be checked out.`)
       const result = await request(`/hardware/${id}/checkout`, {
-        status_id: body.status_label.id,
+        status_id: statusId ?? body.status_label.id,
         checkout_to_type: targetType,
         [`assigned_${targetType}`]: targetId,
         ...(expectedCheckin && { expected_checkin: expectedCheckin }),

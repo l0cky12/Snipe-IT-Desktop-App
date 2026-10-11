@@ -283,10 +283,14 @@ createServer(async (req, res) => {
       act('checkin from', a, a.assigned_to, body.note)
       Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
     } else if (m[2] === 'checkout') {
-      const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
+      const other = body.checkout_to_type === 'asset' && assets.find((x) => x.id === body.assigned_asset && x.id !== a.id)
+      const target = other ? { id: other.id, name: other.name } : body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
+      // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
+      const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
+      if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
       a.assigned_to = { ...target, type: body.checkout_to_type }
-      a.status_label = statuses[1]
+      a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {

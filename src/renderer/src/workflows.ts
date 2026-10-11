@@ -2,19 +2,27 @@
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
 import type { Asset, SnipeItBridge, StatusLabel } from '../../main/snipeit'
-import { workflowNote } from '../../main/notes'
+import { undoNote, workflowNote } from '../../main/notes'
 import type { Outcome } from './BatchView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
 export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 
-/** A Running list row's result: Batch's outcome states, plus waiting its turn in the queue. Refused and failed are both 'failed'. */
-export type Result = { state: 'waiting' } | Outcome
-/** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location). */
-export type Row<C = unknown> = { key: number; time: string; tag: string; assetId: number | null; name: string; what: string; ctx: C; result: Result }
+/** A Running list row's result: Batch's outcome states, plus waiting its turn in the queue, and put back by Undo last.
+ *  Refused and failed are both 'failed'. */
+export type Result = { state: 'waiting' } | { state: 'undone' } | Outcome
+/** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
+ *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. */
+export type Undo = { says: string; run: (now: Asset) => Promise<void> }
+/** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
+ *  before: the Asset as the lookup found it, before the Workflow acted. undoFailed: why the last Undo of it didn't happen. */
+export type Row<C = unknown> = {
+  key: number; time: string; tag: string; assetId: number | null; name: string; what: string; ctx: C; result: Result
+  before: Asset | null; undo?: Undo; undoFailed?: string
+}
 export type Events = { changed: () => void; failed?: () => void }
-/** What a Workflow's step does to one scanned Asset: the done text and "what" cell, or a throw with the refusal. */
-export type Act<C> = (asset: Asset, ctx: C) => Promise<{ text: string; what?: string }>
+/** What a Workflow's step does to one scanned Asset: the done text, "what" cell and how to undo it, or a throw with the refusal. */
+export type Act<C> = (asset: Asset, ctx: C) => Promise<{ text: string; what?: string; undo?: Undo }>
 
 const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 // What a scanner or a stray key adds around an Asset Tag: control characters anywhere, whitespace at the ends.
@@ -39,6 +47,9 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
   let running = false
   let announce = ''
   let lastStart = 0
+  // Undo last: the row whose confirm is open, and the undo in flight (queued scans wait for it).
+  let confirming: Row<C> | null = null
+  let undoing: Promise<void> | null = null
 
   const update = (key: number, change: Partial<Row<C>>) => {
     rows = rows.map((r) => (r.key === key ? { ...r, ...change } : r))
@@ -55,6 +66,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     running = true
     const mine = generation
     for (let row = queue.shift(); row; row = queue.shift()) {
+      if (undoing) await undoing
       const wait = lastStart + pace - Date.now()
       if (wait > 0) await sleep(wait)
       if (mine !== generation) return
@@ -67,10 +79,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
           settle(row, { state: 'failed', reason: `No Asset with tag ${row.tag}` })
           continue
         }
-        update(row.key, { assetId: asset.id, name: asset.name || asset.model })
-        const { text, what = '' } = await act(asset, row.ctx)
+        update(row.key, { assetId: asset.id, name: asset.name || asset.model, before: asset })
+        const { text, what = '', undo } = await act(asset, row.ctx)
         if (mine !== generation) return
-        settle(row, { state: 'done', text }, { what })
+        settle(row, { state: 'done', text }, { what, undo })
       } catch (e) {
         if (mine !== generation) return
         settle(row, { state: 'failed', reason: (e as Error).message })
@@ -79,19 +91,76 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     running = false
   }
 
+  // Undo last acts on the newest done row, once: after it's undone (or another row is done), nothing older can be.
+  const undoTarget = () => {
+    const r = rows.find((r) => r.result.state === 'done' || r.result.state === 'undone')
+    return r?.result.state === 'done' && r.undo ? r : null
+  }
+  // Why Undo last is off ('' when it isn't): it waits for the queue, so "last" is well defined.
+  const undoBlocked = () => (rows.some(busy) || undoing ? 'Undo waits until nothing is waiting or working' : undoTarget() ? '' : 'Nothing to undo')
+
   return {
     get rows() { return rows },
     /** How many scans are waiting or working. */
     get pending() { return rows.filter(busy).length },
     /** The newest result, for the polite live region. */
     get announce() { return announce },
+    /** Why Undo last is off, or '' when it can be asked for. */
+    get undoBlocked() { return undoBlocked() },
+    /** The open Undo last confirm's text, or null. */
+    get confirm() { return confirming && `Undo: ${confirming.undo!.says}? Enter to undo, Esc to cancel.` },
+    /** Opens Undo last's confirm for the newest done row; returns why it can't ('' when it did). */
+    askUndo(): string {
+      const why = undoBlocked()
+      if (why) return why
+      confirming = undoTarget()
+      events.changed()
+      return ''
+    },
+    cancelUndo() {
+      if (!confirming) return
+      confirming = null
+      events.changed()
+    },
+    /** Confirms the open Undo: re-reads the Asset, then the Workflow's opposite action. The row becomes Undone, or stays done and says why not. */
+    async undo(): Promise<void> {
+      const row = confirming
+      confirming = null
+      if (!row || undoBlocked() || undoTarget() !== row) return events.changed()
+      const mine = generation
+      let release = () => {}
+      undoing = new Promise((r) => { release = r })
+      events.changed()
+      try {
+        const now = await bridge.assetByTag(row.tag)
+        if (mine !== generation) return
+        if (!now) throw new Error(`No Asset with tag ${row.tag}`)
+        await row.undo!.run(now)
+        if (mine !== generation) return
+        announce = `${row.tag}: Undone`
+        update(row.key, { result: { state: 'undone' }, undoFailed: undefined })
+      } catch (e) {
+        if (mine !== generation) return
+        announce = `${row.tag}: ${(e as Error).message}`
+        update(row.key, { undoFailed: (e as Error).message })
+        events.failed?.()
+      } finally {
+        if (mine === generation) {
+          undoing = null
+          events.changed()
+        }
+        release()
+      }
+    },
     /** Queues a scan; returns what the status line should say ('' for nothing). */
     scan(raw: string, ctx: C): string {
       const tag = cleanTag(raw)
       if (!tag) return ''
       const twin = rows.find((r) => busy(r) && r.tag.toUpperCase() === tag.toUpperCase())
       if (twin) return `${twin.tag} is already scanned`
-      const row: Row<C> = { key: ++next, time: hhmm(now()), tag, assetId: null, name: '', what: '', ctx, result: { state: 'waiting' } }
+      // A scan closes an open Undo confirm: "last" is about to change.
+      confirming = null
+      const row: Row<C> = { key: ++next, time: hhmm(now()), tag, assetId: null, name: '', what: '', ctx, result: { state: 'waiting' }, before: null }
       rows = [row, ...rows]
       queue.push(row)
       events.changed()
@@ -99,7 +168,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       return ''
     },
     clear() {
-      if (rows.some(busy)) return
+      if (rows.some(busy) || undoing) return
+      confirming = null
       rows = []
       announce = ''
       events.changed()
@@ -108,6 +178,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       generation++
       // The old drain() returns at its next generation check without touching running, so a new one can start now.
       running = false
+      confirming = null
+      undoing = null
       rows = []
       queue = []
       announce = ''
@@ -121,8 +193,8 @@ export type BulkReturnStep = { step: 'location' } | { step: 'scan'; location: St
 export const READY = 'Ready to Deploy'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
-// once, set to Ready to Deploy and sent there. No confirm; Undo last (a later ticket) fixes mistakes.
-export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'statusLabels'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+// once, set to Ready to Deploy and sent there. No confirm; Undo last fixes mistakes.
+export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'statusLabels'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkReturnStep = { step: 'location' }
   // The Location picked last, highlighted when the next round starts.
   let last: StatusLabel | null = null
@@ -139,9 +211,17 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     }
     // A label someone set on purpose while it was out (Pending, Broken…) is kept, never silently cleared.
     const keep = a.statusType !== 'deployable'
-    const what = `From ${a.assignee.type === 'asset' ? 'Asset ' : ''}${a.assignee.name}`
+    const { assignee: was, statusId, expectedCheckin } = a
+    const from = `${was.type === 'asset' ? 'Asset ' : ''}${was.name}`
     await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
-    return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what }
+    // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
+    // the Location; the old one isn't forced back. A time of day means it was a Temp checkout, so the undo makes it one again.
+    const run = async (now: Asset) => {
+      if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
+      const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
+      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
+    }
+    return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo: { says: `${a.assetTag} checked in from ${from}`, run } }
   }, events, now, pace)
 
   return {

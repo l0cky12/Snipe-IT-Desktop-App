@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Asset, CheckinOptions, StatusLabel } from '../../main/snipeit'
+import type { Asset, CheckinOptions, CheckoutOptions, StatusLabel } from '../../main/snipeit'
 import { cleanTag, createBulkReturn, createRunner, NOT_ALLOWED } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
@@ -16,12 +16,14 @@ const LABELS: StatusLabel[] = [{ id: 1, name: 'Ready to Deploy' }, { id: 2, name
 function fakeBridge(assets: Asset[]) {
   const calls: string[] = []
   const checkins: [number, CheckinOptions][] = []
+  const checkouts: [number, CheckoutOptions][] = []
   const bridge = {
     assetByTag: vi.fn(async (tag: string) => (calls.push(`bytag ${tag}`), assets.find((a) => a.assetTag === tag) ?? null)),
     checkin: vi.fn(async (id: number, o: CheckinOptions) => { calls.push(`checkin ${id}`); checkins.push([id, o]) }),
+    checkout: vi.fn(async (id: number, o: CheckoutOptions) => { calls.push(`checkout ${id}`); checkouts.push([id, o]) }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
   }
-  return { bridge, calls, checkins }
+  return { bridge, calls, checkins, checkouts }
 }
 
 describe('Workflow runner', () => {
@@ -119,6 +121,112 @@ describe('Workflow runner', () => {
     await flush()
     expect(runner.rows).toEqual([])
     expect(act).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Undo last', () => {
+  // A Workflow whose step does nothing, and whose undo records the Asset it re-read (or throws what it found).
+  function undoable(assets: Asset[], refuse?: (now: Asset) => string) {
+    const fake = fakeBridge(assets)
+    const undone: Asset[] = []
+    const failed = vi.fn()
+    const runner = createRunner<null>(fake.bridge, async (a) => {
+      if (a.assetTag === 'NOMMA-9') throw new Error('Snipe-IT said no')
+      return {
+        text: 'Done',
+        undo: { says: `${a.assetTag} done`, run: async (now: Asset) => { if (refuse?.(now)) throw new Error(refuse(now)); undone.push(now) } },
+      }
+    }, { changed: () => {}, failed }, undefined, 0)
+    return { ...fake, runner, undone, failed }
+  }
+  const settled = async (runner: { pending: number }) => vi.waitFor(() => expect(runner.pending).toBe(0))
+
+  it('each row records the Asset as the lookup found it', async () => {
+    const one = asset('NOMMA-1', { expectedCheckin: '2026-10-09 14:50', overdueDays: 1 })
+    const { runner } = undoable([one])
+    runner.scan('NOMMA-1', null)
+    await settled(runner)
+    expect(runner.rows[0].before).toEqual(one)
+  })
+
+  it('acts on the newest done row only, only after its confirm, and only once', async () => {
+    const { runner, undone, calls } = undoable([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-9')])
+    expect(runner.askUndo()).toBe('Nothing to undo')
+    for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-9']) runner.scan(tag, null)
+    await settled(runner)
+    expect(runner.confirm).toBeNull()
+    // A refused row after it doesn't stop NOMMA-2 being the newest done row.
+    expect(runner.askUndo()).toBe('')
+    expect(runner.confirm).toBe('Undo: NOMMA-2 done? Enter to undo, Esc to cancel.')
+    expect(undone).toEqual([])
+    await runner.undo()
+    expect(calls.slice(-1)).toEqual(['bytag NOMMA-2'])
+    expect(undone.map((a) => a.assetTag)).toEqual(['NOMMA-2'])
+    expect(runner.rows.map((r) => [r.tag, r.result.state])).toEqual([['NOMMA-9', 'failed'], ['NOMMA-2', 'undone'], ['NOMMA-1', 'done']])
+    expect(runner.confirm).toBeNull()
+    // Not a stack: NOMMA-1 can't be undone from the list now.
+    expect(runner.askUndo()).toBe('Nothing to undo')
+    await runner.undo()
+    expect(undone).toHaveLength(1)
+  })
+
+  it('Esc cancels the confirm and nothing is written', async () => {
+    const { runner, undone } = undoable([asset('NOMMA-1')])
+    runner.scan('NOMMA-1', null)
+    await settled(runner)
+    runner.askUndo()
+    runner.cancelUndo()
+    expect(runner.confirm).toBeNull()
+    await runner.undo()
+    expect(undone).toEqual([])
+    expect(runner.rows[0].result.state).toBe('done')
+  })
+
+  it("is off while anything is waiting or working, and a scan closes an open confirm", async () => {
+    const { runner, undone } = undoable([asset('NOMMA-1'), asset('NOMMA-2')])
+    runner.scan('NOMMA-1', null)
+    expect(runner.askUndo()).toBe('Undo waits until nothing is waiting or working')
+    await settled(runner)
+    runner.askUndo()
+    runner.scan('NOMMA-2', null)
+    expect(runner.confirm).toBeNull()
+    await runner.undo()
+    expect(undone).toEqual([])
+    await settled(runner)
+    expect(runner.rows.map((r) => r.result.state)).toEqual(['done', 'done'])
+  })
+
+  it('refuses an Asset that is no longer as the Workflow left it, says what it found, and keeps the row done', async () => {
+    const { runner, undone, failed } = undoable([asset('NOMMA-1')], (now) => `${now.assetTag} is checked out to ${now.assignee!.name} now`)
+    runner.scan('NOMMA-1', null)
+    await settled(runner)
+    runner.askUndo()
+    await runner.undo()
+    expect(undone).toEqual([])
+    expect(runner.rows[0]).toMatchObject({ result: { state: 'done', text: 'Done' }, undoFailed: 'NOMMA-1 is checked out to Avery Testwell now' })
+    expect(failed).toHaveBeenCalledTimes(1)
+    expect(runner.announce).toBe('NOMMA-1: NOMMA-1 is checked out to Avery Testwell now')
+  })
+
+  it('a scan made while an undo is in flight waits for it', async () => {
+    const order: string[] = []
+    let release = () => {}
+    const { bridge } = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2')])
+    const runner = createRunner<null>(bridge, async (a) => (order.push(`act ${a.assetTag}`), {
+      text: 'Done', undo: { says: '', run: () => new Promise<void>((r) => { release = () => (order.push('undo'), r()) }) },
+    }), { changed: () => {} }, undefined, 0)
+    runner.scan('NOMMA-1', null)
+    await settled(runner)
+    runner.askUndo()
+    const undoing = runner.undo()
+    await vi.waitFor(() => expect(bridge.assetByTag).toHaveBeenCalledTimes(2))
+    runner.scan('NOMMA-2', null)
+    await flush()
+    expect(order).toEqual(['act NOMMA-1'])
+    release()
+    await undoing
+    await settled(runner)
+    expect(order).toEqual(['act NOMMA-1', 'undo', 'act NOMMA-2'])
   })
 })
 
@@ -237,5 +345,51 @@ describe('Bulk return', () => {
     flow.reset()
     expect(flow.last).toBeNull()
     expect(flow.runner.rows).toEqual([])
+  })
+
+  describe('Undo last', () => {
+    const ZOE = { type: 'user' as const, id: 7, name: 'Avery Testwell' }
+    async function returned(one: Asset) {
+      const fake = await started([one])
+      fake.bridge.checkin.mockImplementation(async () => { one.assignee = null })
+      fake.flow.scan(one.assetTag)
+      await vi.waitFor(() => expect(fake.flow.runner.pending).toBe(0))
+      expect(fake.flow.runner.askUndo()).toBe('')
+      return fake
+    }
+
+    it.each([
+      ['a User', ZOE],
+      ['a Location', { type: 'location' as const, id: 4, name: 'Room 204' }],
+      ['an Asset', { type: 'asset' as const, id: 77, name: 'Cart 3' }],
+    ])('checks the Asset back out to %s with its old Status Label and Expected Checkin, and [Undo] Bulk return', async (_, assignee) => {
+      const one = asset('NOMMA-1', { assignee, statusId: 2, expectedCheckin: '2026-10-13' })
+      const { flow, checkouts } = await returned(one)
+      expect(flow.runner.confirm).toBe(`Undo: NOMMA-1 checked in from ${assignee.type === 'asset' ? 'Asset ' : ''}${assignee.name}? Enter to undo, Esc to cancel.`)
+      await flow.runner.undo()
+      expect(checkouts).toEqual([[1, { targetType: assignee.type, targetId: assignee.id, statusId: 2, expectedCheckin: '2026-10-13', note: '[Undo] Bulk return' }]])
+      expect(flow.runner.rows[0].result.state).toBe('undone')
+    })
+
+    it('carries the Temp checkout tag when the Expected Checkin had a time of day', async () => {
+      const { flow, checkouts } = await returned(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+      await flow.runner.undo()
+      expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]' })
+    })
+
+    it('sends no Expected Checkin when it had none', async () => {
+      const { flow, checkouts } = await returned(asset('NOMMA-1'))
+      await flow.runner.undo()
+      expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk return' })
+    })
+
+    it('refuses when the Asset is checked out again, and writes nothing', async () => {
+      const one = asset('NOMMA-1')
+      const { flow, checkouts } = await returned(one)
+      one.assignee = { type: 'user', id: 9, name: 'Blake Sampleton' }
+      await flow.runner.undo()
+      expect(checkouts).toEqual([])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'NOMMA-1 is checked out to Blake Sampleton now' })
+    })
   })
 })
