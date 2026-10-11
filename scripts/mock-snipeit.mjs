@@ -15,7 +15,7 @@ const pick = (list, n) => list[n % list.length]
 
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
-  ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
+  ['Damaged', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
 ].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]

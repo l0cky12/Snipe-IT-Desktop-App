@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
 import { FerpaConfirm, saveCsv } from './ReportsView'
-import { cellText, exportTable, LIST_COLUMNS, shownColumns, type AnyColumn } from '../../main/export'
+import { cellText, exportTable, LIST_COLUMNS, shownColumns, viewColumns, type AnyColumn } from '../../main/export'
 import type { SavedReport } from '../../main/config'
 
 export const listName: Record<ListKind, string> = {
@@ -68,6 +68,16 @@ export const singular = (kind: ListKind) => listName[kind].replace(/ies$/, 'y').
 export const drillLabel = (kind: RecordKind, name: string) => (kind === 'users' ? `Checked out to ${name}` : `${singular(kind)}: ${name}`)
 export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: string }): Drill =>
   kind === 'users' ? { filters: { user_id: String(id) }, label: drillLabel(kind, name) } : { filters: { [kind === 'locations' ? 'location_id' : 'model_id']: String(id) } }
+
+/** What a List is showing: its View (Assets only; All elsewhere), search, filter boxes and sort. */
+export type ListState = { view: AssetView; search: string; filters: Record<string, string>; sort: SavedReport['sort'] }
+/** Where a List opens: on All, with a Drill's filters, or a Saved Report's search and sort (App passes its filters as the Drill). */
+export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? null })
+/** Where picking an Assets View starts: no search or filters, and the View's own sort, as if another List were opened. */
+export const picking = (view: AssetView): ListState => ({ view, search: '', filters: {}, sort: ASSET_VIEWS[view].sort ?? null })
+/** What a List asks Snipe-IT for; only Assets have Views. */
+export const listQuery = (kind: ListKind, { view, search, filters, sort }: ListState): ListQuery =>
+  ({ search, filters, sort: sort?.key, order: sort?.order, ...(kind === 'assets' && { view }) })
 
 type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 type Row = ListPage<ListKind>['rows'][number]
@@ -154,10 +164,12 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   onOpenAsset: (id: number) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
-  const [text, setText] = useState(report?.search ?? '')
-  const [search, setSearch] = useState(report?.search ?? '')
-  const [filters, setFilters] = useState<Record<string, string>>(drill?.filters ?? {})
-  const [sort, setSort] = useState<SavedReport['sort']>(report?.sort ?? null)
+  const [start] = useState(() => opening(drill, report))
+  const [view, setView] = useState(start.view)
+  const [text, setText] = useState(start.search)
+  const [search, setSearch] = useState(start.search)
+  const [filters, setFilters] = useState(start.filters)
+  const [sort, setSort] = useState(start.sort)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState<ListPage<ListKind> | null>(null)
   const [loading, setLoading] = useState(false)
@@ -170,7 +182,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const [customizing, setCustomizing] = useState(false)
   const [quick, setQuick] = useState<Quick | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
-  // The Selection lives with this List; leaving it (or opening another) starts the next one empty.
+  // The Selection lives with this List, across its Views; leaving it (or opening another) starts the next one empty.
   const [selection, setSelection] = useState<Selection<Row>>(new Map())
   // "Select all N matching": asking to confirm, or fetching; a newer query or Clear makes a fetch still going stale.
   const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
@@ -193,8 +205,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     if (wasRunning.current && !running) setReloads((n) => n + 1)
     wasRunning.current = running
   }, [running])
-  // One page of this List as searched, filtered and sorted now; "select all" pages it in id order instead.
-  const fetchPage = (offset: number, order = sort) => window.snipeIt.list(kind, { search, filters, sort: order?.key, order: order?.order, offset })
+  // One page of this List as searched, filtered and sorted now, in its View; "select all" pages it in id order instead.
+  const fetchPage = (offset: number, order = sort) => window.snipeIt.list(kind, { ...listQuery(kind, { view, search, filters, sort: order }), offset })
 
   // Search after a short pause in typing, from the first page.
   useEffect(() => {
@@ -203,7 +215,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     return () => clearTimeout(timer)
   }, [text])
   // A "select all" still fetching stops when what matches changes; turning the page or a refresh doesn't change that.
-  useEffect(() => () => { selectEpoch.current++; setSelectingAll(null) }, [kind, search, filters, sort])
+  useEffect(() => () => { selectEpoch.current++; setSelectingAll(null) }, [kind, view, search, filters, sort])
   useEffect(() => {
     let stale = false
     setLoading(true)
@@ -219,7 +231,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       (e: Error) => !stale && (setPage(null), setMessage({ text: e.message, error: true })),
     ).finally(() => !stale && setLoading(false))
     return () => { stale = true }
-  }, [kind, search, filters, sort, offset, reloads])
+  }, [kind, view, search, filters, sort, offset, reloads])
   // A filter whose names don't load just has fewer choices.
   useEffect(() => {
     let stale = false
@@ -230,9 +242,17 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   useEffect(() => { if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(shown)) }, [kind, shown])
 
   const all: AnyColumn[] = LIST_COLUMNS[kind]
-  const columns = all.filter((c) => shown.includes(c.key))
+  // An Assets View's own column shows whatever the Operator picked under Columns.
+  const viewColumn = kind === 'assets' ? ASSET_VIEWS[view].column : undefined
+  const showing = kind === 'assets' ? viewColumns(shown, view) : shown
+  const columns = all.filter((c) => showing.includes(c.key))
   const sortable: Record<string, string> = LIST_SORTS[kind]
   const setFilter = (key: string, value: string) => (setFilters((f) => ({ ...f, [key]: value })), setOffset(0))
+  // Picking a View keeps the Selection; the search, filter boxes and sort start again.
+  const pickView = (v: AssetView) => {
+    const next = picking(v)
+    setView(v), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null)
+  }
   const toggleSort = (key: string) => (setSort((s) => (s?.key === key && s.order === 'asc' ? { key, order: 'desc' } : { key, order: 'asc' })), setOffset(0))
 
   // A rejected Quick Action keeps its form open with the typed inputs; Snipe-IT's reason shows above the List.
@@ -271,8 +291,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   async function exportCsv() {
     setExporting('fetching')
     try {
-      const { rows, capped } = await window.snipeIt.exportList(kind, { search, filters, sort: sort?.key, order: sort?.order })
-      const table = exportTable(kind, shown, rows)
+      const { rows, capped } = await window.snipeIt.exportList(kind, listQuery(kind, { view, search, filters, sort }))
+      const table = exportTable(kind, showing, rows)
       saveCsv(listName[kind], table.columns, table.rows)
       setMessage({ text: capped ? `Exported the first ${rows.length.toLocaleString()} rows; filter the List for the rest.` : `Exported ${rows.length.toLocaleString()} rows` })
     } catch (e) {
@@ -331,7 +351,9 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   }
   const clear = () => (selectEpoch.current++, setSelectingAll(null), setSelection(new Map()))
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
-  const filterBar = filtersFor(kind, names, statusLabels, locations)
+  // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
+  const fixed = kind === 'assets' ? ASSET_VIEWS[view].filter?.[0] : undefined
+  const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== fixed)
   return (
     <>
       {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
@@ -340,7 +362,9 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
         <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
-          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
+          {/* A Saved Report can't remember its View yet, so only All can be saved. */}
+          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
+            disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
           <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
             onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
             {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
@@ -351,6 +375,17 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       </header>
       {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
       <div className="list-top">
+        {/* The Assets Views; only the open one shows its count. */}
+        {kind === 'assets' && (
+          <div className="view-tabs" role="tablist" aria-label="Views">
+            {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => (
+              <button key={v} role="tab" aria-selected={v === view} className={v === view ? 'on' : undefined} onClick={() => v !== view && pickView(v)}>
+                {ASSET_VIEWS[v].name}
+                {v === view && page && !loading && <span className="count">{total.toLocaleString()}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         {customizing && (
           <div className="customize">
             <ol aria-label="Columns">
@@ -358,8 +393,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               {all.slice(1).map((c) => (
                 <li key={c.key}>
                   <label>
-                    <input type="checkbox" checked={shown.includes(c.key)} onChange={() => setShown((s) => (s.includes(c.key) ? s.filter((k) => k !== c.key) : [...s, c.key]))} />
-                    {c.label}
+                    <input type="checkbox" checked={showing.includes(c.key)} disabled={c.key === viewColumn} onChange={() => setShown((s) => (s.includes(c.key) ? s.filter((k) => k !== c.key) : [...s, c.key]))} />
+                    {c.label}{c.key === viewColumn && <span className="dim"> (this View's)</span>}
                   </label>
                 </li>
               ))}
@@ -481,7 +516,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
           })}
         </tbody>
       </table>
-      {page && rows.length === 0 && <p className="empty">Nothing matches</p>}
+      {page && rows.length === 0 && <p className="empty">{page.why ?? 'Nothing matches'}</p>}
       {total > LIST_PAGE && (
         <div className="pager actions">
           <span className="dim">{(offset + 1).toLocaleString()}–{Math.min(offset + LIST_PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>

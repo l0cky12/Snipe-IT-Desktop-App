@@ -885,6 +885,61 @@ describe('list', () => {
   })
 })
 
+describe('Assets Views', () => {
+  const empty = { body: { total: 0, rows: [] } }
+  const labels = { body: { total: 2, rows: [{ id: 2, name: 'Deployed' }, { id: 7, name: 'damaged' }] } }
+
+  it.each([
+    ['all', '/hardware', {}],
+    ['checkedOut', '/hardware', { status: 'Deployed' }],
+    ['available', '/hardware', { status: 'RTD' }],
+    ['auditDue', '/hardware/audit/due', {}],
+    ['auditLate', '/hardware/audit/overdue', {}],
+  ] as const)('%s asks Snipe-IT for %s, narrowed by the search and filter boxes', async (view, path, fixed) => {
+    const { fetch, calls, queries } = fakeFetch({ [path]: empty })
+    await createSnipeIt(config, fetch).list('assets', { view, search: 'cb', filters: { location_id: '4', category_id: '3' }, offset: 50 })
+    expect(calls).toEqual([path])
+    expect(queries[0]).toEqual({ limit: '50', offset: '50', search: 'cb', location_id: '4', category_id: '3', ...fixed })
+  })
+
+  it('Damaged asks for the Status Label named Damaged, found by name whatever its case', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/statuslabels': labels, '/hardware': empty })
+    await createSnipeIt(config, fetch).list('assets', { view: 'damaged', filters: { location_id: '4' } })
+    expect(calls).toEqual(['/statuslabels', '/hardware'])
+    expect(queries[1]).toEqual({ limit: '50', offset: '0', location_id: '4', status_id: '7' })
+  })
+
+  it('Damaged with no Status Label of that name is an empty View that says so, without listing Assets', async () => {
+    const { fetch, calls } = fakeFetch({ '/statuslabels': { body: { total: 1, rows: [{ id: 2, name: 'Deployed' }] } } })
+    const page = await createSnipeIt(config, fetch).list('assets', { view: 'damaged' })
+    expect(page).toEqual({ total: 0, rows: [], why: "Snipe-IT has no Status Label named Damaged, so no Asset is Damaged." })
+    expect(calls).toEqual(['/statuslabels'])
+  })
+
+  it('a View can be sorted by the audit dates, and paged in id order for "Select all N matching"', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/hardware/audit/overdue': empty })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.list('assets', { view: 'auditLate', sort: 'nextAudit', order: 'asc' })
+    await snipeIt.list('assets', { view: 'auditLate', sort: 'id', order: 'asc', offset: 50 })
+    expect(calls).toEqual(['/hardware/audit/overdue', '/hardware/audit/overdue'])
+    expect(queries[0]).toMatchObject({ sort: 'next_audit_date', order: 'asc' })
+    expect(queries[1]).toMatchObject({ sort: 'id', order: 'asc', offset: '50' })
+  })
+
+  it("Export CSV reads the open View's route", async () => {
+    const { fetch, calls } = fakeFetch({ '/hardware/audit/due': empty })
+    await createSnipeIt(config, fetch).exportList('assets', { view: 'auditDue' })
+    expect(calls).toEqual(['/hardware/audit/due'])
+  })
+
+  it('an unknown View, or a View on another List, is refused without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).list('assets', { view: 'constructor' as 'all' })).rejects.toThrow('Unknown View')
+    await expect(createSnipeIt(config, fetch).list('users', { view: 'auditLate' })).rejects.toThrow('Unknown View')
+    expect(calls).toEqual([])
+  })
+})
+
 describe('exportList', () => {
   // A fake Snipe-IT that pages /suppliers by limit/offset (at most pageMax a page), recording each query it was sent.
   function suppliers(count: number, pageMax = 500) {

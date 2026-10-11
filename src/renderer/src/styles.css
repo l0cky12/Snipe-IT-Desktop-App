@@ -257,6 +257,13 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .topbar h1 { flex: none; font: 600 13px/28px var(--sans); letter-spacing: 0; }
 .topbar .actions { margin-left: auto; gap: 6px; }
 .toolbar { gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+/* The Assets Views: a 38px tab bar, the open View underlined with --mark and showing its count. */
+.view-tabs { display: flex; gap: 2px; height: 38px; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.view-tabs button { display: flex; align-items: center; gap: 6px; padding: 0 10px; background: none; border: 0; box-shadow: inset 0 -2px 0 transparent;
+  color: var(--dim); font: 500 13px var(--sans); white-space: nowrap; cursor: pointer; transition: color var(--fast); }
+.view-tabs button:hover { color: var(--text); }
+.view-tabs button.on { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--mark); }
+.view-tabs .count { color: var(--dim); font-weight: 500; font-size: 12px; }
 .toolbar > input:not(.filter) { flex: 1 1 160px; min-width: 160px; max-width: 360px; }
 .toolbar .filter { flex: 0 1 150px; min-width: 120px; }
 /* The Selection bar: the count, select-all, its Bulk Actions and Clear, at the toolbar's right end; it takes its own row
