@@ -222,6 +222,11 @@ describe('getAsset', () => {
     })
   })
 
+  it("carries the Asset's Default Location, blank when it has none", async () => {
+    expect((await snipeItWith({ ...chromebook, rtd_location: { id: 4, name: 'IT Office' } }).getAsset(4812)).defaultLocation).toBe('IT Office')
+    expect((await snipeItWith({ ...chromebook, rtd_location: null }).getAsset(4812)).defaultLocation).toBe('')
+  })
+
   it('History is newest first: when, action, Operator, detail, and note', async () => {
     const { history } = await snipeItWith(chromebook, { body: activity }).getAsset(4812)
     expect(history).toEqual([
