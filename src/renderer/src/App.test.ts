@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { layoutFrom, opensPanel } from './App'
+import { defaultLocationChoice, layoutFrom, opensPanel } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -49,5 +49,16 @@ describe('the stored dashboard layout', () => {
   it('unreadable or unknown entries are dropped', () => {
     expect(layoutFrom('not json')).toEqual(layoutFrom(null))
     expect(layoutFrom(JSON.stringify([{ piece: 'gone', show: false }, null]))).toEqual(layoutFrom(null))
+  })
+})
+
+describe("the Checkin form's empty Location choice", () => {
+  // Snipe-IT moves an Asset checked in with no Location to its Default Location, or to none.
+  it("names the Asset's Default Location when it has one", () => {
+    expect(defaultLocationChoice('IT Office')).toBe('Default Location (IT Office)')
+  })
+
+  it('says No Location when the Asset has no Default Location', () => {
+    expect(defaultLocationChoice('')).toBe('No Location')
   })
 })
