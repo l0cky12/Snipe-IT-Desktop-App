@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, HEALTH_TONE, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
@@ -687,8 +687,10 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 }
 
 const healthName: Record<HealthLine['warning'], string> = {
-  unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: 'Audit late', auditDue: 'Audit due',
+  unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
 }
+// red: fix it now; amber: keep an eye on it.
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber' }
 
 // The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
 function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
@@ -697,9 +699,9 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
   onSettings: () => void
   onAssetView: (v: AssetView) => void
 }) {
-  if (!health) return <section className="health" aria-label="Health warnings"><p className="health-line checking">Checking…</p></section>
+  if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
-    return <section className="health" aria-label="Health warnings"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
+    return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
   const line = (l: HealthLine) => {
     if ('error' in l) return <><b>{l.warning === 'tooOld' ? 'Snipe-IT version' : healthName[l.warning]}</b> <span>Couldn't check: {l.error}</span></>
     if ('message' in l)
@@ -714,9 +716,9 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
     return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
   }
   return (
-    <section className="health" aria-label="Health warnings">
+    <section className="health" aria-label="Health warnings" aria-live="polite">
       {health.lines.length
-        ? health.lines.map((l) => <p key={l.warning} className={`health-line c-${HEALTH_TONE[l.warning]}`}>{line(l)}</p>)
+        ? health.lines.map((l) => <p key={l.warning} className={`health-line c-${healthTone[l.warning]}`}>{line(l)}</p>)
         : <p className="health-line c-green">All clear <span className="dim">Checked {health.at}</span></p>}
     </section>
   )
@@ -735,7 +737,7 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
   const [loadedAt, setLoadedAt] = useState('')
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
-  // The last Health check, kept whole: its audit totals are the ones the Upcoming audits timeline shows.
+  // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
   const [health, setHealth] = useState<(Health & { lines: HealthLine[]; at: string }) | Failed | null>(null)
   const latestHealth = useRef(0)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)

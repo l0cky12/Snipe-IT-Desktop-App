@@ -173,16 +173,13 @@ export type Dashboard = {
 /**
  * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
- * Audit due totals are Snipe-IT's own (its /hardware/audit routes), shared with the Upcoming audits timeline.
+ * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
  */
 export type Health = {
   probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
   auditLate: number | Failed
   auditDue: number | Failed
 }
-export type HealthWarning = 'unreachable' | 'key' | 'tooOld' | 'auditLate' | 'auditDue'
-/** red: fix it now; amber: keep an eye on it. */
-export const HEALTH_TONE: Record<HealthWarning, 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber' }
 /** One line of the Health warnings strip, or why its check couldn't run. */
 export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
@@ -195,10 +192,11 @@ export const MIN_SNIPEIT = [8, 7] as const
 /** The strip's lines, in order: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
 export function healthLines({ probe, auditLate, auditDue }: Health): HealthLine[] {
   if ('warning' in probe) return [probe]
-  const version = 'version' in probe ? /^v?(\d+)\.(\d+)/.exec(probe.version) : null
+  const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
+  const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
-    : !version ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
-    : Number(version[1]) * 1000 + Number(version[2]) < MIN_SNIPEIT[0] * 1000 + MIN_SNIPEIT[1] ? [{ warning: 'tooOld', version: probe.version }] : []
+    : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
+    : older ? [{ warning: 'tooOld', version: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
     typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
   return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue)]
