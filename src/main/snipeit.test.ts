@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, overdueTemp, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -881,6 +881,11 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
     expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+    // What the End-of-day reminder lists: the same Temp checkouts, or why it can't tell them apart.
+    expect(overdueTemp(overdue)).toEqual(overdueList(overdue.rows, true))
+    expect(overdueTemp({ rows: overdue.rows, tempError: 'HTTP 403' })).toEqual({ error: 'HTTP 403' })
+    expect(overdueTemp({ error: "Can't reach Snipe-IT" })).toEqual({ error: "Can't reach Snipe-IT" })
+    expect(overdueTemp(undefined)).toBeUndefined()
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {

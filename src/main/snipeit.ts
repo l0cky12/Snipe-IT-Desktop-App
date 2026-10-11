@@ -202,6 +202,9 @@ export type Dashboard = {
 export type OverdueRow = Asset & { expectedCheckin: string; overdue: Lateness; temp: boolean }
 /** The dashboard Overdue list, or only its Temp checkouts (Health warning 5 counts that). */
 export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly ? rows.filter((r) => r.temp) : rows)
+/** The Overdue list's Temp checkouts, most late first, or why they can't be told apart; undefined until it has loaded. */
+export const overdueTemp = (overdue?: Dashboard['overdue']): OverdueRow[] | Failed | undefined =>
+  !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true)
 
 /**
  * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
@@ -236,8 +239,8 @@ export function healthLines({ probe, auditLate, auditDue }: Health, overdue?: Da
     : older ? [{ warning: 'tooOld', version: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue' | 'temp', t: number | Failed | undefined): HealthLine[] =>
     t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  const temp = !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true).length
-  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', temp), ...total('auditDue', auditDue)]
+  const temp = overdueTemp(overdue)
+  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', Array.isArray(temp) ? temp.length : temp), ...total('auditDue', auditDue)]
 }
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */

@@ -70,8 +70,8 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-// tempOnly: opened from the End-of-day reminder, to the Overdue list with Temp only on; a new one each click.
-type View = { page: 'dashboard'; tempOnly?: number } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+// reminderClick: opened from the End-of-day reminder, to the Overdue list with Temp only on; a new one each click.
+type View = { page: 'dashboard'; reminderClick?: number } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 
 export function App() {
@@ -148,7 +148,7 @@ export function App() {
 
   useEffect(() => search.current?.focus(), [])
   // The End-of-day reminder clicked: the dashboard's Overdue list with Temp only on, from wherever the Operator was.
-  useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', tempOnly: Date.now() }))), [])
+  useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', reminderClick: Date.now() }))), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inField = e.target instanceof Element && !!e.target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]')
@@ -415,7 +415,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.tempOnly} tempOnly={!!view.tempOnly} onPick={pick} onSegment={showSegment} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onSegment={showSegment} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : w === 'Temp checkout' ? tempCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />

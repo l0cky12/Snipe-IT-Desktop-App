@@ -10,6 +10,7 @@ const LISTED = 10
 /**
  * The notification: the count and Asset Tags (as given, most late first), at most 10 then "and N more". Never names:
  * notifications show on lock screens. automaticAt: Automatic check-in's time ("HH:MM") when it's on.
+ * ponytail: nothing passes automaticAt until Automatic check-in (#105) has its setting.
  */
 export function reminderText(tags: string[], automaticAt?: string) {
   const more = tags.length - LISTED

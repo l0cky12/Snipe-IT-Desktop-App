@@ -264,7 +264,7 @@ it('the End-of-day reminder is on until switched off; its last day is kept but n
   store.recordReminder('2026-10-12')
   const reopened = createSettingsStore(path, storage, '0.1.0')
   expect(reopened.lastReminder()).toBe('2026-10-12')
-  expect(reopened.get()).not.toHaveProperty('reminderShown')
+  expect(reopened.get()).not.toHaveProperty('reminderDay')
   expect(reopened.get().tempCheckout.reminder).toBe(false)
 })
 

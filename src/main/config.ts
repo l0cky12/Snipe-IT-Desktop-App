@@ -69,7 +69,7 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
-  tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderShown?: string }
+  tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -240,9 +240,9 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       return get()
     },
     /** The last day ("YYYY-MM-DD") the End-of-day reminder ran, so a restart doesn't repeat it. */
-    lastReminder: () => read().reminderShown,
+    lastReminder: () => read().reminderDay,
     recordReminder(day: string) {
-      write({ ...read(), reminderShown: day })
+      write({ ...read(), reminderDay: day })
     },
     saveSchoolCalendar(text: string) {
       if (typeof text !== 'string') throw new Error('Invalid School calendar')

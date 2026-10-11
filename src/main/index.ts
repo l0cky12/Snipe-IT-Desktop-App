@@ -7,7 +7,7 @@ import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, 
 import { sendMail } from './mail'
 import { createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt, overdueList, toWire } from './snipeit'
+import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
 
 // The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
@@ -145,11 +145,11 @@ app.whenReady().then(() => {
     lastShown: store.lastReminder,
     recordShown: store.recordReminder,
     // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+    // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
     outstanding: async () => {
-      const { overdue } = await client().dashboard(['overdue'])
-      if (!overdue || 'error' in overdue) throw new Error(overdue?.error ?? "Snipe-IT didn't send the Overdue list.")
-      if (overdue.tempError) throw new Error(overdue.tempError)
-      return overdueList(overdue.rows, true).map((a) => a.assetTag)
+      const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
+      if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+      return temp.map((a) => a.assetTag)
     },
     // Even with the window open: at the end of the day it may be behind other windows.
     notify: ({ title, body }) => {
