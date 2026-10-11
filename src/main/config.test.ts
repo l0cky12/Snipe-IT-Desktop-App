@@ -257,7 +257,7 @@ it('the End-of-day reminder is on until switched off; its last day is kept but n
   const { path, storage, store } = setup()
   // Saved before the switch existed: still on.
   writeFileSync(path, JSON.stringify({ baseUrl: '', defaultLocation: null, tempCheckout: { endOfDay: '15:10' } }))
-  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '15:50' })
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '16:10' })
   expect(store.saveTempCheckout({ endOfDay: '15:10', reminder: false, automatic: false, automaticAt: '15:50' }).tempCheckout).toEqual({ endOfDay: '15:10', reminder: false, automatic: false, automaticAt: '15:50' })
   expect(() => store.saveTempCheckout({ endOfDay: '15:10', reminder: 'yes', automatic: false, automaticAt: '15:50' } as never)).toThrow('Invalid Temp checkout settings')
   expect(store.lastReminder()).toBeUndefined()
@@ -270,12 +270,17 @@ it('the End-of-day reminder is on until switched off; its last day is kept but n
 
 it('Automatic check-in is off until switched on, at 3:50 pm, and must come after the end-of-day time', () => {
   const { path, storage, store } = setup()
+  // Until its time is set, an hour after the end-of-day time.
+  writeFileSync(path, JSON.stringify({ baseUrl: '', defaultLocation: null, tempCheckout: { endOfDay: '15:10', reminder: true } }))
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '16:10' })
   const temp = { endOfDay: '14:50', reminder: true, automatic: true, automaticAt: '15:50' }
   expect(store.saveTempCheckout(temp).tempCheckout).toEqual(temp)
   for (const [endOfDay, automaticAt] of [['14:50', '14:50'], ['14:50', '09:00'], ['16:00', '15:50']])
     expect(() => store.saveTempCheckout({ ...temp, endOfDay, automaticAt })).toThrow('Automatic check-in must be after the end-of-day time')
-  // Off, it's still checked: the switch would turn it on with that time.
-  expect(() => store.saveTempCheckout({ ...temp, automatic: false, automaticAt: '14:00' })).toThrow('Automatic check-in must be after the end-of-day time')
+  // Off, it's no reason to refuse a later end-of-day time; switching it on then is refused.
+  const off = { ...temp, automatic: false, endOfDay: '16:00' }
+  expect(store.saveTempCheckout(off).tempCheckout).toEqual(off)
+  expect(() => store.saveTempCheckout({ ...off, automatic: true })).toThrow('Automatic check-in must be after the end-of-day time')
   for (const automaticAt of ['24:00', '4:10', '']) expect(() => store.saveTempCheckout({ ...temp, automaticAt })).toThrow('Enter the Automatic check-in time as HH:MM, like 15:50.')
   expect(() => store.saveTempCheckout({ ...temp, automatic: 1 } as never)).toThrow('Invalid Temp checkout settings')
   expect(store.lastAutomatic()).toBeUndefined()
@@ -283,7 +288,7 @@ it('Automatic check-in is off until switched on, at 3:50 pm, and must come after
   const reopened = createSettingsStore(path, storage, '0.1.0')
   expect(reopened.lastAutomatic()).toBe('2026-10-12')
   expect(reopened.get()).not.toHaveProperty('automaticDay')
-  expect(reopened.get().tempCheckout).toEqual(temp)
+  expect(reopened.get().tempCheckout).toEqual(off)
 })
 
 it('keeps the School calendar as checked entries sorted by date; a bad line refuses the whole save', () => {

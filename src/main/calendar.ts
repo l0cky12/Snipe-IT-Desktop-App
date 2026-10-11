@@ -57,6 +57,22 @@ export function endOn(date: Date, { endOfDay, calendar }: SchoolTimes): string |
   return on.map((e) => e.halfDay!).sort()[0] ?? endOfDay
 }
 
+const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))
+/** "HH:MM" gap minutes after t, or null past midnight. */
+export function later(t: string, gap: number): string | null {
+  const m = minutes(t) + gap
+  return m < 24 * 60 ? `${pad(Math.floor(m / 60))}:${pad(m % 60)}` : null
+}
+
+/**
+ * A date's Automatic check-in time ("HH:MM"): as long after its end-of-day time (a half day's own) as automaticAt is after
+ * the usual one. null when it isn't a School day, or that runs past midnight.
+ */
+export function automaticOn(date: Date, times: SchoolTimes, automaticAt: string): string | null {
+  const end = endOn(date, times)
+  return end && later(end, minutes(automaticAt) - minutes(times.endOfDay))
+}
+
 /**
  * When a Temp checkout made now is due, "YYYY-MM-DD HH:MM": today's end-of-day time on a School day before it, else the
  * next School day's. null when the School calendar leaves no School day within a year.

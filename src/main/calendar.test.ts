@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dueAt, dueLabel, formatCalendar, parseCalendar } from './calendar'
+import { automaticOn, dueAt, dueLabel, formatCalendar, parseCalendar } from './calendar'
 
 // 2026-10-09 is a Friday, 2026-10-12 a Monday.
 const at = (s: string) => new Date(`${s}:00`)
@@ -79,5 +79,16 @@ describe('the School calendar text', () => {
     expect(refused('2026-12-18 half day 0:00 Concert')).toThrow("Line 2: a half day can't end at midnight (00:00)")
     expect(refused('2026-12-18')).toThrow('Line 2: add a label, like Thanksgiving')
     expect(refused('2026-12-18 half day 12:00')).toThrow('Line 2: add a label, like Thanksgiving')
+  })
+})
+
+describe('Automatic check-in time', () => {
+  const times = { endOfDay: '14:50', calendar: parseCalendar('2026-10-13 half day 12:00 Conferences\n2026-10-14 half day 23:30 Late night\n2026-10-15 Fall break') }
+  it('keeps the gap after a half day, and is null with no School day or past midnight', () => {
+    expect(automaticOn(at('2026-10-12 08:00'), times, '15:50')).toBe('15:50')
+    expect(automaticOn(at('2026-10-13 08:00'), times, '15:50')).toBe('13:00')
+    expect(automaticOn(at('2026-10-14 08:00'), times, '15:50')).toBeNull()
+    expect(automaticOn(at('2026-10-15 08:00'), times, '15:50')).toBeNull()
+    expect(automaticOn(at('2026-10-10 08:00'), times, '15:50')).toBeNull()
   })
 })
