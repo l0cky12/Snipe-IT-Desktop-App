@@ -217,7 +217,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
                 {/* A row's Location shows only when it differs from the current one (after Change Location). */}
                 {r.ctx.id === here.id ? r.what : [r.what, `to ${r.ctx.name}`].filter(Boolean).join(', ')}
                 {/* Came back after its Expected Checkin, from the lookup answer; a refused Asset didn't come back. */}
-                {r.before?.overdueDays != null && (r.result.state === 'done' || r.result.state === 'undone') && <> <span className="chip c-red">Overdue</span></>}
+                {r.before?.overdue != null && (r.result.state === 'done' || r.result.state === 'undone') && <> <span className="chip c-red">Overdue</span></>}
               </>
             )} />
         ) : (

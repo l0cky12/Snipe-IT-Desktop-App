@@ -37,6 +37,9 @@ const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { empl
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
+// A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
+const minutesAgo = (m) => new Date(Date.now() - (m + new Date().getTimezoneOffset()) * 6e4).toISOString().slice(0, 16).replace('T', ' ') + ':00'
+const dueOf = (i) => (i === 1 ? minutesAgo(40) : i === 19 ? minutesAgo(125) : i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30)))
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
@@ -48,7 +51,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30))) : null,
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
