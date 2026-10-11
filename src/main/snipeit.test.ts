@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -678,6 +678,7 @@ describe('dashboard (today is 2026-09-24)', () => {
   // A fake Snipe-IT that pages each list (hardware, licenses, users, …) by limit/offset, capped at pageMax.
   // A list given as { status, body } answers that instead, e.g. a permission error. Records every URL it was asked for.
   // A status filter is its own list, e.g. 'hardware?status=Archived'; the fake answers it with nothing unless given.
+  // A search keeps the rows that mention it anywhere, as Snipe-IT's does across a row's fields.
   type Refusal = { status?: number; body: unknown }
   function fleet(lists: Record<string, object[] | Refusal>, pageMax = 500) {
     const urls: URL[] = []
@@ -689,13 +690,15 @@ describe('dashboard (today is 2026-09-24)', () => {
       const list = status ? lists[`${path}?status=${status}`] ?? [] : lists[path]
       if (!list) return new Response(JSON.stringify(notFound), { status: 404 })
       if (!Array.isArray(list)) return new Response(JSON.stringify(list.body), { status: list.status ?? 200 })
+      const search = url.searchParams.get('search')?.toLowerCase()
+      const rows = search ? list.filter((r) => JSON.stringify(r).toLowerCase().includes(search)) : list
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), pageMax)
       const offset = Number(url.searchParams.get('offset') ?? 0)
-      return new Response(JSON.stringify({ total: list.length, rows: list.slice(offset, offset + limit) }))
+      return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(offset, offset + limit) }))
     }) as typeof globalThis.fetch
     const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}` && !u.searchParams.has('status')).map((u) => Number(u.searchParams.get('offset')))
     const listsAsked = () => [...new Set(urls.map((u) => u.pathname.replace('/api/v1/', '')))].sort()
-    return { snipeIt: createSnipeIt(config, fetch, today), fetch, offsets, listsAsked }
+    return { snipeIt: createSnipeIt(config, fetch, today), fetch, urls, offsets, listsAsked }
   }
   const asset = (id: number, fields: object = {}) => ({
     ...chromebook, id, asset_tag: `NOMMA-${id}`, expected_checkin: null, warranty_expires: null, ...fields,
@@ -771,7 +774,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     const late = { expected_checkin: { datetime: '2026-09-01 00:00:00' }, warranty_expires: { date: '2026-10-01' } }
     const { snipeIt } = fleet({ hardware: [asset(1, late)], 'hardware?status=Archived': [asset(9, { ...late, status_label: archived })] })
     const { overdue, expiring } = await snipeIt.dashboard(['overdue', 'expiring'])
-    expect([overdue, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
+    expect([overdue && 'rows' in overdue && overdue.rows, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
   })
 
   it('each Asset segment carries its Assets, so the rail can list them', async () => {
@@ -804,11 +807,80 @@ describe('dashboard (today is 2026-09-24)', () => {
       asset(5), // no Expected Checkin: never Overdue
     ] })
     const { overdue } = await snipeIt.dashboard(['overdue'])
-    if (!Array.isArray(overdue)) throw new Error('expected rows')
-    expect(overdue.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
+    if (!overdue || !('rows' in overdue)) throw new Error('expected rows')
+    expect(overdue.rows.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
       ['NOMMA-3', '2026-09-01', '23d'], ['NOMMA-6', '2026-09-23 14:50', '1d'], ['NOMMA-1', '2026-09-23', '1d'],
     ])
-    expect(overdue[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+    expect(overdue.rows[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+  })
+
+  // Outstanding Temp checkouts (#61 §2). Today is 2026-09-24, so every 14:50 due time on the 23rd has passed.
+  const checkedOut = (id: number, due: string, lastCheckout: string) =>
+    asset(id, { expected_checkin: { datetime: due }, last_checkout: { datetime: lastCheckout, formatted: lastCheckout } })
+  const logged = (id: number, item: number, when: string, note: string) => ({
+    id, action_type: 'checkout', created_at: { datetime: when }, created_by: { id: 5, name: 'Demo Operator' },
+    target: { id: 311, name: 'Jordan Reyes', type: 'user' }, note, item: { id: item, name: `NOMMA-${item}`, type: 'asset' },
+  })
+  const tempFleet = (pageMax?: number) => fleet({
+    hardware: [
+      checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
+      checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
+      checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
+      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
+      checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
+    ],
+    // Newest first, as asked for.
+    'reports/activity': [
+      logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
+      logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
+      logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
+      logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
+      logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
+      logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
+      logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
+    ],
+  }, pageMax)
+  const temps = (overdue: Dashboard['overdue']) => (overdue && 'rows' in overdue ? overdue.rows.filter((a) => a.temp).map((a) => a.id).sort() : overdue)
+
+  it('marks Overdue Temp checkouts: a tagged current Checkout or an undo-restored tag, not a later Checkout or a date-only one', async () => {
+    const { snipeIt, urls } = tempFleet()
+    const { overdue } = await snipeIt.dashboard(['overdue'])
+    expect(temps(overdue)).toEqual([1, 4])
+    expect(overdue && 'rows' in overdue && overdue.rows.map((a) => a.id)).toEqual([3, 2, 1, 4, 5])
+    // One request: only tagged Checkouts, newest first, and the first page already reaches back past the oldest candidate.
+    const asked = urls.filter((u) => u.pathname === '/api/v1/reports/activity')
+    expect(asked.map((u) => Object.fromEntries(u.searchParams))).toEqual([
+      { action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: '500', offset: '0' },
+    ])
+  })
+
+  it('pages the Activity Report only until past the oldest candidate\'s last Checkout', async () => {
+    const { snipeIt, offsets } = tempFleet(2)
+    expect(temps((await snipeIt.dashboard(['overdue'])).overdue)).toEqual([1, 4])
+    // The second page ends at the oldest candidate's own Checkout; the third goes past it, so a fourth isn't asked for.
+    expect(offsets('reports/activity')).toEqual([0, 2, 4])
+  })
+
+  it('asks the Activity Report nothing when no checked-out Asset has a time of day', async () => {
+    const { snipeIt, listsAsked } = fleet({ hardware: [asset(1, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, last_checkout: { datetime: '2026-08-31 09:00:00' } })] })
+    expect(temps((await snipeIt.dashboard(['overdue'])).overdue)).toEqual([])
+    expect(listsAsked()).toEqual(['hardware'])
+  })
+
+  it('an Activity Report Snipe-IT refuses still lists Overdue, with no Temp marks and the reason', async () => {
+    const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+    const { snipeIt } = fleet({ hardware: [checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12')], 'reports/activity': refused })
+    expect((await snipeIt.dashboard(['overdue'])).overdue).toEqual({
+      rows: [expect.objectContaining({ id: 1, temp: false })], tempError: 'Snipe-IT returned HTTP 403: You do not have permission to view the Activity Report.',
+    })
+  })
+
+  it('Temp only keeps the Temp checkouts, and Health warning 5 counts the same list', async () => {
+    const { overdue } = await tempFleet().snipeIt.dashboard(['overdue'])
+    if (!overdue || !('rows' in overdue)) throw new Error('expected rows')
+    expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
+    expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
+    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, overdue)).toEqual([{ warning: 'temp', count: 2 }])
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
@@ -952,6 +1024,66 @@ it('tests authentication before reporting connection success and detects the ver
   expect(await createSnipeIt(config, older.fetch).testConnection()).toEqual({ version: 'Unavailable' })
 })
 
+describe('Health warnings', () => {
+  const audits = { '/hardware/audit/overdue': { body: { total: 12, rows: [] } }, '/hardware/audit/due': { body: { total: 3, rows: [] } } }
+
+  it('probes /version for the version, and reads both audit totals with limit=1', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3 })
+    expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/version'])
+    expect(queries.filter((q) => Object.keys(q).length)).toEqual([{ limit: '1' }, { limit: '1' }])
+  })
+
+  it('classifies the probe: unreachable (network, timeout, 503), the key rejected (401) or refused key-wide (403)', async () => {
+    const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
+    expect((await createSnipeIt(config, offline).health()).probe).toEqual({ warning: 'unreachable', message: expect.stringMatching(/^Can't reach Snipe-IT at https:\/\/snipe\.example\.org/) })
+    const slow = (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }) as typeof globalThis.fetch
+    expect((await createSnipeIt(config, slow).health()).probe).toEqual({ warning: 'unreachable', message: expect.stringMatching(/took longer than/) })
+    const proxy = fakeFetch({ '/version': { status: 503, body: {} }, ...audits })
+    expect((await createSnipeIt(config, proxy.fetch).health()).probe).toMatchObject({ warning: 'unreachable' })
+    const rejected = fakeFetch({ '/version': { status: 401, body: { message: 'Unauthenticated.' } }, ...audits })
+    expect((await createSnipeIt(config, rejected.fetch).health()).probe).toEqual({ warning: 'key', message: expect.stringMatching(/^Snipe-IT rejected your API key\./) })
+    const twoFactor = fakeFetch({ '/version': { status: 403, body: { status: 'error', messages: 'Two-factor authentication is required.' } }, ...audits })
+    expect((await createSnipeIt(config, twoFactor.fetch).health()).probe).toEqual({ warning: 'key', message: 'Snipe-IT returned HTTP 403: Two-factor authentication is required.' })
+  })
+
+  it('a check that fails says why on its own, leaving the others', async () => {
+    const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'] })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3,
+    })
+  })
+
+  it('lines: hidden at 0, too old below v8.7, and a failed check on its own line only', () => {
+    expect(healthLines({ probe: { version: 'v8.7.0' }, auditLate: 0, auditDue: 0 })).toEqual([])
+    expect(healthLines({ probe: { version: 'v9.0.1' }, auditLate: 12, auditDue: 0 })).toEqual([{ warning: 'auditLate', count: 12 }])
+    expect(healthLines({ probe: { version: 'v8.6.3' }, auditLate: { error: 'No audits for you.' }, auditDue: 3 })).toEqual([
+      { warning: 'tooOld', version: 'v8.6.3' }, { warning: 'auditLate', error: 'No audits for you.' }, { warning: 'auditDue', count: 3 },
+    ])
+    expect(healthLines({ probe: { version: 'nightly' }, auditLate: 0, auditDue: 1 })).toEqual([
+      { warning: 'tooOld', error: "Snipe-IT's version, nightly, isn't one this app can read." }, { warning: 'auditDue', count: 1 },
+    ])
+    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+  })
+
+  it('lines: Temp checkouts Overdue counts the marked rows, says why it could not check, and is hidden at 0', () => {
+    const fine = { probe: { version: 'v8.8.0' }, auditLate: 4, auditDue: 2 } as const
+    const row = (temp: boolean) => ({ temp }) as NonNullable<Exclude<Dashboard['overdue'], { error: string }>>['rows'][number]
+    expect(healthLines(fine, { rows: [row(true), row(false), row(true)] })).toEqual([{ warning: 'auditLate', count: 4 }, { warning: 'temp', count: 2 }, { warning: 'auditDue', count: 2 }])
+    expect(healthLines(fine, { rows: [row(false)] })).toHaveLength(2)
+    expect(healthLines(fine, { rows: [], tempError: 'No Activity Report for you.' })).toContainEqual({ warning: 'temp', error: 'No Activity Report for you.' })
+    expect(healthLines(fine, { error: 'No Assets for you.' })).toContainEqual({ warning: 'temp', error: 'No Assets for you.' })
+    expect(healthLines(fine)).toHaveLength(2) // the Overdue list hasn't loaded yet
+  })
+
+  it('lines: Snipe-IT unreachable or the key failing shows only that line', () => {
+    const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
+    expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
+    const key = { warning: 'key', message: 'Snipe-IT rejected your API key.' } as const
+    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 }, { error: 'Snipe-IT rejected your API key.' })).toEqual([key])
+  })
+})
+
 it("gets the Operator's own email from Snipe-IT, and says so when their account has none", async () => {
   expect(await createSnipeIt(config, fakeFetch({ '/users/me': { body: { id: 5, email: 'operator@nomma.net' } } }).fetch).operatorEmail()).toBe('operator@nomma.net')
   for (const email of ['', null])
@@ -1041,6 +1173,61 @@ describe('list', () => {
     const denied = { status: 'error', messages: 'You do not have permission.', payload: null }
     const { fetch } = fakeFetch({ '/models': { body: denied } })
     await expect(createSnipeIt(config, fetch).list('models')).rejects.toThrow('You do not have permission.')
+  })
+})
+
+describe('Assets Views', () => {
+  const empty = { body: { total: 0, rows: [] } }
+  const labels = { body: { total: 2, rows: [{ id: 2, name: 'Deployed' }, { id: 7, name: 'damaged' }] } }
+
+  it.each([
+    ['all', '/hardware', {}],
+    ['checkedOut', '/hardware', { status: 'Deployed' }],
+    ['available', '/hardware', { status: 'RTD' }],
+    ['auditDue', '/hardware/audit/due', {}],
+    ['auditLate', '/hardware/audit/overdue', {}],
+  ] as const)('%s asks Snipe-IT for %s, narrowed by the search and filter boxes', async (view, path, fixed) => {
+    const { fetch, calls, queries } = fakeFetch({ [path]: empty })
+    await createSnipeIt(config, fetch).list('assets', { view, search: 'cb', filters: { location_id: '4', category_id: '3' }, offset: 50 })
+    expect(calls).toEqual([path])
+    expect(queries[0]).toEqual({ limit: '50', offset: '50', search: 'cb', location_id: '4', category_id: '3', ...fixed })
+  })
+
+  it('Damaged asks for the Status Label named Damaged, found by name whatever its case', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/statuslabels': labels, '/hardware': empty })
+    await createSnipeIt(config, fetch).list('assets', { view: 'damaged', filters: { location_id: '4' } })
+    expect(calls).toEqual(['/statuslabels', '/hardware'])
+    expect(queries[1]).toEqual({ limit: '50', offset: '0', location_id: '4', status_id: '7' })
+  })
+
+  it('Damaged with no Status Label of that name is an empty View that says so, without listing Assets', async () => {
+    const { fetch, calls } = fakeFetch({ '/statuslabels': { body: { total: 1, rows: [{ id: 2, name: 'Deployed' }] } } })
+    const page = await createSnipeIt(config, fetch).list('assets', { view: 'damaged' })
+    expect(page).toEqual({ total: 0, rows: [], why: "Snipe-IT has no Status Label named Damaged, so no Asset is Damaged." })
+    expect(calls).toEqual(['/statuslabels'])
+  })
+
+  it('a View can be sorted by the audit dates, and paged in id order for "Select all N matching"', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/hardware/audit/overdue': empty })
+    const snipeIt = createSnipeIt(config, fetch)
+    await snipeIt.list('assets', { view: 'auditLate', sort: 'nextAudit', order: 'asc' })
+    await snipeIt.list('assets', { view: 'auditLate', sort: 'id', order: 'asc', offset: 50 })
+    expect(calls).toEqual(['/hardware/audit/overdue', '/hardware/audit/overdue'])
+    expect(queries[0]).toMatchObject({ sort: 'next_audit_date', order: 'asc' })
+    expect(queries[1]).toMatchObject({ sort: 'id', order: 'asc', offset: '50' })
+  })
+
+  it("Export CSV reads the open View's route", async () => {
+    const { fetch, calls } = fakeFetch({ '/hardware/audit/due': empty })
+    await createSnipeIt(config, fetch).exportList('assets', { view: 'auditDue' })
+    expect(calls).toEqual(['/hardware/audit/due'])
+  })
+
+  it('an unknown View, or a View on another List, is refused without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    await expect(createSnipeIt(config, fetch).list('assets', { view: 'constructor' as 'all' })).rejects.toThrow('Unknown View')
+    await expect(createSnipeIt(config, fetch).list('users', { view: 'auditLate' })).rejects.toThrow('Unknown View')
+    expect(calls).toEqual([])
   })
 })
 

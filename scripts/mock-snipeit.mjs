@@ -5,6 +5,7 @@
 // To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
 // 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
 // 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
+// MOCK_ALL_AUDITED=1 moves every next audit date at least 40 days ahead, so nothing is Audit late or Audit due.
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -20,7 +21,7 @@ const pick = (list, n) => list[n % list.length]
 
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
-  ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
+  ['Damaged', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
 ].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
@@ -40,6 +41,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
 // An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
 const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// A datetime as Snipe-IT sends created_at and last_checkout.
+const stamp = (when) => when.toISOString().replace('T', ' ').slice(0, 19)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 // A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
@@ -51,7 +54,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
   const holder = status.status_meta !== 'deployed' ? null : toUser ? assigneeOf(pick(users, i), 'user') : assigneeOf(pick(locations.slice(1), i), 'location')
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
-  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40
+  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40 + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
@@ -60,6 +63,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
     // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
     rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
+    // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
+    last_checkout: holder ? { datetime: stamp(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
@@ -79,11 +84,21 @@ const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date()) =>
-  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: when.toISOString().replace('T', ' ').slice(0, 19) }, created_by: { id: 900, name: 'Demo Operator' },
+  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: stamp(when) }, created_by: { id: 900, name: 'Demo Operator' },
     item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
+// A checked-out Asset due at a time of day is a Temp checkout: its current Checkout carries the tag. Except NOMMA-001055,
+// checked in and out again in the web UI since its tagged Checkout; and NOMMA-001037's tag was put back by an undo.
 for (const a of assets.slice(0, 90).reverse()) {
-  const action = a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
-  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', new Date(Date.now() - a.id * 36e5))
+  const when = new Date(Date.now() - a.id * 36e5)
+  const temp = a.assigned_to && a.expected_checkin?.datetime.slice(11, 16) > '00:00'
+  const tag = temp && `[Temp checkout | due: ${a.expected_checkin.datetime.slice(0, 16)}]`
+  if (temp && a.id !== 56) {
+    act('checkout', a, a.assigned_to, a.id === 38 ? `[Undo] Bulk return ${tag}` : `${tag} Charger included`, when)
+    continue
+  }
+  if (temp) act('checkout', a, a.assigned_to, tag, new Date(when - 2 * 864e5))
+  const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
+  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
@@ -291,7 +306,8 @@ createServer(async (req, res) => {
     const found = users.filter((u) => text(u.name, u.username, u.email, u.employee_num).includes(q)).slice(0, 50)
     return send({ results: found.map((u) => ({ id: u.id, text: `${u.name.split(' ').reverse().join(', ')} (${u.username}) - #${u.employee_num}`, image: null })), pagination: { more: false } })
   }
-  if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
+  // Shaped like Snipe-IT v8.8's /version.
+  if (path === 'version') return send({ version: 'v8.8.0', build_version: 'v8.8.0-0-gmock', hash_version: 'gmock', full_version: 'v8.8.0 build 0 (gmock)' })
   if (path === 'hardware/labels') {
     const found = (body.asset_tags ?? []).filter((t) => assets.some((a) => a.asset_tag === t))
     if (!found.length) return send({ status: 'error', messages: 'Asset does not exist.', payload: null }, 404)
@@ -333,6 +349,7 @@ createServer(async (req, res) => {
       a.assigned_to = assigneeOf(target, body.checkout_to_type)
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
+      a.last_checkout = { datetime: stamp(new Date()), formatted: day(0) }
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)
