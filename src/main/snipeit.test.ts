@@ -317,6 +317,22 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, always).lookup('NOMMA-004812')).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 0 seconds.', kind: 'rateLimited' })
   })
 
+  it('a throttled request without a Retry-After waits out the minute-long throttle window before it is sent again', async () => {
+    let sent = 0
+    const throttled = (async () => (++sent === 1 ? new Response('{}', { status: 429 }) : new Response(JSON.stringify(chromebook)))) as typeof globalThis.fetch
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const result = createSnipeIt(config, throttled).lookup('NOMMA-004812')
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(sent).toBe(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(result).resolves.toMatchObject({ exact: true })
+      expect(sent).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a Snipe-IT too slow to answer says so, rather than blaming the network', async () => {
     const slow = (async () => {
       throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')

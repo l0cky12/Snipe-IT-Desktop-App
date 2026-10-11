@@ -747,20 +747,23 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       }
     }
     let res = await send(), text: string
+    // Retry-After is in seconds; without a readable one, Snipe-IT's throttle window is a minute.
+    const retryAfter = (r: Response) => {
+      const header = r.headers.get('Retry-After')?.trim() ?? ''
+      return /^\d+$/.test(header) ? Number(header) : 60
+    }
     // Snipe-IT throttles its API (120 requests a minute by default) and refuses the rest before doing anything, so a refused
-    // request is safe to send again once the wait it names (Retry-After, in seconds) is over. A Report reads one Asset at a time.
+    // request is safe to send again once the wait it names is over. A Report reads one Asset at a time.
     for (let tries = 0; res.status === 429 && tries < 3; tries++) {
-      const wait = Number(res.headers.get('Retry-After') ?? 5)
-      await new Promise((done) => setTimeout(done, Math.min(Number.isNaN(wait) ? 5 : wait, 60) * 1000))
+      await new Promise((done) => setTimeout(done, Math.min(retryAfter(res), 60) * 1000))
       res = await send()
     }
     // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
       throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
-    // Still over Snipe-IT's requests a minute after those tries. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    // Still over Snipe-IT's requests a minute after those tries.
     if (res.status === 429) {
-      const header = res.headers.get('Retry-After')?.trim() ?? ''
-      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      const wait = retryAfter(res)
       throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
     }
     // The proxy in front of Snipe-IT can't reach it.
