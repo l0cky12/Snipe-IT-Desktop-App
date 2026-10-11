@@ -157,6 +157,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .history th { height: 30px; padding-block: 0; border-bottom-color: var(--line); color: var(--dim); font-weight: 500; font-size: 12px; white-space: nowrap; }
 .history .num { text-align: right; }
 .history td .actions { flex-wrap: nowrap; gap: 4px; }
+/* A form in a cell (a Quick Action's, a Report's schedule) still wraps, so a narrow window keeps it usable. */
+.history td :is(form.actions, form .actions) { flex-wrap: wrap; }
 .history td .actions :is(button, select, input) { min-height: 24px; height: 24px; padding: 0 8px; }
 .history .note { display: inline-block; color: var(--text); border: 1.5px solid var(--amber); border-radius: var(--r-pill); padding: 0 9px; font-size: 12.5px; font-weight: 600; line-height: 1.6; }
 .history .late { font-weight: 700; }
