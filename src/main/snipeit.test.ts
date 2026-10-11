@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, markdownOf, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, markdownOf, toWire, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -247,6 +247,11 @@ describe('getAsset', () => {
     })
   })
 
+  it("carries the Asset's Default Location, blank when it has none", async () => {
+    expect((await snipeItWith({ ...chromebook, rtd_location: { id: 4, name: 'IT Office' } }).getAsset(4812)).defaultLocation).toBe('IT Office')
+    expect((await snipeItWith({ ...chromebook, rtd_location: null }).getAsset(4812)).defaultLocation).toBe('')
+  })
+
   it('History is newest first: when, action, Operator, detail, and note', async () => {
     const { history } = await snipeItWith(chromebook, { body: activity }).getAsset(4812)
     expect(history).toEqual([
@@ -302,7 +307,7 @@ describe('connection errors', () => {
     const { fetch } = fakeFetch({ '/hardware/bytag/NOMMA-004812': rejected })
     const error = createSnipeIt(config, fetch).lookup('NOMMA-004812')
     await expect(error).rejects.toThrow(/rejected your API key/)
-    await expect(error).rejects.toThrow(/generate a new personal API key/)
+    await expect(error).rejects.toThrow(/may have been deactivated/)
   })
 
   it('a rejected API key fails getAsset too, rather than showing an Asset', async () => {
@@ -339,6 +344,39 @@ describe('connection errors', () => {
     await expect(createSnipeIt(config, html).lookup('X')).rejects.toThrow(
       /https:\/\/snipe\.example\.org did not answer like Snipe-IT/,
     )
+  })
+
+  // Each failure as the window receives it, after crossing the bridge: the message and its kind.
+  const failureOf = async (fetch: typeof globalThis.fetch) => {
+    const { message, kind, retryAfter } = fromWire(toWire(await createSnipeIt(config, fetch).statusLabels().catch((e) => e)).message)
+    return { message, kind, retryAfter }
+  }
+  const answering = (status: number, headers?: Record<string, string>) =>
+    (async () => new Response(JSON.stringify({ message: 'Nope.' }), { status, headers })) as typeof globalThis.fetch
+  const unreachable = { message: "Can't reach Snipe-IT at https://snipe.example.org. Check your network connection and server URL in Settings.", kind: 'unreachable' }
+
+  it.each([
+    ['401', answering(401), {
+      message: 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.',
+      kind: 'key',
+    }],
+    ['403', answering(403, {}), { message: 'Snipe-IT returned HTTP 403: Nope.', kind: 'forbidden' }],
+    ['429 with Retry-After', answering(429, { 'Retry-After': '23' }), { message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 }],
+    ['429 with Retry-After: 1', answering(429, { 'Retry-After': '1' }), { message: 'Snipe-IT is limiting requests; try again in 1 second.', kind: 'rateLimited', retryAfter: 1 }],
+    ['429 without Retry-After', answering(429), { message: 'Snipe-IT is limiting requests; try again in 60 seconds.', kind: 'rateLimited', retryAfter: 60 }],
+    ['429 with an unreadable Retry-After', answering(429, { 'Retry-After': 'soon' }), { message: 'Snipe-IT is limiting requests; try again in 60 seconds.', kind: 'rateLimited', retryAfter: 60 }],
+    ['502', answering(502), unreachable],
+    ['503', answering(503), unreachable],
+    ['504', answering(504), unreachable],
+    ['a network error', (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch, unreachable],
+    ['a timeout', (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }) as typeof globalThis.fetch, {
+      message: 'Snipe-IT at https://snipe.example.org took longer than 15 seconds to answer. It may be busy; try again.', kind: 'timeout',
+    }],
+    ['500', answering(500), { message: 'Snipe-IT returned HTTP 500: Nope.', kind: 'refused' }],
+    ['a 200 with status: "error"', fakeFetch({ '/statuslabels': { body: { status: 'error', messages: 'You do not have permission to view Status Labels.' } } }).fetch,
+      { message: 'You do not have permission to view Status Labels.', kind: 'refused' }],
+  ])('%s says so, with its kind', async (_what, fetch, failure) => {
+    expect(await failureOf(fetch)).toEqual(failure)
   })
 
   it("field-by-field messages from Snipe-IT are joined into one readable reason", async () => {
@@ -1111,6 +1149,79 @@ describe('report', () => {
     expect((await snipeIt.report('overdue', { from: '2026-09-23', to: '2026-09-23' })).rows.map((r) => r[0])).toEqual(['NOMMA-3'])
     expect((await snipeIt.report('expiring')).rows).toEqual([['NOMMA-4', 'CB-4', 'Deployed', '2026-10-01', '7'], ['NOMMA-5', 'CB-5', 'Deployed', '2026-12-01', '68']])
     expect((await snipeIt.report('expiring', { to: '2026-11-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-4'])
+  })
+
+  // Snipe-IT v8.7+ sends last_audit_date as {datetime, formatted} and next_audit_date as {date, formatted}.
+  const audited = (id: number, last: string | null, next: string | null) => ({
+    ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`,
+    last_audit_date: last && { datetime: `${last} 09:15:00`, formatted: `${last} 9:15 AM` }, next_audit_date: next && { date: next, formatted: next },
+  })
+  const auditFetch = (path: string, hardware: object[]) => fakeFetch({ [path]: { body: { total: hardware.length, rows: hardware } } })
+
+  it('Audit due asks Snipe-IT which Assets are due in the Location and Category, soonest next audit first', async () => {
+    const { fetch, calls, queries } = auditFetch('/hardware/audit/due', [audited(1, '2025-10-20', '2026-10-20'), audited(2, null, '2026-09-30'), audited(3, '2025-10-01', '2026-10-01')])
+    const r = await createSnipeIt(config, fetch, today).report('auditDue', { locationId: '9', categoryId: '3' })
+    expect(calls).toEqual(['/hardware/audit/due'])
+    expect(queries[0]).toMatchObject({ location_id: '9', category_id: '3' })
+    expect(r).toEqual({
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location', 'Assignee', 'Last audited', 'Next audit', 'Days left'],
+      rows: [
+        ['NOMMA-2', 'CB-2', 'HP Chromebook 14 G7', 'Chromebook', 'Library', 'Jordan Reyes', 'Never', '2026-09-30', '6'],
+        ['NOMMA-3', 'CB-3', 'HP Chromebook 14 G7', 'Chromebook', 'Library', 'Jordan Reyes', '2025-10-01', '2026-10-01', '7'],
+        ['NOMMA-1', 'CB-1', 'HP Chromebook 14 G7', 'Chromebook', 'Library', 'Jordan Reyes', '2025-10-20', '2026-10-20', '26'],
+      ],
+      capped: false,
+    })
+    // From/To only narrow the next audit date within what Snipe-IT counts as due.
+    expect((await createSnipeIt(config, fetch, today).report('auditDue', { from: '2026-10-01', to: '2026-10-19' })).rows.map((row) => row[0])).toEqual(['NOMMA-3'])
+    expect(queries[1]).not.toHaveProperty('location_id')
+  })
+
+  it('Audit late asks Snipe-IT which Assets are late, most days late first', async () => {
+    const { fetch, calls, queries } = auditFetch('/hardware/audit/overdue', [audited(1, '2025-09-01', '2026-09-01'), audited(2, '2025-06-01', '2026-06-01')])
+    const r = await createSnipeIt(config, fetch, today).report('auditLate', { locationId: '9' })
+    expect(calls).toEqual(['/hardware/audit/overdue'])
+    expect(queries[0]).toMatchObject({ location_id: '9' })
+    expect(queries[0]).not.toHaveProperty('category_id')
+    expect(r.columns).toEqual(['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location', 'Assignee', 'Last audited', 'Next audit', 'Days late'])
+    expect(r.rows.map((row) => [row[0], row[7], row[8]])).toEqual([['NOMMA-2', '2026-06-01', '115'], ['NOMMA-1', '2026-09-01', '23']])
+    expect((await createSnipeIt(config, fetch, today).report('auditLate', { from: '2026-08-01' })).rows.map((row) => row[0])).toEqual(['NOMMA-1'])
+  })
+
+  it('Last audited lists Assets by last audit date, oldest first, with never-audited ones as Never when From is blank', async () => {
+    const { fetch, calls, queries } = auditFetch('/hardware', [audited(1, '2026-05-10', '2027-05-10'), audited(2, null, null), audited(3, '2026-02-01', '2027-02-01'), audited(4, '2026-07-01', null)])
+    const snipeIt = createSnipeIt(config, fetch, today)
+    const r = await snipeIt.report('lastAudited', { to: '2026-06-01', categoryId: '3' })
+    expect(calls).toEqual(['/hardware'])
+    expect(queries[0]).toMatchObject({ category_id: '3' })
+    expect(r).toEqual({
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location', 'Last audited', 'Next audit'],
+      rows: [
+        ['NOMMA-2', 'CB-2', 'HP Chromebook 14 G7', 'Chromebook', 'Library', 'Never', ''],
+        ['NOMMA-3', 'CB-3', 'HP Chromebook 14 G7', 'Chromebook', 'Library', '2026-02-01', '2027-02-01'],
+        ['NOMMA-1', 'CB-1', 'HP Chromebook 14 G7', 'Chromebook', 'Library', '2026-05-10', '2027-05-10'],
+      ],
+      capped: false,
+    })
+    // A From date leaves out Assets that have never been audited.
+    expect((await snipeIt.report('lastAudited', { from: '2026-03-01' })).rows.map((row) => row[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
+  })
+
+  it('a Location or Category that is not an id is refused without asking Snipe-IT', async () => {
+    const { fetch, calls } = fakeFetch({})
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.report('auditDue', { locationId: '9&category_id=1' })).rejects.toThrow('Location')
+    await expect(snipeIt.report('lastAudited', { categoryId: 'chromebooks' })).rejects.toThrow('Category')
+    await expect(snipeIt.report('auditLate', { locationId: '0' })).rejects.toThrow('Location')
+    expect(calls).toEqual([])
+  })
+})
+
+describe('audit dates', () => {
+  it('an Asset reads its last audited and next audit dates from the v8.7+ shape', async () => {
+    const asset = await snipeItWith({ ...chromebook, last_audit_date: { datetime: '2026-03-02 09:15:00', formatted: '03/02/2026 9:15AM' }, next_audit_date: { date: '2027-03-02', formatted: '03/02/2027' } }).getAsset(4812)
+    expect(asset).toMatchObject({ lastAudited: '2026-03-02', nextAudit: '2027-03-02' })
+    expect(await snipeItWith({ ...chromebook, last_audit_date: null, next_audit_date: null }).getAsset(4812)).toMatchObject({ lastAudited: null, nextAudit: null })
   })
 })
 
