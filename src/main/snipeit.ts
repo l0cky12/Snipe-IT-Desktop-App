@@ -940,8 +940,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
     // The View's own condition, over any filter box for the same thing (the List hides that box).
     if (filter?.[0] === 'status_id') {
-      // The Status Label named Damaged, found by exact name in any case, as Repair intake finds it.
-      const label = (await statusLabels()).find((l) => l.name.toLowerCase() === filter[1].toLowerCase())
+      // The Status Label named Damaged, found by name in any case, ignoring outer spaces, as the Damaged Report finds it.
+      const label = (await statusLabels()).find((l) => l.name.trim().toLowerCase() === filter[1].toLowerCase())
       if (!label) return { total: 0, rows: [], why: `Snipe-IT has no Status Label named ${filter[1]}, so no Asset is ${filter[1]}.` }
       params.set('status_id', String(label.id))
     } else if (filter) params.set(...filter)

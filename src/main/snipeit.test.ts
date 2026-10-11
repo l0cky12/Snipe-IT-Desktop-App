@@ -997,7 +997,7 @@ describe('list', () => {
 
 describe('Assets Views', () => {
   const empty = { body: { total: 0, rows: [] } }
-  const labels = { body: { total: 2, rows: [{ id: 2, name: 'Deployed' }, { id: 7, name: 'damaged' }] } }
+  const labels = { body: { total: 2, rows: [{ id: 2, name: 'Deployed' }, { id: 7, name: ' damaged ' }] } }
 
   it.each([
     ['all', '/hardware', {}],
@@ -1012,7 +1012,7 @@ describe('Assets Views', () => {
     expect(queries[0]).toEqual({ limit: '50', offset: '50', search: 'cb', location_id: '4', category_id: '3', ...fixed })
   })
 
-  it('Damaged asks for the Status Label named Damaged, found by name whatever its case', async () => {
+  it('Damaged asks for the Status Label named Damaged, found by name whatever its case or spacing', async () => {
     const { fetch, calls, queries } = fakeFetch({ '/statuslabels': labels, '/hardware': empty })
     await createSnipeIt(config, fetch).list('assets', { view: 'damaged', filters: { location_id: '4' } })
     expect(calls).toEqual(['/statuslabels', '/hardware'])
