@@ -153,7 +153,7 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 // report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
+export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
@@ -166,13 +166,15 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   onBatch: (a: AssetSummary[]) => void
   drill?: Drill
   report?: SavedReport
+  /** Opens the Assets List on this View instead of All (a Health warning's click). */
+  assetView?: AssetView
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
   defaultLocation: StatusLabel | null
   onOpenAsset: (id: number) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
-  const [start] = useState(() => opening(drill, report))
+  const [start] = useState(() => (assetView ? picking(assetView) : opening(drill, report)))
   const [view, setView] = useState(start.view)
   const [text, setText] = useState(start.search)
   const [search, setSearch] = useState(start.search)
