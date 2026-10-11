@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { lastSendText, pickerOptions, scheduleText } from './ReportsView'
+import { automaticCheckins, lastSendText, pickerOptions, reportFilters, scheduleText } from './ReportsView'
 
 it("says when a Report emails itself and over which dates", () => {
   expect(scheduleText({ every: 'day', time: '07:00' })).toBe('Daily at 07:00')
@@ -21,4 +21,13 @@ it('tells same-name Locations apart in the picker', () => {
     { value: '4', label: 'Gym' },
   ])
   expect(pickerOptions('Any Category')).toEqual([])
+})
+
+it("opens on a starting query: Automatic check-in's is that day's automatic check-ins, every filter of it sent", () => {
+  const start = automaticCheckins('2026-10-12')
+  expect(start).toEqual({ kind: 'activity', query: { from: '2026-10-12', to: '2026-10-12', itemType: 'asset', actionType: 'checkin from', search: 'Automatic check-in' } })
+  expect(reportFilters(start.kind, start.query)).toEqual(start.query)
+  // A search is the Activity Report's own, like its record type and action.
+  expect(reportFilters('overdue', { ...start.query, locationId: '3' })).toEqual({ from: '2026-10-12', to: '2026-10-12' })
+  expect(reportFilters('auditDue', { search: 'x', locationId: '3' })).toEqual({ from: undefined, to: undefined, locationId: '3', categoryId: undefined })
 })

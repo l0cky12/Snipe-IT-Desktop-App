@@ -262,9 +262,10 @@ export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports. search: Snipe-IT's own search
+ * of the Activity Report (notes, among other things).
  */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
@@ -359,8 +360,8 @@ export function fromWire(message: string): Failure {
 }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
-/** What the screen can call: labelPdf only the main process uses, to print Labels. */
-export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
+/** What the screen can call: labelPdf (to print Labels) and automaticCheckin only the main process uses. */
+export type SnipeItBridge = Omit<SnipeIt, 'labelPdf' | 'automaticCheckin'>
 
 type SnipeItError = { status: 'error'; messages: unknown }
 type Named = { id: number; name: string } | null
@@ -970,7 +971,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
   // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
   // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
-  // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
+  // Only the dashboard calls it (the End-of-day reminder and Automatic check-in through it). ponytail: the Out on temp View will too.
   // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
   // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
@@ -1091,19 +1092,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
     // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited is every Asset.
-    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId }: ReportQuery = {}): Promise<Report> {
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
       for (const [id, what] of [[locationId, 'Location'], [categoryId, 'Category']]) if (id !== undefined && id !== '' && !/^[1-9]\d*$/.test(String(id))) throw new Error(`Invalid ${what} id: ${id}`)
+      if (search !== undefined && typeof search !== 'string') throw new Error('Invalid search')
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
         // Each page starts where the last one's rows ended: a server may cap pages below PAGE_LIMIT.
         for (let offset = 0; ; ) {
-          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }) })
+          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })
           const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
           if (isError(page)) throw new Error(reason(page.messages))
           for (const r of page.rows) {
@@ -1405,6 +1407,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // Automatic check-in's Checkin (#62 §8), main process only: just the note, no Status Label (it stays as it was) and no
+    // Location (Snipe-IT's Default Location). Only while the Asset is still Overdue on the Checkout made at `checkout` (its
+    // last_checkout, "YYYY-MM-DD HH:MM"); otherwise it's skipped (false), so several Operators' apps don't collide.
+    async automaticCheckin(id: number, checkout: string, note: string): Promise<boolean> {
+      const a = toAsset(await current(id), today())
+      if (!a.assignee || a.lastCheckout !== checkout || !a.overdue) return false
+      const result = await request(`/hardware/${id}/checkin`, { note })
+      if (isError(result)) throw new Error(reason(result.messages))
+      return true
     },
 
     // The Health warnings' checks: three small requests at once, each failing on its own. Runs on open and Refresh only.

@@ -74,5 +74,10 @@ const reminder: ReminderApi = {
     ipcRenderer.on('reminder:open', opened)
     return () => void ipcRenderer.removeListener('reminder:open', opened)
   },
+  onAutomatic(listener) {
+    const opened = (_e: unknown, day: string) => listener(day)
+    ipcRenderer.on('automatic:open', opened)
+    return () => void ipcRenderer.removeListener('automatic:open', opened)
+  },
 }
 contextBridge.exposeInMainWorld('reminder', reminder)

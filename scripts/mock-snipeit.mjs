@@ -100,6 +100,13 @@ for (const a of assets.slice(0, 90).reverse()) {
   const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
   act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
+// Two Temp checkouts Automatic check-in checked in today at 3:50 pm, for the Activity Report its notification opens.
+for (const a of assets.filter((x) => !x.assigned_to && x.id > 100).slice(0, 2)) {
+  const at = (h, m) => new Date(new Date().setHours(h, m, 0, 0))
+  const to = assigneeOf(pick(users, a.id), 'user')
+  act('checkout', a, to, `[Temp checkout | due: ${day(0)} 14:50]`, at(8, 5 + a.id % 40))
+  act('checkin from', a, to, '[Automatic check-in] Temp checkout not scanned back by 3:50 pm', at(15, 50))
+}
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
 const lists = {

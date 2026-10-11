@@ -10,10 +10,11 @@ export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plai
   tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[] }
 /**
  * Temp checkout's settings on this PC. endOfDay: when Temp checkouts are due on a School day without a half day ("HH:MM").
- * reminder: the End-of-day reminder shows here.
+ * reminder: the End-of-day reminder shows here. automatic: Automatic check-in runs here, at automaticAt ("HH:MM", after
+ * endOfDay; on a half day, the same gap after that day's time).
  */
-export type TempCheckout = { endOfDay: string; reminder: boolean }
-const TEMP_CHECKOUT: TempCheckout = { endOfDay: END_OF_DAY, reminder: true }
+export type TempCheckout = { endOfDay: string; reminder: boolean; automatic: boolean; automaticAt: string }
+const TEMP_CHECKOUT: TempCheckout = { endOfDay: END_OF_DAY, reminder: true, automatic: false, automaticAt: '15:50' }
 /** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
@@ -69,7 +70,7 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
-  tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string }
+  tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string; automaticDay?: string }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -231,18 +232,26 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       write({ ...read(), appearance })
       return get()
     },
-    saveTempCheckout({ endOfDay, reminder }: TempCheckout) {
+    saveTempCheckout({ endOfDay, reminder, automatic, automaticAt }: TempCheckout) {
       if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')
       // 00:00 would read back as a date-only Expected Checkin (#71).
       if (endOfDay === '00:00') throw new Error("The end-of-day time can't be midnight.")
-      if (typeof reminder !== 'boolean') throw new Error('Invalid Temp checkout settings')
-      write({ ...read(), tempCheckout: { endOfDay, reminder } })
+      if (typeof automaticAt !== 'string' || !realTime(automaticAt)) throw new Error('Enter the Automatic check-in time as HH:MM, like 15:50.')
+      // Before the end-of-day time nothing is Overdue, so it would check in nothing.
+      if (automaticAt <= endOfDay) throw new Error('Automatic check-in must be after the end-of-day time')
+      if (typeof reminder !== 'boolean' || typeof automatic !== 'boolean') throw new Error('Invalid Temp checkout settings')
+      write({ ...read(), tempCheckout: { endOfDay, reminder, automatic, automaticAt } })
       return get()
     },
     /** The last day ("YYYY-MM-DD") the End-of-day reminder ran, so a restart doesn't repeat it. */
     lastReminder: () => read().reminderDay,
     recordReminder(day: string) {
       write({ ...read(), reminderDay: day })
+    },
+    /** The last day Automatic check-in ran, so it never runs twice in a day. */
+    lastAutomatic: () => read().automaticDay,
+    recordAutomatic(day: string) {
+      write({ ...read(), automaticDay: day })
     },
     saveSchoolCalendar(text: string) {
       if (typeof text !== 'string') throw new Error('Invalid School calendar')

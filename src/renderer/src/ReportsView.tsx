@@ -140,9 +140,22 @@ export function pickerOptions(label: string, list: StatusLabel[] = []) {
   return filterChoices({ label, options: list.map((l) => ({ value: String(l.id), label: l.name })) })
 }
 
-export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport) => void }) {
-  const [kind, setKind] = useState<ReportKind>('activity')
-  const [query, setQuery] = useState<ReportQuery>({})
+/** A Report and its filters for the Reports page to open on, and run. */
+export type ReportStart = { kind: ReportKind; query: ReportQuery }
+/** A day's automatic check-ins ("YYYY-MM-DD"): what Automatic check-in's notification opens. */
+export const automaticCheckins = (day: string): ReportStart =>
+  ({ kind: 'activity', query: { from: day, to: day, itemType: 'asset', actionType: 'checkin from', search: 'Automatic check-in' } })
+/** The filters the Report has: only the Activity Report narrows by record type, action and search, only the audit Reports by Location and Category. */
+export const reportFilters = (kind: ReportKind, query: ReportQuery): ReportQuery => ({
+  from: query.from, to: query.to,
+  ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType, search: query.search }),
+  ...(AUDIT_REPORTS.includes(kind) && { locationId: query.locationId, categoryId: query.categoryId }),
+})
+
+// start: opened on that Report and its filters, run at once.
+export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpenSaved: (report: SavedReport) => void }) {
+  const [kind, setKind] = useState<ReportKind>(start?.kind ?? 'activity')
+  const [query, setQuery] = useState<ReportQuery>(start?.query ?? {})
   const [report, setReport] = useState<Report | null>(null)
   const [ran, setRan] = useState<{ kind: ReportKind; query: ReportQuery } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -168,20 +181,15 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     window.snipeIt.locations().then((locations) => setChoices((c) => ({ categories: [], ...c, locations })), () => {})
     window.snipeIt.names('categories').then((categories) => setChoices((c) => ({ locations: [], ...c, categories })), () => {})
   }, [placeFilters, choices])
-  // The filters the chosen report has: only the Activity Report narrows by record type and action, only the audit Reports by Location and Category.
-  const sent: ReportQuery = {
-    from: query.from, to: query.to,
-    ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
-    ...(placeFilters && { locationId: query.locationId, categoryId: query.categoryId }),
-  }
+  const sent = reportFilters(kind, query)
   // Bumped by every run and every change of report or filter; a result for an older one is dropped, so what shows
   // (and what exports) always matches the filters on screen.
   const latest = useRef(0)
   const stale = () => (latest.current++, setReport(null), setRan(null), setExporting(false), setBusy(false), setError(''))
   const set = (change: ReportQuery) => (setQuery((q) => ({ ...q, ...change })), stale())
 
-  async function run(e: React.FormEvent) {
-    e.preventDefault()
+  async function run(e?: React.FormEvent) {
+    e?.preventDefault()
     const mine = ++latest.current
     setBusy(true)
     setError('')
@@ -199,6 +207,9 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
       if (mine === latest.current) setBusy(false)
     }
   }
+
+  // Opened on a starting query: run it once.
+  useEffect(() => { if (start) run() }, [])
 
   function download(r: Report, what: ReportKind) {
     saveCsv(REPORT_NAMES[what], r.columns, r.rows)
@@ -230,6 +241,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
                 <option value="">Any action</option>
                 {ACTIVITY_ACTIONS.map((a) => <option key={a} value={a}>{actionLabel(a)}</option>)}
               </select>
+              <input type="search" value={query.search ?? ''} onChange={(e) => set({ search: e.target.value })} placeholder="Search" aria-label="Search" />
             </>
           )}
           {placeFilters && (

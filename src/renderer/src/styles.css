@@ -258,6 +258,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font: 500 13px var(--sans); color: var(--text); }
 .settings-page .check input { flex: none; width: 14px; height: 14px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
 .settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
+.settings-page .check .inline-time { display: inline-block; width: auto; height: auto; min-height: 28px; margin: -6px 0 0 6px; padding: 0 10px; cursor: text; }
 .settings-footer { display: flex; align-items: center; gap: 16px; padding: 20px 4px; font-size: 13px; }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
