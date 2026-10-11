@@ -100,7 +100,8 @@ Snipe-IT's grouping of one kind of thing: a Category holds Assets (via their Ass
 Who made an Asset Model, Accessory, Consumable, Component, or License (e.g. "HP").
 
 **Supplier**:
-Who an Asset was bought from.
+Who an Asset was bought from, or who repaired it (on a Maintenance).
+_Avoid_: vendor
 
 **Department**:
 A group of Users within a Company, with an optional manager (a User) and Location.
@@ -145,11 +146,15 @@ The one dated line Repair intake adds to a User's notes about an Asset they retu
 _Avoid_: incident note, damage report
 
 **Maintenance**:
-Snipe-IT's record of a repair on one Asset. Repair intake opens it; Incoming repair closes it, adding the Supplier and Repair cost if given.
+Snipe-IT's record of a repair on one Asset. Repair intake opens it; Incoming repair closes it, adding the Supplier who did the work and the Repair cost if given. Snipe-IT counts the days it took.
 _Avoid_: ticket, work order, RMA
 
+**Repair cost**:
+What a repair cost, kept on its Maintenance. It isn't the Asset's purchase cost.
+_Avoid_: cost (alone, when the purchase cost could be meant)
+
 **Incoming repair**:
-The Workflow for Assets coming back from repair: scan each, make it ready to deploy again, and note that it returned from repair, optionally with the vendor.
+The Workflow for Assets coming back from repair: scan each, confirm it, make it Ready to Deploy, note the return in its History, and close its Maintenance with the Supplier and Repair cost if given. An Asset that isn't Damaged is refused or needs the Operator to choose Make ready anyway.
 _Avoid_: repair return, RMA
 
 **Temp checkout**:
