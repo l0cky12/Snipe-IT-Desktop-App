@@ -15,7 +15,7 @@ const pick = (list, n) => list[n % list.length]
 
 const statuses = [
   ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
-  ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
+  ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'], ['Damaged', 'undeployable', '#d9432c'],
 ].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
@@ -32,6 +32,9 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), employee_num: String(20400 + i * 7), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
+// User notes as Snipe-IT sends them: rendered, so one holding a link comes back as markup Repair intake won't rebuild.
+users[6].notes = 'Loaner agreement on file.'
+users[11].notes = 'Loaner agreement: see <a href="https://example.org/forms/loaner">the signed form</a>'
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
@@ -60,6 +63,10 @@ const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count:
 const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', qty: 80, remaining_qty: 23 }, { name: 'Wireless Mouse', model_number: 'M-220', qty: 40, remaining_qty: 31, notes: 'For the Library cart' }])
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
+// Maintenances (v8.6+: a maintenance_type_id). Operator keys can't read the type list; an old completed repair gives the type away.
+const maintenanceTypes = named(['Repair', 'Upgrade', 'Software Support'])
+const maintenances = [{ id: 1, item: assets[40], name: `${assets[40].asset_tag} damaged`, notes: '[Repair intake] cracked screen', start_date: { date: day(-60), formatted: day(-60) }, completed_at: { datetime: `${day(-52)} 10:00:00`, formatted: day(-52) }, maintenance_type_details: { ...maintenanceTypes[0], tag_color: null } }]
+const maintenanceRow = ({ item, ...m }) => ({ ...m, asset: { id: item.id, name: item.name, asset_tag: item.asset_tag } })
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date()) =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: when.toISOString().replace('T', ' ').slice(0, 19) }, created_by: { id: 900, name: 'Demo Operator' },
@@ -194,8 +201,8 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+)$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|fieldsets\/\d+|maintenance-types)$/, ['GET']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -214,7 +221,28 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'maintenance-types') return limited ? send(refused, 403) : send(listPage({ rows: () => maintenanceTypes, search: (t) => text(t.name) }, url.searchParams))
+  if (path === 'maintenances' && req.method === 'GET') {
+    const q = url.searchParams
+    const rows = maintenances.filter((m) => (!q.get('asset_id') || m.item.id === +q.get('asset_id')) && (!q.get('completed') || !m.completed_at === (q.get('completed') !== 'true')))
+    return send(listPage({ rows: () => rows.map(maintenanceRow), search: (m) => text(m.name, m.notes, m.maintenance_type_details?.name, m.asset.asset_tag) }, q))
+  }
+  if (path === 'maintenances') {
+    const item = assets.find((a) => a.id === body.asset_id)
+    const type = maintenanceTypes.find((t) => t.id === body.maintenance_type_id)
+    if (!item || !type || !body.name || !body.start_date) return fail({ ...(!type && { maintenance_type_id: ['The selected maintenance type id is invalid.'] }), ...(!body.name && { name: ['The name field is required.'] }) })
+    const m = { id: Math.max(0, ...maintenances.map((x) => x.id)) + 1, item, name: body.name, notes: body.notes ?? null, start_date: { date: body.start_date, formatted: body.start_date }, completed_at: null, maintenance_type_details: { ...type, tag_color: null } }
+    maintenances.push(m)
+    return send({ status: 'success', messages: 'Maintenance created.', payload: { id: m.id } })
+  }
+  if ((m = path.match(/^notes\/(\d+)\/store$/))) {
+    const a = assets.find((x) => x.id === +m[1])
+    if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
+    if (!body.note) return send({ status: 'error', messages: 'The note field is required.', payload: null }, 422)
+    act('note added', a, null, body.note)
+    return send({ status: 'success', messages: 'Note added', payload: { note: body.note, item_id: a.id } })
+  }
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
     if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
