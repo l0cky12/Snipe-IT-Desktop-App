@@ -136,7 +136,7 @@ function PauseBar({ runner, onSettings }: { runner: Pick<Runner, 'paused' | 'pen
   const settings = button('Settings', onSettings)
   return (
     <div className="pause-bar" role="group" aria-label="Paused">
-      <span>{pauseSays(p, runner.pending, p.kind === 'rateLimited' ? Math.max(0, Math.ceil((p.until - Date.now()) / 1000)) : 0)}</span>
+      <span>{pauseSays(p, runner.pending)}</span>
       <div className="actions">{p.kind === 'rateLimited' ? [drop] : p.kind === 'key' ? [settings, resume, drop] : [resume, drop, settings]}</div>
     </div>
   )

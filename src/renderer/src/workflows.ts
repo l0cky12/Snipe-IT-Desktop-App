@@ -23,8 +23,6 @@ export type Row<C = unknown> = {
   before: Asset | null; undo?: Undo | string; undoFailed?: string
   /** A line the Workflow adds between scans (Bulk checkout's "Checked out N Assets to <User>"); its text is the "what" cell. */
   line?: true
-  /** Waited through a pause: on Resume its confirm comes up only once the one before it is answered. */
-  held?: true
 }
 export type Events = { changed: () => void; failed?: () => void }
 /** A done row: its result text, "what" cell and how to undo it. */
@@ -45,10 +43,11 @@ export const NOT_SURE = 'Not sure it went through'
 /** Why a Workflow is Paused (#73): Snipe-IT can't be reached (or timed out), rejected the key, or asked the app to slow
  *  down (until: when it carries on by itself). */
 export type Pause = { kind: 'unreachable' | 'key'; message: string } | { kind: 'rateLimited'; message: string; until: number }
-/** The pause bar's text, with the waiting count; seconds: what's left of a slow-down. */
-export function pauseSays(p: Pause, waiting: number, seconds = 0) {
+/** The pause bar's text, with the waiting count (and for a slow-down, the seconds left at `now`). */
+export function pauseSays(p: Pause, waiting: number, now = Date.now()) {
   const n = `${waiting} scan${waiting === 1 ? ' is' : 's are'} waiting`
-  return p.kind === 'rateLimited' ? `Snipe-IT asked the app to slow down. Carrying on in ${seconds} s. ${n}.` : `${p.message} ${n}; nothing more is sent until you resume.`
+  if (p.kind !== 'rateLimited') return `${p.message} ${n}; nothing more is sent until you resume.`
+  return `Snipe-IT asked the app to slow down. Carrying on in ${Math.max(0, Math.ceil((p.until - now) / 1000))} s. ${n}.`
 }
 // A slow-down with no readable Retry-After waits Snipe-IT's throttle window.
 const SLOW_DOWN_S = 60
@@ -60,8 +59,8 @@ const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'wor
 // The fields a Workflow's write changes; an Asset whose fields all match its lookup is as it was when scanned.
 const same = (a: Asset, b: Asset) =>
   a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId
-const found = (a: Asset) =>
-  `${a.assignee ? `checked out to ${a.assignee.type === 'asset' ? 'Asset ' : ''}${a.assignee.name}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
+const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
+const found = (a: Asset) => `${a.assignee ? `checked out to ${assigneeName(a.assignee)}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
 
 // The least time between one queued Asset starting and the next: a Bulk return is 3 requests, so 1.5s keeps a fast
 // scanner under Snipe-IT's default 120 requests a minute instead of turning the rest of the queue into throttled rows.
@@ -92,6 +91,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
   // Off the Workflow's page: a confirm that would open is skipped, so nothing waits for an Operator who isn't looking.
   let away = false
   let paused: Pause | null = null
+  // The rows that waited through a pause (by key): on Resume, each one's confirm comes up only once the one before is answered.
+  const held = new Set<number>()
   let slowDown: ReturnType<typeof setTimeout> | undefined
 
   const update = (key: number, change: Partial<Row<C>>) => {
@@ -111,14 +112,14 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     if (kind === 'unreachable' || kind === 'timeout') return { kind: 'unreachable', message }
     if (kind === 'key') return { kind, message }
     if (kind === 'rateLimited') return { kind, message, until: Date.now() + (retryAfter ?? SLOW_DOWN_S) * 1000 }
-    if (kind === 'forbidden' && (await bridge.keyRefused())) return { kind: 'key', message }
+    if (kind === 'forbidden' && (await bridge.keyRefused().catch(() => false))) return { kind: 'key', message }
     return null
   }
   // Every row still in the queue waited through this pause. One error sound, not one per waiting scan.
   function pause(p: Pause) {
     paused = p
-    queue.forEach((r) => update(r.key, { held: true }))
-    announce = pauseSays(p, queue.length, Math.ceil((p.kind === 'rateLimited' ? p.until - Date.now() : 0) / 1000))
+    queue.forEach((r) => held.add(r.key))
+    announce = pauseSays(p, queue.length)
     // A slow-down carries on by itself; nothing was written by the refused request.
     if (p.kind === 'rateLimited') slowDown = setTimeout(() => resume(), p.until - Date.now())
     events.changed()
@@ -130,8 +131,9 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     running = true
     const mine = generation
     // Paused, nothing is sent. After a pause, the next held scan waits for the open confirm, so each comes up in turn.
-    while (queue.length && !paused && !(opened && queue[0].held)) {
+    while (queue.length && !paused && !(opened && held.has(queue[0].key))) {
       const row = queue.shift()!
+      held.delete(row.key)
       if (undoing) await undoing
       const wait = lastStart + pace - Date.now()
       if (wait > 0) await sleep(wait)
@@ -196,24 +198,24 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
         }
         // The scan goes back to the front. A write that lost the connection or timed out may have gone through; a 401,
         // 403 or 429 is refused before Snipe-IT changes anything, and a failed read wrote nothing.
-        const s = sending as typeof pending
-        const keep = s && p.kind === 'unreachable' ? { ...s, unsure: s.unsure ?? p.message } : pending
-        if (keep) writes.set(row.key, keep)
+        const sent = sending as typeof pending
+        const back = sent && p.kind === 'unreachable' ? { ...sent, unsure: sent.unsure ?? p.message } : pending
+        if (back) writes.set(row.key, back)
         queue.unshift(row)
-        update(row.key, { result: keep?.unsure ? { state: 'unsure', reason: keep.unsure } : { state: 'waiting' } })
+        update(row.key, { result: back?.unsure ? { state: 'unsure', reason: back.unsure } : { state: 'waiting' } })
         pause(p)
       }
     }
     running = false
   }
 
-  // auto: the slow-down ended. By hand, the once-per-session lookups run again first (the key may have changed).
-  async function resume(auto = true) {
+  // When the slow-down ends, or byHand: then the once-per-session lookups run again first (the key may have changed).
+  async function resume(byHand = false) {
     if (!paused) return
     clearTimeout(slowDown)
     const was = paused
     const mine = generation
-    if (!auto && refresh) {
+    if (byHand && refresh) {
       try {
         await refresh()
       } catch (e) {
@@ -277,7 +279,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     /** Scans a pause is keeping from Snipe-IT, for the quit prompt; 0 while the queue moves. */
     get unsent() { return paused ? rows.filter(busy).length : 0 },
     /** Resume: the scan that hit the failure goes first. */
-    resume: () => resume(false),
+    resume: () => resume(true),
     /** Drop waiting: every waiting scan is "Skipped: not sent", nothing written, and the pause lifts. A write that may have
      *  gone through says so, for the Operator to check. */
     dropWaiting() {
@@ -290,6 +292,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       }
       queue = []
       writes.clear()
+      held.clear()
       announce = 'Waiting scans dropped'
       events.changed()
     },
@@ -399,7 +402,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       skipOpen()
       confirming = null
       // Paused, it waits with no lookup; its confirm comes up on Resume.
-      const row: Row<C> = { key: ++next, time: hhmm(now()), tag, assetId: null, name: '', what: '', ctx, result: { state: 'waiting' }, before: null, ...(paused && { held: true as const }) }
+      const row: Row<C> = { key: ++next, time: hhmm(now()), tag, assetId: null, name: '', what: '', ctx, result: { state: 'waiting' }, before: null }
+      if (paused) held.add(row.key)
       rows = [row, ...rows]
       queue.push(row)
       events.changed()
@@ -418,6 +422,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       // The old drain() returns at its next generation check without touching running, so a new one can start now.
       running = false
       paused = null
+      held.clear()
       clearTimeout(slowDown)
       confirming = null
       undoing = null
@@ -459,11 +464,11 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'key
     const from = `${was.type === 'asset' ? 'Asset ' : ''}${was.name}`
     // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
     // the Location; the old one isn't forced back. A time of day means it was a Temp checkout, so the undo makes it one again.
-    const left = ready
+    const readyId = ready
     const run = async (now: Asset) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
       // A label someone set since the return isn't overwritten with the old one.
-      if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
+      if (now.statusId !== readyId) throw new Error(`${now.assetTag} is '${now.status}' now`)
       const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
       await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
@@ -472,8 +477,8 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'key
     const done: Done = { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo }
     return {
       send: {
-        write: async () => (await bridge.checkin(a.id, { statusId: keep ? undefined : left, locationId: location.id, note: workflowNote('Bulk return') }), done),
-        left: (now) => (!now.assignee && now.statusId === (keep ? statusId : left) && now.locationId === location.id ? done : null),
+        write: async () => (await bridge.checkin(a.id, { statusId: keep ? undefined : readyId, locationId: location.id, note: workflowNote('Bulk return') }), done),
+        left: (now) => (!now.assignee && now.statusId === (keep ? statusId : readyId) && now.locationId === location.id ? done : null),
       },
     }
   }, events, now, pace, async () => {
@@ -523,7 +528,6 @@ export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
 export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
 const NO_OPTIONS: CheckoutSession = { expectedCheckin: '', note: '' }
-const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
 export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {

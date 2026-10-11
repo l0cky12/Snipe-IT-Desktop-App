@@ -906,7 +906,7 @@ describe('Pause (#73)', () => {
     runner.scan('NOMMA-1', null)
     runner.scan('NOMMA-2', null)
     await vi.waitFor(() => expect(runner.paused).toMatchObject({ kind, message: e.message }))
-    expect(runner.rows.map((r) => [r.tag, r.result.state, r.held])).toEqual([['NOMMA-2', 'waiting', true], ['NOMMA-1', 'waiting', true]])
+    expect(runner.rows.map((r) => [r.tag, r.result.state])).toEqual([['NOMMA-2', 'waiting'], ['NOMMA-1', 'waiting']])
     expect(failed).toHaveBeenCalledTimes(1)
     // Scanning carries on: a new scan joins with no lookup, and a double read is still one.
     expect(runner.scan('NOMMA-3', null)).toBe('')
@@ -994,7 +994,7 @@ describe('Pause (#73)', () => {
 
   it('the pause bar says why and how many wait', () => {
     expect(pauseSays({ kind: 'unreachable', message: "Can't reach Snipe-IT." }, 4)).toBe("Can't reach Snipe-IT. 4 scans are waiting; nothing more is sent until you resume.")
-    expect(pauseSays({ kind: 'rateLimited', message: '', until: 0 }, 1, 23)).toBe('Snipe-IT asked the app to slow down. Carrying on in 23 s. 1 scan is waiting.')
+    expect(pauseSays({ kind: 'rateLimited', message: '', until: 23_000 }, 1, 100)).toBe('Snipe-IT asked the app to slow down. Carrying on in 23 s. 1 scan is waiting.')
   })
 
   it("scans held by a pause bring up their confirms on Resume one at a time; a confirmed write isn't confirmed again", async () => {
@@ -1020,6 +1020,31 @@ describe('Pause (#73)', () => {
     runner.cancelOpen()
     await settled(runner)
     expect(written).toEqual(['NOMMA-1', 'NOMMA-2'])
+  })
+
+  it('scans already queued when the pause hit also come up one at a time on Resume', async () => {
+    const fake = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-3')])
+    const runner = createRunner<null>(fake.bridge, async () => ({ confirm: { write: async () => ({ text: 'Checked out' }) } }), { changed: () => {} }, undefined, 0)
+    failOnce(fake.bridge.assetByTag, failure('unreachable'))
+    for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-3']) runner.scan(tag, null)
+    await vi.waitFor(() => expect(runner.paused).not.toBeNull())
+    await runner.resume()
+    await vi.waitFor(() => expect(runner.open?.row.tag).toBe('NOMMA-1'))
+    await flush()
+    expect(runner.rows.map((r) => r.result.state)).toEqual(['waiting', 'waiting', 'confirm'])
+    runner.cancelOpen()
+    await vi.waitFor(() => expect(runner.open?.row.tag).toBe('NOMMA-2'))
+  })
+
+  it("a 403 whose /version check itself fails is a red row, and the queue still moves", async () => {
+    const { runner, bridge, written } = direct([asset('NOMMA-1'), asset('NOMMA-2')])
+    bridge.keyRefused.mockRejectedValueOnce(new Error('IPC gone'))
+    failOnce(bridge.assetByTag, failure('forbidden'))
+    runner.scan('NOMMA-1', null)
+    runner.scan('NOMMA-2', null)
+    await settled(runner)
+    expect(runner.rows.map((r) => r.result.state)).toEqual(['done', 'failed'])
+    expect(written).toEqual(['NOMMA-2'])
   })
 
   describe('a write that may have gone through', () => {

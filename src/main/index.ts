@@ -173,6 +173,7 @@ app.whenReady().then(() => {
   let tray: Tray | null = null
   let quitting = false
   app.on('before-quit', () => { quitting = true })
+  // Windows logging out or shutting down: never held up by the prompt below.
   win.on('session-end', () => { quitting = true })
   // Quitting (from the tray, or closing the window out of tray mode) while a Paused Workflow holds scans asks first (#73);
   // a moving queue quits without asking. In memory only, so quitting loses them.

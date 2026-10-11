@@ -224,8 +224,8 @@ const noEndpoint = { status: 'error', message: '404 endpoint not found. Please c
 
 createServer(async (req, res) => {
   if (failAll && !failing && req.url.endsWith(`/hardware/bytag/${encodeURIComponent(failOn)}`)) failing = true
-  if (failAll && failing && failAll === 'hang') return
   if (failAll && failing) {
+    if (failAll === 'hang') return
     const [status, body, headers] = {
       401: [401, { message: 'Unauthenticated.' }],
       403: [403, refused],
