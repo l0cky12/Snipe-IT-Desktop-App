@@ -108,7 +108,7 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
                   : r.result.state === 'undone' ? <span className="dim">Undone</span>
                   : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
                   : <OutcomeText outcome={r.result} />}
-                {r.result.state === 'done' && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
+                {(r.result.state === 'done' || r.result.state === 'undone') && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
                 {r.result.state === 'done' && r.copy && (
                   <button className="link" title={r.copy} onClick={() => navigator.clipboard.writeText(r.copy!).then(() => setCopied({ key: r.key, ok: true }), () => setCopied({ key: r.key, ok: false }))}>{copied?.key !== r.key ? 'Copy line' : copied.ok ? 'Copied' : "Couldn't copy"}</button>
                 )}
@@ -427,6 +427,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
 
 // Repair intake (#59). The scan field takes each Asset Tag; a scanned Asset's confirm opens under it with the note
 // field, which takes focus (the note is required), and gives it back to the scan field once confirmed or cancelled.
+// Undo last (Ctrl+Z on the empty scan field, or the button) puts the newest intake back.
 export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   flow: RepairIntake
   field: RefObject<HTMLInputElement | null>
@@ -457,8 +458,8 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('')
-    // Enter on the empty field confirms the open confirm; a scan confirms its own tag, or skips the waiting one.
-    if (!cleanTag(text)) return void (open && setStatus(flow.runner.confirmOpen()))
+    // Enter on the empty field confirms the open confirm (or Undo); a scan confirms its own tag, or skips the waiting one.
+    if (!cleanTag(text)) return void (open ? setStatus(flow.runner.confirmOpen()) : flow.runner.confirm && undo())
     setStatus(flow.scan(text))
     setText('')
   }
@@ -472,19 +473,40 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
     flow.runner.cancelOpen()
     setStatus('')
   }
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape' && open) return e.preventDefault(), cancel()
+    if (e.key === 'Escape' && (open || flow.runner.confirm)) return e.preventDefault(), open ? cancel() : flow.runner.cancelUndo()
+  }
+  // Ctrl+Z only on the empty scan field: in the note field (or with text typed) it's the usual text undo.
+  function onScanKeyDown(e: React.KeyboardEvent) {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+    onKeyDown(e)
   }
 
   const a = open?.row.before
+  const undoConfirm = flow.runner.confirm
   const announce = open && `Confirm ${open.row.tag}: ${open.says}? Say what happened, then Enter. Esc to cancel.`
   return (
     <div className="workflow">
       <div className="workflow-main">
         <header className="head"><h1>Repair intake<span className="sub">Scan a broken Asset</span></h1></header>
         <form className="workflow-field" onSubmit={onSubmit}>
-          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onKeyDown} placeholder="Scan the Asset Tag of a broken Asset" aria-label="Asset Tag" />
+          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onScanKeyDown} placeholder="Scan the Asset Tag of a broken Asset" aria-label="Asset Tag" />
           {flow.blocked ? <p className="message error" role="alert">{flow.blocked}</p> : <p className="message" role="status">{status}</p>}
+          {undoConfirm && (
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
+              <span>{undoConfirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
         </form>
         {open && a && (
           <form className="scan-confirm" aria-label="Confirm repair intake" onSubmit={submitNote}>
@@ -502,12 +524,14 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
             </div>
           </form>
         )}
-        <RunningList rows={flow.runner.rows} doneLabel="taken in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
-        <p className="sr-only" aria-live="polite">{announce ?? flow.runner.announce}</p>
+        <RunningList rows={flow.runner.rows} doneLabel="taken in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
+        <p className="sr-only" aria-live="polite">{announce ?? undoConfirm ?? flow.runner.announce}</p>
       </div>
       {open
         ? <KeysPanel keys={[['Enter', 'Confirm (note required)'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
-        : <KeysPanel keys={[['Enter', 'Scan']]} hint="Each scanned Asset is confirmed with what happened, then checked in as Damaged and a repair Maintenance opened." />}
+        : undoConfirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : <KeysPanel keys={[['Enter', 'Scan'], [UNDO_KEY, 'Undo last']]} hint="Each scanned Asset is confirmed with what happened, then checked in as Damaged and a repair Maintenance opened. Undo last puts the newest one back." />}
     </div>
   )
 }

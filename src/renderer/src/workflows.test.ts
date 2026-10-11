@@ -33,6 +33,8 @@ function fakeBridge(assets: Asset[]) {
     openMaintenances: vi.fn(async (id: number): Promise<{ id: number; type: StatusLabel | null }[]> => (calls.push(`open maintenances ${id}`), [])),
     createMaintenance: vi.fn(async (m: MaintenanceInput) => (calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}`), 61)),
     appendUserNotes: vi.fn(async (id: number, line: string) => { calls.push(`user notes ${id} ${line}`) }),
+    deleteMaintenance: vi.fn(async (id: number) => { calls.push(`delete maintenance ${id}`) }),
+    removeUserNotesLine: vi.fn(async (id: number, line: string) => { calls.push(`remove user notes ${id} ${line}`) }),
   }
   return { bridge, calls, checkins, checkouts }
 }
@@ -1011,8 +1013,6 @@ describe('Repair intake', () => {
     ])
     expect(row).toMatchObject({ what: 'Damaged, from Avery Testwell', result: { state: 'done', text: 'cracked screen' }, sub: ['Maintenance opened', 'User note added'] })
     expect(row.copy).toBeUndefined()
-    // Not undone here: Undo last for Repair intake comes later.
-    expect(flow.runner.undoBlocked).toBe('Nothing to undo')
   })
 
   it('a Location held it: Checkin and the Maintenance, with no User notes line', async () => {
@@ -1121,5 +1121,127 @@ describe('Repair intake', () => {
     await settled(flow)
     expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
     expect(checkins).toEqual([])
+  })
+
+  describe('Undo last', () => {
+    // Taken in as Snipe-IT leaves it: no Assignee, Damaged; the re-read for the undo finds it so.
+    async function takenIn(one: Asset, typeId: number | null = 9) {
+      const fake = await opened([one], typeId)
+      const damage = async () => { Object.assign(one, { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable', expectedCheckin: null }) }
+      fake.bridge.checkin.mockImplementation(async (id) => { fake.calls.push(`checkin ${id}`); await damage() })
+      fake.bridge.updateStatus.mockImplementation(async (id, statusId) => { fake.calls.push(`status ${id} ${statusId}`); await damage() })
+      await intake(fake.flow, one.assetTag)
+      fake.calls.length = 0
+      expect(fake.flow.runner.askUndo()).toBe('')
+      return fake
+    }
+
+    it('a User held it: checked out to them again with the old Status Label and Expected Checkin, then the Maintenance deleted and the line taken off', async () => {
+      const { flow, calls, checkouts } = await takenIn(asset('NOMMA-1', { expectedCheckin: '2026-10-20' }))
+      expect(flow.runner.confirm).toBe('Undo: NOMMA-1 checked in as Damaged from Avery Testwell? Enter to undo, Esc to cancel.')
+      await flow.runner.undo()
+      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: '2026-10-20', note: '[Undo] Repair intake' }]])
+      expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1', 'delete maintenance 61', `remove user notes 7 ${LINE}`])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted', 'User note removed'] })
+    })
+
+    it('carries the Temp checkout tag when the Expected Checkin had a time of day', async () => {
+      const { flow, checkouts } = await takenIn(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+      await flow.runner.undo()
+      expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Repair intake [Temp checkout | due: 2026-10-13 14:50]' })
+    })
+
+    it('a Location held it: checked out to the Location again and the Maintenance deleted; there is no User note', async () => {
+      const { flow, calls, checkouts } = await takenIn(asset('NOMMA-1', { assignee: { type: 'location', id: 4, name: 'Room 204' } }))
+      expect(flow.runner.confirm).toBe('Undo: NOMMA-1 checked in as Damaged from Room 204? Enter to undo, Esc to cancel.')
+      await flow.runner.undo()
+      expect(checkouts).toEqual([[1, { targetType: 'location', targetId: 4, statusId: 2, expectedCheckin: undefined, note: '[Undo] Repair intake' }]])
+      expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1', 'delete maintenance 61'])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted'] })
+    })
+
+    it("wasn't checked out: the old Status Label back and [Undo] Repair intake in its History, then the Maintenance deleted", async () => {
+      const { flow, calls, checkouts } = await takenIn(asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1 }))
+      expect(flow.runner.confirm).toBe('Undo: NOMMA-1 marked Damaged? Enter to undo, Esc to cancel.')
+      await flow.runner.undo()
+      expect(checkouts).toEqual([])
+      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 1', 'note 1 [Undo] Repair intake', 'delete maintenance 61'])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted'] })
+    })
+
+    it('a Maintenance that was open before the intake is left alone, and none is deleted when none was opened', async () => {
+      const { flow, bridge, calls } = await opened([asset('NOMMA-1')])
+      bridge.openMaintenances.mockResolvedValueOnce([{ id: 51, type: { id: 9, name: 'Repair' } }])
+      await intake(flow, 'NOMMA-1')
+      bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }))
+      await (flow.runner.askUndo(), flow.runner.undo())
+      expect(calls.some((c) => c.startsWith('delete maintenance'))).toBe(false)
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance left open: it was open before', 'User note removed'] })
+    })
+
+    it('with no Repair type found, nothing to delete', async () => {
+      const { flow, calls } = await takenIn(asset('NOMMA-1'), null)
+      await flow.runner.undo()
+      expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1', `remove user notes 7 ${LINE}`])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['User note removed'] })
+    })
+
+    it('User notes changed since are left alone, and the row says so; still Undone', async () => {
+      const { flow, bridge } = await takenIn(asset('NOMMA-1'))
+      bridge.removeUserNotesLine.mockRejectedValueOnce(new Error('changed since'))
+      await flow.runner.undo()
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted', 'User note not removed: changed since'] })
+    })
+
+    it('a failed Maintenance delete is shown on the Undone row, and the line is still taken off', async () => {
+      const { flow, bridge, calls } = await takenIn(asset('NOMMA-1'))
+      bridge.deleteMaintenance.mockRejectedValueOnce(new Error('Snipe-IT returned HTTP 500'))
+      await flow.runner.undo()
+      expect(calls.at(-1)).toBe(`remove user notes 7 ${LINE}`)
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance not deleted: Snipe-IT returned HTTP 500', 'User note removed'] })
+    })
+
+    it('a User note that was never added is not taken off', async () => {
+      const fake = await opened([asset('NOMMA-1')])
+      fake.bridge.appendUserNotes.mockRejectedValueOnce(new Error("the User's notes have formatting the app can't keep"))
+      await intake(fake.flow, 'NOMMA-1')
+      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }))
+      fake.flow.runner.askUndo()
+      await fake.flow.runner.undo()
+      expect(fake.calls.some((c) => c.startsWith('remove user notes'))).toBe(false)
+      expect(fake.flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted'] })
+    })
+
+    it('a failed Checkout (or Status Label) stops everything: the row stays done and says why', async () => {
+      for (const one of [asset('NOMMA-1'), asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1 })]) {
+        const { flow, bridge, calls } = await takenIn(one)
+        bridge.checkout.mockRejectedValueOnce(new Error('That asset is not available for checkout!'))
+        bridge.updateStatus.mockRejectedValueOnce(new Error('That asset is not available for checkout!'))
+        await flow.runner.undo()
+        // The refused call itself isn't recorded by the fake; nothing after it is sent.
+        expect(calls).toEqual(['bytag NOMMA-1'])
+        expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'That asset is not available for checkout!' })
+      }
+    })
+
+    it('refuses when the Asset is no longer Damaged, or checked out again, and writes nothing', async () => {
+      const one = asset('NOMMA-1')
+      const { flow, calls } = await takenIn(one)
+      Object.assign(one, { status: 'In Repair', statusId: 3 })
+      await flow.runner.undo()
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'In Repair' now" })
+      Object.assign(one, { status: 'damaged', statusId: 9, assignee: { type: 'user', id: 9, name: 'Blake Sampleton' } })
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 is checked out to Blake Sampleton now')
+      expect(calls).toEqual(['bytag NOMMA-1', 'bytag NOMMA-1'])
+    })
+
+    it("offers no undo for an Asset that was out under a label Snipe-IT won't check out (already Damaged, Pending), and says why", async () => {
+      const { flow } = await opened([asset('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
+      await intake(flow, 'NOMMA-1')
+      const why = "Snipe-IT can't check out an Asset with status 'Pending'. Open NOMMA-1 to put it back by hand."
+      expect(flow.runner.undoBlocked).toBe(why)
+    })
   })
 })
