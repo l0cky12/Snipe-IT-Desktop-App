@@ -1620,7 +1620,7 @@ describe('Incoming repair', () => {
       const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
       flow.scan('NOMMA-1')
       await showing(flow)
-      expect(flow.runner.open!.choice).toMatchObject({ fix: 'Make ready anyway', blocked: '' })
+      expect(flow.runner.open!.choice).toMatchObject({ fix: 'Make ready anyway', blocked: '', stop: 'not Damaged' })
       expect(flow.runner.confirmOpen()).toBe('NOMMA-1: pick Make ready anyway or Stop')
       expect(flow.scan('NOMMA-1')).toBe('NOMMA-1: pick Make ready anyway or Stop')
       expect(await flow.submitNote('fixed')).toBe('NOMMA-1: pick Make ready anyway or Stop')
@@ -1659,6 +1659,10 @@ describe('Incoming repair', () => {
         expect(flow.scan('NOMMA-1')).toBe('Repair cost must be a number like 45 or 45.00.')
       }
       flow.setCost(' $ 45.5 ')
+      // A link in the note keeps it open too.
+      flow.runner.setText('see https://example.org/ticket')
+      expect(flow.runner.confirmOpen()).toBe('Notes can’t contain links (http:// or https://).')
+      flow.runner.setText('')
       flow.runner.confirmOpen()
       await settled(flow)
       expect(bridge.updateMaintenance).toHaveBeenCalledWith(51, { cost: '45.50' })

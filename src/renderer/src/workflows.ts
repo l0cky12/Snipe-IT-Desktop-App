@@ -32,15 +32,15 @@ export type Events = { changed: () => void; failed?: () => void }
 /** A done row: its result text, "what" cell, how to undo it, and any sub-results and line to copy. */
 export type Done = { text: string; what?: string; undo?: Undo | string; sub?: string[]; copy?: string }
 /** A confirm step (#56 §3). needs: when it has text it can't go without, what the status line says while that's empty
- *  ("Say what happened"). says: what will be written, for the card. check: what's wrong with the Workflow's other
- *  fields ('' when nothing), which keeps it open. write: the Workflow's Snipe-IT action once confirmed, given the Asset
- *  re-read just now and the text typed; it throws to refuse. */
-export type Confirm = { needs?: string; says?: string; check?: () => string; write: (now: Asset, text: string) => Promise<Done> }
+ *  ("Say what happened"). says: what will be written, for the card. check: what's wrong with the text typed or the
+ *  Workflow's other fields ('' when nothing), which keeps it open. write: the Workflow's Snipe-IT action once confirmed,
+ *  given the Asset re-read just now and the text typed; it throws to refuse. */
+export type Confirm = { needs?: string; says?: string; check?: (text: string) => string; write: (now: Asset, text: string) => Promise<Done> }
 /** A choice step (#56 §3): an Asset that can't go through as scanned. fix: the fix-it button's label; blocked: why it's
- *  off ('' when it isn't); stop: what's in the way, for "Stopped: <stop>"; write: the fix-it action, given the Asset
- *  re-read just now and any text typed; it throws to refuse. Only an explicit pick runs it: Enter and a same-tag rescan
- *  never do. */
-export type Choice = { fix: string; blocked: string; stop: string; write: (now: Asset, text: string) => Promise<Done> }
+ *  off ('' when it isn't); stop: what's in the way, for "Stopped: <stop>"; check: as a confirm's; write: the fix-it
+ *  action, given the Asset re-read just now and any text typed; it throws to refuse. Only an explicit pick runs it: Enter
+ *  and a same-tag rescan never do. */
+export type Choice = { fix: string; blocked: string; stop: string; check?: (text: string) => string; write: (now: Asset, text: string) => Promise<Done> }
 /** What a Workflow's step does to one scanned Asset: done at once, a neutral row, or a confirm or choice first; or a throw with the refusal. */
 export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { choice: Choice; what?: string }>
 export const SKIPPED = 'Skipped: not confirmed'
@@ -166,7 +166,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     const { confirm, choice, text } = opened
     if (choice) return `${openRow()!.tag}: pick ${choice.fix} or Stop`
     if (confirm!.needs && !text.trim()) return confirm!.needs
-    const wrong = confirm!.check?.()
+    const wrong = confirm!.check?.(text)
     if (wrong) return wrong
     queueWrite(confirm!.write, text.trim())
     return ''
@@ -211,8 +211,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     /** The open choice's fix-it button, clicked (or Tab, then Enter): its write joins the queue. Returns why not ('' when it went). */
     fixOpen(): string {
       if (!opened?.choice) return ''
-      if (opened.choice.blocked) return opened.choice.blocked
-      queueWrite(opened.choice.write, opened.text.trim())
+      const { blocked, check, write } = opened.choice
+      const wrong = blocked || check?.(opened.text)
+      if (wrong) return wrong
+      queueWrite(write, opened.text.trim())
       return ''
     },
     /** Esc, Done or leaving: the open confirm's Asset is skipped, or the open choice's stopped; never written. */
@@ -750,7 +752,7 @@ export type RepairIntake = ReturnType<typeof createRepairIntake>
 export type IncomingCtx = { supplier: StatusLabel | null; cost: string; found?: { open: OpenMaintenance | null; others: number; typeId: number | null } }
 // A Repair cost as typed: '' when none, else `45.00`; throws with a message when it isn't a number.
 const costOf = (raw: string) => (raw.trim() ? repairCost(raw) : '')
-const costWrong = (raw: string) => { try { return costOf(raw), '' } catch (e) { return (e as Error).message } }
+const wrong = (f: () => unknown) => { try { return f(), '' } catch (e) { return (e as Error).message } }
 const given = (supplier: StatusLabel | null, cost: string) => [supplier?.name, cost && `$${cost}`].filter(Boolean).join(', ')
 const backFrom = (supplier: StatusLabel | null, cost: string) => `Back from repair${given(supplier, cost) && ` (${given(supplier, cost)})`}`
 // The Maintenance step (#60 §1): close the open one, create one and close it (only when a Supplier or Repair cost was
@@ -860,9 +862,11 @@ export function createIncomingRepair(
     }
 
     const what = backFrom(open?.supplier ?? ctx.supplier, '')
+    // A link in the note, or a Repair cost that isn't a number, keeps it open.
+    const check = (text: string) => wrong(() => (workflowNote('Incoming repair', { text }), costOf(ctx.cost)))
     // Another status with an open Repair Maintenance counts as Damaged: someone changed the label by hand.
-    if (a.statusId === damaged || open) return { what, confirm: { check: () => costWrong(ctx.cost), write } }
-    return { what, choice: { fix: 'Make ready anyway', get blocked() { return costWrong(ctx.cost) }, stop: 'not Damaged', write } }
+    if (a.statusId === damaged || open) return { what, confirm: { check, write } }
+    return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write } }
   }, events, now, pace)
 
   const openCtx = () => runner.open?.row.ctx
@@ -911,9 +915,9 @@ export function createIncomingRepair(
       const ctx = openCtx()
       if (!ctx) return ''
       ctx.cost = raw
-      const wrong = costWrong(raw)
-      if (!wrong) return runner.confirmOpen()
-      return (await runner.typedTag(raw, next(), () => (ctx.cost = ''))) ?? wrong
+      const bad = wrong(() => costOf(raw))
+      if (!bad) return runner.confirmOpen()
+      return (await runner.typedTag(raw, next(), () => (ctx.cost = ''))) ?? bad
     },
     /** Enter in the Note field: the shell's one-word Asset Tag check, then it confirms. */
     submitNote: (raw: string) => runner.submitText(raw, next()),

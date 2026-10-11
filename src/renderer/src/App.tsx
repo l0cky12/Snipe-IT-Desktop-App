@@ -13,8 +13,8 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createRepairIntake, NOT_ALLOWED, type Runner } from './workflows'
-import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
+import { createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, NOT_ALLOWED, type Runner } from './workflows'
+import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, IncomingRepairView, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -102,7 +102,8 @@ export function App() {
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
   const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
-  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner }
+  const [incomingRepair] = useState(() => createIncomingRepair(window.snipeIt, { changed, failed: errorSound }))
+  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Incoming repair': incomingRepair.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -181,6 +182,7 @@ export function App() {
     bulkCheckout.reset()
     bulkReturn.reset()
     repairIntake.reset()
+    incomingRepair.reset()
     cancel(); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
@@ -413,6 +415,7 @@ export function App() {
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} />
+        : view?.page === 'workflow' && view.workflow === 'Incoming repair' ? <IncomingRepairView flow={incomingRepair} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
