@@ -22,10 +22,18 @@ const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K])
 /** The keys of the columns that hold numbers (counts like Assets, Seats, Remaining), which right-align. */
 export const numericColumns = (columns: AnyColumn[], rows: object[]) =>
   new Set(columns.filter((c) => rows.some((r) => typeof (r as Record<string, unknown>)[c.key] === 'number')).map((c) => c.key))
-// Stored per computer and per List: which columns show.
+// Stored per computer and per List once the Operator picks: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
+// The List used to store its Columns on every open, so Assets' old defaults stored as they were mean never picked.
+// ponytail: an Operator who picked exactly the old defaults gets the new ones; drop this once every computer has opened Assets.
+const OLD_ASSET_DEFAULTS = ['assetTag', 'name', 'status', 'model', 'category', 'location', 'assignee']
+/** A List's Columns from what this computer stored: the Operator's pick, or the defaults when they never picked. */
+export function storedColumns(kind: ListKind, stored: unknown): string[] {
+  const unpicked = kind === 'assets' && Array.isArray(stored) && stored.length === OLD_ASSET_DEFAULTS.length && OLD_ASSET_DEFAULTS.every((k) => stored.includes(k))
+  return shownColumns(kind, unpicked ? null : stored)
+}
 function readColumns(kind: ListKind): string[] {
-  try { return shownColumns(kind, JSON.parse(localStorage.getItem(columnsKey(kind)) ?? 'null')) }
+  try { return storedColumns(kind, JSON.parse(localStorage.getItem(columnsKey(kind)) ?? 'null')) }
   catch { return shownColumns(kind, null) }
 }
 // Lists whose rows hold Users or Assignees (an Asset's, a History entry's, a Department's manager): exporting one asks for
@@ -238,20 +246,25 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     for (const n of namesNeeded[kind] ?? []) window.snipeIt.names(n).then((v) => !stale && setNames((names) => ({ ...names, [n]: v })), () => {})
     return () => { stale = true }
   }, [kind])
-  // A Saved Report's Columns are its own; they don't change the List's usual ones.
-  useEffect(() => { if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(shown)) }, [kind, shown])
+  // The Operator's pick is stored; a Saved Report's Columns are its own and don't change the List's usual ones.
+  const pickColumn = (key: string) => {
+    const next = shown.includes(key) ? shown.filter((k) => k !== key) : [...shown, key]
+    setShown(next)
+    if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(next))
+  }
 
   const all: AnyColumn[] = LIST_COLUMNS[kind]
-  // An Assets View's own column shows whatever the Operator picked under Columns.
-  const viewColumn = kind === 'assets' ? ASSET_VIEWS[view].column : undefined
-  const showing = kind === 'assets' ? viewColumns(shown, view) : shown
+  // The open Assets View (none on other Lists); its own column shows whatever the Operator picked under Columns.
+  const viewSpec = kind === 'assets' ? ASSET_VIEWS[view] : undefined
+  const viewColumn = viewSpec?.column
+  const showing = viewSpec ? viewColumns(shown, view) : shown
   const columns = all.filter((c) => showing.includes(c.key))
   const sortable: Record<string, string> = LIST_SORTS[kind]
   const setFilter = (key: string, value: string) => (setFilters((f) => ({ ...f, [key]: value })), setOffset(0))
   // Picking a View keeps the Selection; the search, filter boxes and sort start again.
   const pickView = (v: AssetView) => {
     const next = picking(v)
-    setView(v), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null)
+    setView(v), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null), setNaming(null)
   }
   const toggleSort = (key: string) => (setSort((s) => (s?.key === key && s.order === 'asc' ? { key, order: 'desc' } : { key, order: 'asc' })), setOffset(0))
 
@@ -352,8 +365,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const clear = () => (selectEpoch.current++, setSelectingAll(null), setSelection(new Map()))
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
   // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
-  const fixed = kind === 'assets' ? ASSET_VIEWS[view].filter?.[0] : undefined
-  const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== fixed)
+  const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== viewSpec?.filter?.[0])
   return (
     <>
       {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
@@ -362,7 +374,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
         <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
-          {/* A Saved Report can't remember its View yet, so only All can be saved. */}
+          {/* ponytail: a Saved Report can't remember its View yet, so only All can be saved; #107 adds the View. */}
           <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
             disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
           <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
@@ -393,7 +405,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               {all.slice(1).map((c) => (
                 <li key={c.key}>
                   <label>
-                    <input type="checkbox" checked={showing.includes(c.key)} disabled={c.key === viewColumn} onChange={() => setShown((s) => (s.includes(c.key) ? s.filter((k) => k !== c.key) : [...s, c.key]))} />
+                    <input type="checkbox" checked={showing.includes(c.key)} disabled={c.key === viewColumn} onChange={() => pickColumn(c.key)} />
                     {c.label}{c.key === viewColumn && <span className="dim"> (this View's)</span>}
                   </label>
                 </li>

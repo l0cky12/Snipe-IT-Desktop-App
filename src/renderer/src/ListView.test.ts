@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, listQuery, opening, picking, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -170,6 +170,12 @@ describe('Assets Views', () => {
     const state = { view: 'auditLate' as const, search: 'cb', filters: { location_id: '4' }, sort: { key: 'nextAudit', order: 'desc' as const } }
     expect(listQuery('assets', state)).toEqual({ view: 'auditLate', search: 'cb', filters: { location_id: '4' }, sort: 'nextAudit', order: 'desc' })
     expect(listQuery('users', { ...state, view: 'all' })).not.toHaveProperty('view')
+  })
+
+  it("Assets' old defaults, stored by the List on every open, give the new defaults; a real pick is kept", () => {
+    expect(storedColumns('assets', ['assetTag', 'name', 'status', 'model', 'category', 'location', 'assignee'])).toEqual(['assetTag', 'status', 'model', 'assignee', 'location'])
+    expect(storedColumns('assets', ['assetTag', 'name', 'status', 'model', 'location', 'assignee'])).toEqual(['assetTag', 'name', 'status', 'model', 'assignee', 'location'])
+    expect(storedColumns('assets', null)).toEqual(['assetTag', 'status', 'model', 'assignee', 'location'])
   })
 
   it('picking a View starts its search, filter boxes and sort again', () => {
