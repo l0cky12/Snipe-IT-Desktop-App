@@ -1316,6 +1316,54 @@ describe('report', () => {
     expect(calls).toEqual([])
   })
 
+  it('Temp checkout history pairs each live Temp checkout with its return, wherever that falls', async () => {
+    let id = 0
+    const entry = (asset: number, action_type: string, datetime: string, note: string, operator = 'A. Tech') => ({
+      id: ++id, action_type, created_at: { datetime: datetime.length > 16 ? datetime : `${datetime}:00` }, created_by: { id: 5, name: operator },
+      target: { id: 300 + asset, name: `User ${asset}`, type: 'user' }, note, item: { id: asset, name: `CB-${asset} (NOMMA-${asset})`, type: 'asset' },
+    })
+    const temp = (due: string, text = '') => `[Temp checkout | due: ${due}]${text}`
+    // Oldest first here, reversed below: Snipe-IT sends newest first.
+    const log = [
+      entry(6, 'checkout', '2026-09-19 09:00', temp('2026-09-19 15:00')), // before From: paging stops here
+      entry(1, 'checkout', '2026-09-20 08:00', temp('2026-09-20 14:50')),
+      entry(5, 'checkout', '2026-09-20 12:00', temp('2026-09-22 15:00')),
+      entry(2, 'checkout', '2026-09-21 09:00', temp('2026-09-21 15:00', ' charger too')),
+      entry(3, 'checkout', '2026-09-21 10:00', temp('2026-09-21 15:00')),
+      entry(4, 'checkout', '2026-09-21 11:00', temp('2026-09-21 15:00')),
+      entry(4, 'checkin from', '2026-09-21 11:01', '[Undo] Temp checkout'),
+      entry(6, 'checkout', '2026-09-21 11:30', '[Bulk checkout]'),
+      entry(3, 'checkin from', '2026-09-21 15:00', '[Automatic check-in]'),
+      entry(2, 'checkin from', '2026-09-21 15:00:40', '', 'B. Tech'), // a web UI Checkin, 40 seconds late
+      entry(5, 'checkin from', '2026-09-22 08:00', '[Bulk return]'),
+      entry(5, 'checkout', '2026-09-22 08:05', '[Undo] Bulk return [Temp checkout | due: 2026-09-22 15:00]'),
+      entry(1, 'checkin from', '2026-09-23 10:00', '[Bulk return]', 'B. Tech'), // after To
+      entry(2, 'checkout', '2026-09-23 13:00', temp('2026-09-24 15:00')),
+    ].reverse()
+    const hardware = [1, 2, 3, 4, 5, 6].map((n) => ({ ...chromebook, id: n, asset_tag: `NOMMA-${n}`, name: `CB-${n}` }))
+    const { fetch, queries } = fakeFetch({ '/reports/activity': { body: { total: log.length, rows: log } }, '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    const snipeIt = createSnipeIt(config, fetch, () => new Date(2026, 8, 24, 16, 0))
+    const r = await snipeIt.report('tempHistory', { from: '2026-09-20', to: '2026-09-21' })
+    expect(queries[0]).toMatchObject({ sort: 'created_at', order: 'desc' })
+    expect(r).toEqual({
+      columns: ['Checked out', 'Asset Tag', 'Name', 'User', 'Operator', 'Due', 'Returned', 'Returned by', 'Late by'],
+      rows: [
+        ['2026-09-21 10:00', 'NOMMA-3', 'CB-3', 'User 3', 'A. Tech', '2026-09-21 15:00', '2026-09-21 15:00', 'Automatic check-in', ''],
+        ['2026-09-21 09:00', 'NOMMA-2', 'CB-2', 'User 2', 'A. Tech', '2026-09-21 15:00', '2026-09-21 15:00', 'B. Tech', '1 min'],
+        // Returned, then the return undone: still out, and late since the due time.
+        ['2026-09-20 12:00', 'NOMMA-5', 'CB-5', 'User 5', 'A. Tech', '2026-09-22 15:00', 'Still out', '', '2d'],
+        ['2026-09-20 08:00', 'NOMMA-1', 'CB-1', 'User 1', 'A. Tech', '2026-09-20 14:50', '2026-09-23 10:00', 'B. Tech', '3d'],
+      ],
+      capped: false,
+    })
+    // Without To, the one still out from today shows too, late by the hour on its due day.
+    expect((await snipeIt.report('tempHistory', { from: '2026-09-20' })).rows[0]).toEqual(['2026-09-23 13:00', 'NOMMA-2', 'CB-2', 'User 2', 'A. Tech', '2026-09-24 15:00', 'Still out', '', '1 h'])
+    // Out, back and out again within a minute: the later Checkout still comes first.
+    const again = [entry(6, 'checkout', '2026-09-24 09:00:10', temp('2026-09-24 12:00')), entry(6, 'checkin from', '2026-09-24 09:00:30', ''), entry(6, 'checkout', '2026-09-24 09:00:50', temp('2026-09-24 18:00'))]
+    log.unshift(...again.reverse())
+    expect((await snipeIt.report('tempHistory', { from: '2026-09-24' })).rows.map((row) => row.slice(5, 7))).toEqual([['2026-09-24 18:00', 'Still out'], ['2026-09-24 12:00', '2026-09-24 09:00']])
+  })
+
   // #69 §3. Shaped like Snipe-IT v8.7+: a Maintenance names its Asset and its type; Repair intake's Activity entries carry its Workflow note.
   describe('Damaged', () => {
     const damagedAsset = (id: number) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, assigned_to: null, status_label: { id: 6, name: 'Damaged', status_meta: 'undeployable' } })

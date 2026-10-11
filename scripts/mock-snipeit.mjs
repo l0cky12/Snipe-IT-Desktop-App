@@ -80,8 +80,10 @@ const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', 
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
-const act = (action_type, asset, target, note = null, when = new Date()) =>
-  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: when.toISOString().replace('T', ' ').slice(0, 19) }, created_by: { id: 900, name: 'Demo Operator' },
+// Activity times are local, as Snipe-IT sends them in its own timezone.
+const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().replace('T', ' ').slice(0, 19)
+const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
+  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
     item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
 for (const a of assets.slice(0, 90).reverse()) {
   const action = a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
@@ -108,6 +110,28 @@ assets.filter((a) => a.status_label.name === 'Damaged').forEach((a, k) => {
 // Not Damaged-since sources: a finished repair, and an open Maintenance that isn't a repair.
 maintain(assets[1], -60, 'Repair', -50)
 maintain(assets[4], -6, 'Upgrade')
+// Temp checkouts, for Temp checkout history: returned late, on time and by Automatic check-in, one undone, and one whose
+// Bulk return was undone, so it's still out (and Overdue). [ago days, HH:MM] is local time that many days back.
+{
+  const at = (ago, hm) => { const d = new Date(Date.now() - ago * 864e5); d.setHours(...hm.split(':').map(Number), 0, 0); return d }
+  const stamp = (d) => local(d).slice(0, 16)
+  const temp = (a, user, out, due, ...after) => {
+    act('checkout', a, user, `[Temp checkout | due: ${stamp(due)}]`, out)
+    for (const [action, note, when, operator] of after) act(action, a, user, note, when, operator)
+  }
+  const [late, sameDay, onTime, auto, undone] = assets.filter((a) => a.id > 90 && a.status_label.status_meta === 'deployable')
+  const out = assets.find((a) => a.id > 90 && a.assigned_to?.type === 'user')
+  const user = (n) => ({ ...pick(users, n), type: 'user' })
+  temp(late, user(3), at(6, '08:00'), at(6, '14:50'), ['checkin from', '[Bulk return]', at(4, '09:10'), 'Library Desk'])
+  temp(sameDay, user(4), at(5, '08:15'), at(5, '15:00'), ['checkin from', '[Bulk return]', at(5, '15:40')])
+  temp(onTime, user(5), at(4, '10:00'), at(4, '15:00'), ['checkin from', null, at(4, '14:20'), 'Library Desk'])
+  temp(auto, user(6), at(3, '09:30'), at(3, '15:00'), ['checkin from', '[Automatic check-in]', at(3, '15:00')])
+  temp(undone, user(7), at(2, '11:00'), at(2, '15:00'), ['checkin from', '[Undo] Temp checkout', at(2, '11:01')])
+  const due = at(1, '15:00')
+  temp(out, out.assigned_to, at(1, '08:30'), due, ['checkin from', '[Bulk return]', at(1, '15:20')],
+    ['checkout', `[Undo] Bulk return [Temp checkout | due: ${stamp(due)}]`, at(1, '15:22')])
+  out.expected_checkin = dueBack(local(due))
+}
 log.sort((x, y) => y.created_at.datetime.localeCompare(x.created_at.datetime))
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
