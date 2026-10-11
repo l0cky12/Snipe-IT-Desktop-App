@@ -353,7 +353,8 @@ describe('Bulk return', () => {
     const ZOE = { type: 'user' as const, id: 7, name: 'Avery Testwell' }
     async function returned(one: Asset) {
       const fake = await started([one])
-      fake.bridge.checkin.mockImplementation(async () => { one.assignee = null })
+      // Checked in as Snipe-IT leaves it: no Assignee, Ready to Deploy.
+      fake.bridge.checkin.mockImplementation(async () => { Object.assign(one, { assignee: null, status: 'Ready to Deploy', statusId: 1 }) })
       fake.flow.scan(one.assetTag)
       await vi.waitFor(() => expect(fake.flow.runner.pending).toBe(0))
       expect(fake.flow.runner.askUndo()).toBe('')
@@ -393,6 +394,15 @@ describe('Bulk return', () => {
       expect(fake.flow.runner.undoBlocked).toBe(why)
       expect(fake.flow.runner.askUndo()).toBe(why)
       expect(fake.flow.runner.confirm).toBeNull()
+    })
+
+    it('refuses when the Status Label was changed since the return, and writes nothing', async () => {
+      const one = asset('NOMMA-1')
+      const { flow, checkouts } = await returned(one)
+      Object.assign(one, { status: 'Deployed', statusId: 2 })
+      await flow.runner.undo()
+      expect(checkouts).toEqual([])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'Deployed' now" })
     })
 
     it('refuses when the Asset is checked out again, and writes nothing', async () => {

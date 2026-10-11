@@ -226,8 +226,11 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
     // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
     // the Location; the old one isn't forced back. A time of day means it was a Temp checkout, so the undo makes it one again.
+    const left = ready
     const run = async (now: Asset) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
+      // A label someone set since the return isn't overwritten with the old one.
+      if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
       const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
       await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
