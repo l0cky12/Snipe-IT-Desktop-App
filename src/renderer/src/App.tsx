@@ -130,8 +130,13 @@ export function App() {
   // Read by run(), whose closure may predate the page it finishes on.
   const workflowShowing = useRef(onWorkflow)
   workflowShowing.current = onWorkflow
-  // Straight in, skipping the Workflows page; from Settings too, like the sidebar.
-  const openWorkflow = (workflow: Workflow) => (cancel(), setShowSettings(false), setView({ page: 'workflow', workflow }))
+  // Straight in, skipping the Workflows page; from Settings too, like the sidebar. Rendered now, so its field takes focus
+  // even when the Workflow was already showing (e.g. Ctrl+K, then Ctrl+2 to carry on scanning).
+  function openWorkflow(workflow: Workflow) {
+    cancel()
+    flushSync(() => (setShowSettings(false), setView({ page: 'workflow', workflow })))
+    workflowField.current?.focus()
+  }
 
   useEffect(() => search.current?.focus(), [])
   useEffect(() => {
