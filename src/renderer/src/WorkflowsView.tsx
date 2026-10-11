@@ -261,9 +261,11 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   typed.current = q
   const shown = !user && list?.q === q ? list.users : []
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
+  // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
+  const round = step.step === 'scan' ? step.round : 0
   useEffect(() => {
     setText(''); setList(null); setMoved(null); field.current?.focus()
-  }, [step])
+  }, [step.step, round])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
     flow.runner.enter()
