@@ -460,6 +460,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         const run = async (now: Asset) => {
           stillTheirs(now)
           if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
+          // Both calls must be allowed before the first, so a refused Checkout never leaves it checked in.
+          if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
           const { expectedCheckin: due } = a
           const mine = session
           await bridge.checkin(a.id, { note: undoNote('Bulk checkout') })

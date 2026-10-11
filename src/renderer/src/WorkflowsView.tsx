@@ -411,7 +411,8 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           <>
             <ul className="pick-list" id="checkout-users" role="listbox" aria-label="Users">
               {shown.map((u, i) => (
-                <li key={u.id} id={`checkout-user-${u.id}`} role="option" aria-selected={i === hi} className={i === hi ? 'sel' : undefined} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(u.id)}>{u.name}</li>
+                // A click keeps focus in the field; from the Options note it blurs the note first, so the note is kept.
+                <li key={u.id} id={`checkout-user-${u.id}`} role="option" aria-selected={i === hi} className={i === hi ? 'sel' : undefined} onMouseDown={(e) => document.activeElement === field.current && e.preventDefault()} onClick={() => pick(u.id)}>{u.name}</li>
               ))}
             </ul>
             {/* Kept until changed or the app quits, across Users; shown on every confirm. */}

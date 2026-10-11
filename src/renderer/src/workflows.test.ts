@@ -1097,6 +1097,17 @@ describe('Bulk checkout', () => {
         expect(f.checkouts).toHaveLength(1)
       })
 
+      it("refuses when the key may no longer check it in or out, and writes nothing", async () => {
+        const f = await choosing([blakes('NOMMA-1')])
+        f.flow.runner.fixOpen()
+        await settled(f.flow)
+        f.bridge.assetByTag.mockResolvedValueOnce({ ...moved(blakes('NOMMA-1')), can: { checkout: false, checkin: true, update: true, delete: true } })
+        f.flow.runner.askUndo()
+        await f.flow.runner.undo()
+        expect(f.flow.runner.rows[0].undoFailed).toBe(NOT_ALLOWED)
+        expect(f.checkins).toHaveLength(1)
+      })
+
       it('refuses when it is no longer checked out to this User, and writes nothing', async () => {
         const f = await choosing([blakes('NOMMA-1')])
         f.flow.runner.fixOpen()
