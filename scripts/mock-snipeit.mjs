@@ -33,7 +33,7 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), employee_num: String(20400 + i * 7), department: pick(departments, i), location: pick(locations.slice(1), i) }
 })
 // An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
-const holderOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
+const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
@@ -41,7 +41,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? holderOf(pick(users, i), 'user') : holderOf(pick(locations.slice(1), i), 'location')
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? assigneeOf(pick(users, i), 'user') : assigneeOf(pick(locations.slice(1), i), 'location')
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
@@ -300,7 +300,7 @@ createServer(async (req, res) => {
       // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
       const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
       if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
-      a.assigned_to = holderOf(target, body.checkout_to_type)
+      a.assigned_to = assigneeOf(target, body.checkout_to_type)
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)

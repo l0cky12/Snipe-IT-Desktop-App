@@ -432,6 +432,10 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       if (stop) throw new Error(`Stopped: ${stop}`)
       return { neutral: SKIPPED, what }
     }
+    // Undo's guard: it's still checked out to this User.
+    const stillTheirs = (now: Asset) => {
+      if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+    }
     const checkout = () => bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
     if (was) {
       // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
@@ -444,7 +448,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
         // had. A time of day means it was a Temp checkout, so the undo makes it one again.
         const run = async (now: Asset) => {
-          if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+          stillTheirs(now)
           if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
           const { expectedCheckin: due } = a
           await bridge.checkin(a.id, { note: undoNote('Bulk checkout') })
@@ -460,7 +464,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       await checkout()
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
-        if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+        stillTheirs(now)
         // A label someone set since the Checkout isn't overwritten with the old one.
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
