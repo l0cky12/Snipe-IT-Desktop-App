@@ -72,6 +72,13 @@ describe('the Asset panel when a Bulk Action ends', () => {
     expect(ifShowing(newer, 7, () => null)).toBe(newer)
     expect(ifShowing(null, 7, reload)).toBeNull()
   })
+
+  it('given the panel it started from, leaves a newer open of the same Asset (a Quick Action form, another server) alone', () => {
+    const seen = on(7, 1), newer = on(7, 2)
+    expect(ifShowing(newer, 7, reload, seen)).toBe(newer)
+    expect(ifShowing(seen, 7, reload, seen)).toEqual(on(7, 2))
+    expect(ifShowing(on(7), 7, reload, null)).toEqual(on(7))
+  })
 })
 
 describe("the Checkin form's empty Location choice", () => {

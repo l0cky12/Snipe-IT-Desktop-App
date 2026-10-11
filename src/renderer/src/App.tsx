@@ -63,8 +63,11 @@ export const opensAt = <V extends { page: string }>(view: V | null, showSettings
   !showSettings && view?.page === 'assets' ? { docked: true, view } : { docked: false, view: null }
 
 /** The Asset panel once something done to Asset id ends (a Bulk Action, a delete): changed only while it still shows that Asset,
- * so an open that landed meanwhile stays. It never touches `latest`, so an open still loading isn't cancelled either. */
-export const ifShowing = <P extends { asset: { id: number } }>(p: P | null, id: number, next: (p: P) => P | null): P | null => (p?.asset.id === id ? next(p) : p)
+ * so an open that landed meanwhile stays. It never touches `latest`, so an open still loading isn't cancelled either.
+ * seen: the panel when the work started; then only that very panel changes, not a newer open of the same Asset (a Quick
+ * Action's form) or of the same id on another server. */
+export const ifShowing = <P extends { asset: { id: number } }>(p: P | null, id: number, next: (p: P) => P | null, seen?: P | null): P | null =>
+  (p?.asset.id === id && (seen === undefined || p === seen) ? next(p) : p)
 
 /** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
 export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
@@ -327,7 +330,10 @@ export function App() {
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
-  const refreshPanel = (id: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }))), (e: Error) => setMessage({ text: e.message, error: true }))
+  const refreshPanel = (id: number) => {
+    const seen = panel, epoch = batchEpoch.current
+    window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }), seen)), (e: Error) => epoch === batchEpoch.current && setMessage({ text: e.message, error: true }))
+  }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
