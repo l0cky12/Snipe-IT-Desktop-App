@@ -820,6 +820,45 @@ describe('dashboard (today is 2026-09-24)', () => {
     })
   })
 
+  describe('Checkouts over time', () => {
+    const logged = (id: number, datetime: string, type = 'asset') => ({ id, action_type: 'checkout', created_at: { datetime }, item: { id, name: `NOMMA-${id}`, type }, target: null })
+    // Newest first, as asked for. Today is Thursday 24 Sep 2026, so the weeks run from Monday 22 Sep 2025 to Monday 21 Sep 2026.
+    const log = [
+      logged(1, '2026-09-24 08:00:00'), logged(2, '2026-09-21 07:30:00'), // this week so far
+      logged(3, '2026-09-20 23:59:00'), logged(4, '2026-09-18 10:00:00', 'license'), // Sunday ends last week; a License isn't counted
+      logged(5, '2026-01-02 09:00:00'), logged(6, '2025-12-29 09:00:00'), // one week across the new year
+      logged(7, '2025-12-28 09:00:00'), logged(8, '2025-09-22 08:00:00'), // the week before it; the first week
+      logged(9, '2025-09-21 16:00:00'), logged(10, '2025-09-01 08:00:00'), logged(11, '2025-08-01 08:00:00'), // before the start
+    ]
+
+    it('counts Asset Checkouts by week (weeks start Monday) over the last 12 months, the current week last, so far', async () => {
+      const { snipeIt, urls } = fleet({ 'reports/activity': log })
+      const { checkouts } = await snipeIt.dashboard(['checkouts'])
+      if (!Array.isArray(checkouts)) throw new Error('expected weeks')
+      expect(checkouts).toHaveLength(53)
+      expect(checkouts[0]).toEqual({ week: '2025-09-22', count: 1 })
+      expect(checkouts.at(-1)).toEqual({ week: '2026-09-21', count: 2 })
+      expect(checkouts.filter((w) => w.count)).toEqual([
+        { week: '2025-09-22', count: 1 }, { week: '2025-12-22', count: 1 }, { week: '2025-12-29', count: 2 }, { week: '2026-09-14', count: 1 }, { week: '2026-09-21', count: 2 },
+      ])
+      expect(Object.fromEntries(urls[0].searchParams)).toMatchObject({ action_type: 'checkout', sort: 'created_at', order: 'desc', limit: '500' })
+    })
+
+    it('stops paging the Activity Report once past the start', async () => {
+      const { snipeIt, offsets } = fleet({ 'reports/activity': log }, 3)
+      await snipeIt.dashboard(['checkouts'])
+      // The third page ends with the first Checkout before the start, so a fourth isn't asked for.
+      expect(offsets('reports/activity')).toEqual([0, 3, 6])
+    })
+
+    it("is left out of the Asset list's fetch, and an Activity Report Snipe-IT refuses fails this chart alone", async () => {
+      const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+      const { snipeIt, listsAsked } = fleet({ 'reports/activity': refused })
+      expect(await snipeIt.dashboard(['checkouts'])).toEqual({ checkouts: { error: 'Snipe-IT returned HTTP 403: You do not have permission to view the Activity Report.' } })
+      expect(listsAsked()).toEqual(['reports/activity'])
+    })
+  })
+
   it('lists every Overdue Asset with its Assignee, Expected Checkin and how late, most late first', async () => {
     const { snipeIt } = fleet({ hardware: [
       asset(1, { expected_checkin: { datetime: '2026-09-23 00:00:00' } }),

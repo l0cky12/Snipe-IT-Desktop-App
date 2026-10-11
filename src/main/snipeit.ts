@@ -172,8 +172,9 @@ export type ListQuery = { search?: string; filters?: Record<string, string>; sor
  * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged). */
 export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string }
 
-/** The dashboard pieces: the charts (assets is Assets by Status Label), the five Inventory Chart bars, then the two tables. */
-export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+/** The dashboard pieces: the charts (assets is Assets by Status Label, checkouts is Checkouts over time), the five Inventory
+ * Chart bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'checkouts', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
 export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'overdue', 'expiring']
@@ -182,6 +183,8 @@ export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 
 export type Tally = { id: number | null; name: string; count: number }
 /** type: the Status Label's kind (deployable, pending, undeployable, archived); color: Snipe-IT's color for it, or null. */
 export type StatusTally = Tally & { type: string; color: string | null }
+/** Asset Checkouts in one week: week is its Monday, "YYYY-MM-DD". */
+export type Week = { week: string; count: number }
 /** Why a dashboard piece couldn't load: Snipe-IT's reason, or the app's connection message. */
 export type Failed = { error: string }
 /** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
@@ -189,11 +192,11 @@ export type Split = { used: number; available: number }
 
 /**
  * One entry per requested piece: its data, or { error } with the reason it couldn't load.
- * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
+ * Tallies most first, Checkouts oldest week first (the current week, so far, last), Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
  */
 export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
-    assets: StatusTally[]; categories: Tally[]; locations: Tally[]
+    assets: StatusTally[]; checkouts: Week[]; categories: Tally[]; locations: Tally[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
@@ -433,6 +436,16 @@ function daysFrom(today: Date, date: string): number {
   const [y, m, d] = date.split('-').map(Number)
   return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5)
 }
+
+// The Monday ("YYYY-MM-DD") of the week the day falls in; month counts from 0, and a day past a month's end rolls over.
+function mondayOf(year: number, month: number, day: number): string {
+  const date = new Date(Date.UTC(year, month, day))
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7))
+  return date.toISOString().slice(0, 10)
+}
+// The last 12 months' weeks, oldest first, each at 0: 52 whole weeks, then the current one.
+const lastYearOfWeeks = (today: Date): Week[] =>
+  Array.from({ length: 53 }, (_, i) => ({ week: mondayOf(today.getFullYear(), today.getMonth(), today.getDate() - (52 - i) * 7), count: 0 }))
 
 // Snipe-IT HTML-escapes text fields; decode every string in a response before reshaping it.
 const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
@@ -976,6 +989,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Only the dashboard calls it (the End-of-day reminder and Automatic check-in through it). ponytail: the Out on temp View will too.
   // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
   // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
+  // The Activity Report newest first, a page at a time: the next page is asked for only when the caller reads on past this
+  // one, so a caller that stops once it's past its start asks no further. Each page starts where the last one's rows ended:
+  // a server may cap pages below PAGE_LIMIT.
+  async function* activityLog(filters: Record<string, string>): AsyncGenerator<RawActivity> {
+    for (let offset = 0; ; ) {
+      const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...filters })
+      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      yield* page.rows
+      offset += page.rows.length
+      if (!page.rows.length || offset >= page.total) return
+    }
+  }
+
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
     const since = new Map(assets.flatMap((a) => (a.assignee && a.lastCheckout && a.expectedCheckin && a.expectedCheckin.length > 10 ? [[a.id, a.lastCheckout]] : [])))
     const temp = new Set<number>()
@@ -1105,24 +1132,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
-        // Each page starts where the last one's rows ended: a server may cap pages below PAGE_LIMIT.
-        for (let offset = 0; ; ) {
-          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })
-          const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
-          if (isError(page)) throw new Error(reason(page.messages))
-          for (const r of page.rows) {
-            const day = r.created_at?.datetime.slice(0, 10) ?? ''
-            // An entry without a date can't be placed in the range, and mustn't end the report either.
-            if (from && day && day < from) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
-            if (!inRange(day) || (itemType && r.item?.type !== itemType)) continue
-            // Full, and one more matches: it's cut short.
-            if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
-            const e = toHistoryEntry(r)
-            rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
-          }
-          offset += page.rows.length
-          if (!page.rows.length || offset >= page.total) return { columns: ACTIVITY_COLUMNS, rows, capped: false }
+        for await (const r of activityLog({ ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })) {
+          const day = r.created_at?.datetime.slice(0, 10) ?? ''
+          // An entry without a date can't be placed in the range, and mustn't end the report either.
+          if (from && day && day < from) break
+          if (!inRange(day) || (itemType && r.item?.type !== itemType)) continue
+          // Full, and one more matches: it's cut short.
+          if (rows.length === REPORT_MAX) return { columns: ACTIVITY_COLUMNS, rows, capped: true }
+          const e = toHistoryEntry(r)
+          rows.push([e.when, e.action, e.operator, itemTypeName[r.item?.type as keyof typeof itemTypeName] ?? r.item?.type ?? '', r.item?.name ?? '', e.detail, e.note])
         }
+        return { columns: ACTIVITY_COLUMNS, rows, capped: false }
       }
       const now = today()
       if (AUDIT_REPORTS.includes(kind)) {
@@ -1487,6 +1507,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             const type = label?.type ?? (s?.status_meta === 'deployed' ? 'deployable' : s?.status_meta ?? '')
             return s ? { id: s.id, name: s.name, type, color: label?.color ?? null } : { id: null, name: 'No Status Label', type, color: null }
           })
+        }),
+        // The Activity Report's paging, counted here by week: Snipe-IT can't count its log by date.
+        entry('checkouts', async () => {
+          const weeks = lastYearOfWeeks(now)
+          const byMonday = new Map(weeks.map((w) => [w.week, w]))
+          for await (const r of activityLog({ action_type: 'checkout' })) {
+            const day = r.created_at?.datetime.slice(0, 10)
+            if (!day) continue
+            if (day < weeks[0].week) break
+            // A date past today (a server clock ahead) has no week here.
+            const week = r.item?.type === 'asset' && byMonday.get(mondayOf(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10)))
+            if (week) week.count++
+          }
+          return weeks
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),

@@ -1,20 +1,20 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
-import { automaticCheckins, ReportsView, type ReportStart } from './ReportsView'
+import { automaticCheckins, ReportsView, weekCheckouts, type ReportStart } from './ReportsView'
 import { ImportView } from './ImportView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { Bars, ChartCard, Donut, chartRows, type ChartPiece } from './Charts'
+import { Bars, ChartCard, Donut, WeekLine, chartRows, weekRows, type ChartPiece } from './Charts'
 import { createBulkCheckout, createBulkReturn, createTempCheckout, NOT_ALLOWED } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
@@ -152,7 +152,9 @@ export function App() {
   // The End-of-day reminder clicked: the dashboard's Overdue list with Temp only on, from wherever the Operator was.
   useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', reminderClick: Date.now() }))), [])
   // Automatic check-in's notification clicked: the Activity Report of that day's automatic check-ins.
-  useEffect(() => window.reminder.onAutomatic((day) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...automaticCheckins(day), click: Date.now() } }))), [])
+  // The Reports page, opened on a Report and its filters and run at once.
+  const openReport = (start: ReportStart) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...start, click: Date.now() } }))
+  useEffect(() => window.reminder.onAutomatic((day) => openReport(automaticCheckins(day))), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inField = e.target instanceof Element && !!e.target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]')
@@ -417,7 +419,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={(d) => go('assets', d)} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : w === 'Temp checkout' ? tempCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
@@ -694,7 +696,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
 
 
 const pieceName: Record<DashboardPiece, string> = {
-  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location',
+  assets: 'Assets by Status Label', checkouts: 'Checkouts over time', categories: 'Assets by Category', locations: 'Assets by Location',
   licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
   overdue: 'Overdue', expiring: 'Warranty expiring',
 }
@@ -707,7 +709,7 @@ const splitNames = {
 const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
 type Group = (typeof GROUPS)[number]
 const pieceGroup: Record<DashboardPiece, Group> = {
-  assets: 'Charts', categories: 'Charts', locations: 'Charts',
+  assets: 'Charts', checkouts: 'Charts', categories: 'Charts', locations: 'Charts',
   licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
   overdue: 'Tables', expiring: 'Tables',
 }
@@ -802,10 +804,11 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly }: {
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
 // tempOnly: opens with the Overdue list's Temp only on (the End-of-day reminder was clicked).
-function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onAssetView, onSettings, statusLabels, locations, defaultLocation }: {
+function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onReport, onAssetView, onSettings, statusLabels, locations, defaultLocation }: {
   tempOnly: boolean
   onPick: (id: number) => void
   onDrill: (d: Drill) => void
+  onReport: (start: ReportStart) => void
   onAssetView: (v: AssetView) => void
   onSettings: () => void
   statusLabels: StatusLabel[]
@@ -872,7 +875,16 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onAssetView,
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
-  function chart(piece: ChartPiece) {
+  function chart(piece: ChartPiece | 'checkouts') {
+    if (piece === 'checkouts') {
+      const entry = data.checkouts
+      const openWeek = (week: string) => onReport(weekCheckouts(week))
+      return (
+        <ChartCard key={piece} title={pieceName[piece]} column="Week" unit="Checkouts" rows={entry && !('error' in entry) ? weekRows(entry as Week[]) : entry} onDrill={openWeek}>
+          {(rows) => <WeekLine rows={rows} onDrill={openWeek} />}
+        </ChartCard>
+      )
+    }
     const entry = data[piece]
     const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
     return (
@@ -1033,7 +1045,7 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onAssetView,
           ))}
         </div>
       )}
-      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece))}</div>}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece | 'checkouts'))}</div>}
       {bars.length > 0 && (
         <section className="card inventory" aria-label="Inventory Chart">
           <header><h2>Inventory Chart</h2></header>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartRows, fold } from './Charts'
+import { chartRows, fold, weekRows } from './Charts'
 
 const label = (id: number | null, name: string, type: string, color: string | null, count: number) => ({ id, name, type, color, count })
 
@@ -34,5 +34,12 @@ describe('dashboard chart rows', () => {
   it('folds nothing when there are N or fewer', () => {
     const rows = chartRows('assets', [label(1, 'Deployed', 'deployable', null, 3), label(2, 'Pending', 'pending', null, 1)])
     expect(fold(rows, 5, 'var(--dim)')).toBe(rows)
+  })
+})
+
+describe('Checkouts over time rows', () => {
+  it('each week opens itself, and only the current week, last, is so far', () => {
+    const rows = weekRows([{ week: '2026-09-14', count: 3 }, { week: '2026-09-21', count: 1 }])
+    expect(rows.map((r) => [r.key, r.count, r.drill, r.name.endsWith(' (so far)')])).toEqual([['2026-09-14', 3, '2026-09-14', false], ['2026-09-21', 1, '2026-09-21', true]])
   })
 })

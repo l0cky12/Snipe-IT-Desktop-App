@@ -145,6 +145,12 @@ export type ReportStart = { kind: ReportKind; query: ReportQuery }
 /** A day's automatic check-ins ("YYYY-MM-DD"): what Automatic check-in's notification opens. */
 export const automaticCheckins = (day: string): ReportStart =>
   ({ kind: 'activity', query: { from: day, to: day, itemType: 'asset', actionType: 'checkin from', search: 'Automatic check-in' } })
+/** A week's Asset Checkouts (its Monday, "YYYY-MM-DD", through Sunday): what a week of the dashboard's Checkouts over time opens. */
+export function weekCheckouts(monday: string): ReportStart {
+  const sunday = new Date(`${monday}T00:00Z`)
+  sunday.setUTCDate(sunday.getUTCDate() + 6)
+  return { kind: 'activity', query: { from: monday, to: sunday.toISOString().slice(0, 10), itemType: 'asset', actionType: 'checkout' } }
+}
 /** The filters the Report has: only the Activity Report narrows by record type, action and search, only the audit Reports by Location and Category. */
 export const reportFilters = (kind: ReportKind, query: ReportQuery): ReportQuery => ({
   from: query.from, to: query.to,
