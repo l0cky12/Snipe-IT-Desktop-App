@@ -33,10 +33,12 @@ export function fold(rows: ChartRow[], n: number, otherColor: string): ChartRow[
 const assets = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'Asset' : 'Assets'}`
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact' })
 
-/** A chart on its card, with a Table toggle showing the same numbers as rows. rows is every row, before any folding. */
-export function ChartCard({ title, column, rows, onDrill, children }: {
+/** A chart on its card, with a Table toggle showing the same numbers as rows. rows is every row, before any folding.
+ * dots: each table row shows its mark's color as a status dot (the Status Labels). */
+export function ChartCard({ title, column, dots, rows, onDrill, children }: {
   title: string
   column: string
+  dots?: boolean
   rows: ChartRow[] | Failed | undefined
   onDrill: (d: Drill) => void
   children: (rows: ChartRow[]) => ReactNode
@@ -58,7 +60,7 @@ export function ChartCard({ title, column, rows, onDrill, children }: {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.key}>
-                  <td>{name(r, column === 'Status Label' ? <span className="chip" style={{ '--dot': r.color } as CSSProperties}>{r.name}</span> : r.name)}</td>
+                  <td>{name(r, dots ? <span className="chip" style={{ '--dot': r.color } as CSSProperties}>{r.name}</span> : r.name)}</td>
                   <td className="num">{r.count.toLocaleString()}</td>
                 </tr>
               ))}
@@ -141,8 +143,8 @@ export function Bars({ rows, onDrill }: { rows: ChartRow[]; onDrill: (d: Drill) 
                 onKeyDown: (e: KeyboardEvent) => e.key === 'Enter' && go(),
               })}>
                 <title>{`${r.name}: ${assets(r.count)}`}</title>
-                {/* The whole band is the hit target, not just the bar. */}
-                <rect x={x(r.key)} y={M.top} width={x.bandwidth()} height={base - M.top} fill="transparent" />
+                {/* The whole band is the hit target, not just the bar, and its outline the focus ring (the group's would take in the label). */}
+                <rect className="hit" x={x(r.key)} y={M.top} width={x.bandwidth()} height={base - M.top} fill="transparent" />
                 <path d={bar} fill={r.color} />
                 <text className="cap" x={mid} y={top - 5}>{r.count.toLocaleString()}</text>
                 <text className="label" transform={`translate(${mid},${base + 10}) rotate(-40)`}>{short(r.name)}</text>

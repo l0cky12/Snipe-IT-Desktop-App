@@ -169,10 +169,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .chart { display: grid; grid-template-columns: var(--bar-name-w) 1fr auto; column-gap: 14px; align-items: center; padding-top: 6px; font-size: 13.5px; }
 .bar-row { display: contents; }
 .bar-name { grid-column: 1; align-self: start; font-weight: 600; line-height: 20px; }
-.bar { display: flex; gap: 2px; height: var(--bar-h); background: var(--series-1-track); border-radius: var(--r-pill); overflow: hidden; }
+.bar { display: flex; gap: 2px; height: var(--bar-h); border-radius: var(--r-pill); overflow: hidden; }
 .bar > * { all: unset; min-width: 3px; }
 /* A total of 0: an outline, not a track, so "none" doesn't read as "all Free". */
-.bar:empty { background: none; outline: 2px dashed var(--line); outline-offset: -2px; }
+.bar:empty { outline: 2px dashed var(--line); outline-offset: -2px; }
 .bar-total { font: 600 17px var(--sans); text-align: right; min-width: 5ch; line-height: 20px; align-self: start; font-variant-numeric: tabular-nums; }
 .bar-key { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2px 16px; padding: 4px 0 8px; line-height: 18px; color: var(--dim); font-size: 12.5px; }
 .bar-key > * { all: unset; display: inline-flex; align-items: center; gap: 6px; }
@@ -197,7 +197,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .donut path { stroke: var(--bg); stroke-width: 2; }
 .donut path.go { cursor: pointer; }
 .donut path.go:hover, .bars g.go:hover path { opacity: .8; }
-.donut-total { font: 600 22px var(--sans); font-variant-numeric: normal; fill: var(--text); text-anchor: middle; }
+.donut-total { font: 600 22px var(--sans); fill: var(--text); text-anchor: middle; }
 .donut-unit { font: 12px var(--sans); fill: var(--dim); text-anchor: middle; }
 .legend { align-self: stretch; list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); column-gap: 16px; }
 .legend li > * { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 6px; border-radius: var(--r-ctl); }
@@ -210,6 +210,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .bars .tick text, .bars .label { fill: var(--dim); text-anchor: end; }
 .bars .cap { fill: var(--text); text-anchor: middle; font-weight: 500; }
 .bars g.go { cursor: pointer; }
+.bars g.go:focus-visible { outline: none !important; }
+.bars g.go:focus-visible .hit { stroke: var(--mark); stroke-width: 2; }
 
 /* Health warnings: one line each with the tone as its edge and dot (red: fix now, amber: keep an eye on it), words in text colours. */
 .health { display: grid; gap: 6px; padding: 14px 28px 0; }

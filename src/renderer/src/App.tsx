@@ -637,8 +637,11 @@ const splitNames = {
 } as const
 // Customize's groups, in screen order; a piece moves only within its own.
 const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
-const pieceGroup: Record<DashboardPiece, number> = {
-  assets: 0, categories: 0, locations: 0, licenses: 1, accessories: 1, consumables: 1, components: 1, users: 1, overdue: 2, expiring: 2,
+type Group = (typeof GROUPS)[number]
+const pieceGroup: Record<DashboardPiece, Group> = {
+  assets: 'Charts', categories: 'Charts', locations: 'Charts',
+  licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
+  overdue: 'Tables', expiring: 'Tables',
 }
 const chartColumn: Record<ChartPiece, string> = { assets: 'Status Label', categories: 'Category', locations: 'Location' }
 
@@ -657,7 +660,7 @@ export function layoutFrom(saved: string | null): Layout {
   // A piece missing from the stored layout (e.g. new in this version) shows, right after the piece before it by default.
   for (const [i, piece] of DASHBOARD_PIECES.entries())
     if (!stored.some((p) => p.piece === piece)) stored.splice(stored.findIndex((p) => p.piece === DASHBOARD_PIECES[i - 1]) + 1, 0, { piece, show: true })
-  return stored.sort((a, b) => pieceGroup[a.piece] - pieceGroup[b.piece])
+  return stored.sort((a, b) => GROUPS.indexOf(pieceGroup[a.piece]) - GROUPS.indexOf(pieceGroup[b.piece]))
 }
 
 type Segment = { name: string; count: number; color: string }
@@ -789,7 +792,7 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     const entry = data[piece]
     const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
     return (
-      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} rows={rows} onDrill={onDrill}>
+      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} dots={piece === 'assets'} rows={rows} onDrill={onDrill}>
         {(rows) => (piece === 'assets' ? <Donut rows={rows} onDrill={onDrill} /> : <Bars rows={rows} onDrill={onDrill} />)}
       </ChartCard>
     )
@@ -858,8 +861,8 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     )
   }
 
-  const showing = (group: number) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
-  const bars = showing(1).flatMap((piece) => {
+  const showing = (group: Group) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
+  const bars = showing('Inventory Chart').flatMap((piece) => {
     const entry = segments(piece)
     return entry ? [<BarRow key={piece} name={pieceName[piece]} entry={entry} />] : []
   })
@@ -876,10 +879,10 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
       <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} />
       {customizing && (
         <div className="customize">
-          {GROUPS.map((group, g) => (
+          {GROUPS.map((group) => (
             <ol key={group} aria-label={group}>
               <li className="k">{group}</li>
-              {layout.filter((p) => pieceGroup[p.piece] === g).map((p, i, list) => (
+              {layout.filter((p) => pieceGroup[p.piece] === group).map((p, i, list) => (
                 <li key={p.piece}>
                   <label>
                     <input type="checkbox" checked={p.show} onChange={() => toggle(p.piece)} />
@@ -893,14 +896,14 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
           ))}
         </div>
       )}
-      {showing(0).length > 0 && <div className="charts">{showing(0).map((piece) => chart(piece as ChartPiece))}</div>}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece))}</div>}
       {bars.length > 0 && (
         <section className="card inventory" aria-label="Inventory Chart">
           <header><h2>Inventory Chart</h2></header>
           <div className="chart">{bars}</div>
         </section>
       )}
-      {showing(2).map((piece) => table(piece))}
+      {showing('Tables').map((piece) => table(piece))}
     </>
   )
 }
