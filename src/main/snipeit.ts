@@ -548,6 +548,7 @@ const RELATED_KINDS: Record<string, RecordKind> = {
 // Snipe-IT's field names in the app's words, where they differ (see CONTEXT.md); others read as Snipe-IT names them.
 const FIELD_LABELS: Record<string, string> = {
   asset_tag: 'Asset Tag', model: 'Asset Model', model_number: 'Model No.', status_label: 'Status', assigned_to: 'Assignee', rtd_location: 'Default Location',
+  min_amt: 'Minimum quantity', free_seats_count: 'Free seats',
   expected_checkin: 'Expected Checkin', last_checkin: 'Last Checkin', last_checkout: 'Last Checkout', assets_count: 'Assets', users_count: 'Users',
 }
 // Shown elsewhere (id, custom fields), not readable (images, the permissions map), or not about the record (what the key may do).
