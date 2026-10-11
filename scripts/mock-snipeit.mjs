@@ -40,6 +40,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i), activated: i % 13 !== 5 }
 })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
+const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
@@ -55,7 +57,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     serial: i % 41 === 9 ? null : i % 41 === 30 ? '' : `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: i % 97 === 50 ? null : { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
     location: holder?.type === 'location' ? holder : noLocation ? null : pick(locations.slice(1), i), assigned_to: holder,
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? { date: day(-(i % 30)) } : null,
+    // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
+    rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30))) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
@@ -164,6 +168,7 @@ function saveRecord(kind, body, row) {
     if (k === 'groups') { target.groups = groupsOf(v); continue }
     if (refs[k]) target[refs[k][0]] = refs[k][1].find((r) => r.id === Number(v)) ?? null
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
+    else if (k === 'expected_checkin') target[k] = dueBack(v)
     else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
     // Snipe-IT keeps a minimum of 0, but sends it back as null, like none set.
     else if (k === 'min_amt') target[k] = Number(v) || null
@@ -312,13 +317,13 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
       const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
       a.assigned_to = { ...target, type: body.checkout_to_type }
       a.status_label = statuses[1]
-      a.expected_checkin = body.expected_checkin ? { date: body.expected_checkin } : null
+      a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)
