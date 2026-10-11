@@ -588,7 +588,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
     ['Status', <StatusChip asset={a} />],
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee && kind[a.assignee.type]],
-    ['Expected checkin', <>{a.expectedCheckin || '—'}{a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}</>],
+    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}</>],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial && <span className="mono">{a.serial}</span>],
@@ -645,7 +645,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
               <td>{h.operator}</td>
               <td>
                 {h.detail}
-                {h.note && <>{h.detail && ' '}<span className="note">{h.note}</span></>}
+                {h.note && <span className="note">{h.note}</span>}
               </td>
             </tr>
           ))}
