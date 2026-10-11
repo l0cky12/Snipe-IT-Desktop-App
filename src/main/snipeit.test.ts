@@ -1545,10 +1545,11 @@ describe('Incoming repair', () => {
   })
 
   it("an open Maintenance carries its start date, plain notes, Supplier and Repair cost (as Snipe-IT's number)", async () => {
-    const { fetch } = fakeFetch({ '/maintenances': { body: { total: 2, rows: [open, { id: 52, name: 'x', notes: null, supplier: null, cost: null, start_date: null, maintenance_type_details: null }] } } })
+    const { fetch } = fakeFetch({ '/maintenances': { body: { total: 3, rows: [open, { id: 52, name: 'x', notes: null, supplier: null, cost: null, start_date: null, maintenance_type_details: null }, { ...open, id: 53, cost: 30 }] } } })
     expect(await createSnipeIt(config, fetch).openMaintenances(4812)).toEqual([
       { id: 51, type: { id: 4, name: 'Repair' }, startDate: '2026-10-01', notes: '[Repair intake] cracked & bent', supplier: { id: 3, name: 'Campus Tech Supply' }, cost: '1234.50' },
       { id: 52, type: null, startDate: null, notes: '', supplier: null, cost: null },
+      expect.objectContaining({ id: 53, cost: '30.00' }),
     ])
   })
 
@@ -1571,7 +1572,7 @@ describe('Incoming repair', () => {
       ['PATCH', '/maintenances/51', { cost: '45.00' }],
       ['PATCH', '/maintenances/51', { supplier_id: null, cost: null, completed_at: null, completed_by: null, asset_maintenance_time: null }],
     ])
-    for (const bad of [{ cost: '1,234.50' }, { supplierId: 1.5 }, { cost: '-1.00' }]) await expect(snipeIt.updateMaintenance(51, bad)).rejects.toThrow('Invalid')
+    for (const bad of [{ cost: '1,234.50' }, { supplierId: 1.5 }, { cost: '-1.00' }, { cost: ['45.00'] as unknown as string }]) await expect(snipeIt.updateMaintenance(51, bad)).rejects.toThrow('Invalid')
     expect(requests).toHaveLength(3)
     const refused = fakeFetch({ 'PATCH /maintenances/51': { body: { status: 'error', messages: { cost: ['The cost must be a number.'] }, payload: null } } })
     await expect(createSnipeIt(config, refused.fetch).updateMaintenance(51, { cost: '45.00' })).rejects.toThrow('The cost must be a number.')

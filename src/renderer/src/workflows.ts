@@ -589,12 +589,32 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
 export type BulkCheckout = ReturnType<typeof createBulkCheckout>
 
 export const DAMAGED = 'Damaged'
-const noLabel = (name: string) => `No Status Label named '${name}' in Snipe-IT; ask an admin to create one`
+const noLabel = (name: string) => `No Status Label named '${name}' in Snipe-IT; ask a Snipe-IT superuser to create one`
 export const NO_DAMAGED = noLabel(DAMAGED)
 const isRepair = (t: StatusLabel | null, typeId: number | null) => !!t && (t.id === typeId || t.name.trim().toLowerCase() === 'repair')
 /** What a repair Workflow needs from Snipe-IT before a scan: its Status Labels' ids by name, and the Maintenance type
  *  for repairs with the Settings id it was looked up with. */
 type RepairSetup = { labels: Record<string, number>; typeId: number | null; fallback: number | null }
+
+/** The Maintenance type for repairs, looked up once per session and shared by Repair intake and Incoming repair (#60
+ *  §1): looked up again while none is found, or when the Settings id it was looked up with changes. */
+export function sharedRepairType(lookup: SnipeItBridge['repairTypeId']) {
+  let kept: { fallback: number | null; id: Promise<number | null> } | null = null
+  return {
+    repairTypeId(fallback: number | null): Promise<number | null> {
+      if (kept?.fallback === fallback) return kept.id
+      const mine = { fallback, id: lookup(fallback) }
+      kept = mine
+      const forget = () => { if (kept === mine) kept = null }
+      mine.id.then((id) => id === null && forget(), forget)
+      return mine.id
+    },
+    /** Settings pointing at another server. */
+    reset() {
+      kept = null
+    },
+  }
+}
 
 // Repair intake and Incoming repair look up their Status Labels (by name, ignoring case) and the Maintenance type
 // (#59 §3's fallback chain) when they open, and keep them for the session. What isn't found yet is looked for again at
@@ -747,26 +767,32 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
 export type RepairIntake = ReturnType<typeof createRepairIntake>
 
 /** What an Incoming repair scan was made under: the "Repaired by" Supplier then. Once its confirm or choice opens, also
- *  what the scan found (the newest open Repair Maintenance, how many others, the Repair type id) and the Repair cost
- *  typed there, as typed. */
-export type IncomingCtx = { supplier: StatusLabel | null; cost: string; found?: { open: OpenMaintenance | null; others: number; typeId: number | null } }
+ *  what the scan found (the newest open Repair Maintenance, how many others, the Repair type id, and whether it counts
+ *  as Damaged) and the Repair cost typed there, as typed. */
+export type IncomingCtx = { supplier: StatusLabel | null; cost: string; found?: { open: OpenMaintenance | null; others: number; typeId: number | null; damaged: boolean } }
 // A Repair cost as typed: '' when none, else `45.00`; throws with a message when it isn't a number.
 const costOf = (raw: string) => (raw.trim() ? repairCost(raw) : '')
 const wrong = (f: () => unknown) => { try { return f(), '' } catch (e) { return (e as Error).message } }
-const given = (supplier: StatusLabel | null, cost: string) => [supplier?.name, cost && `$${cost}`].filter(Boolean).join(', ')
-const backFrom = (supplier: StatusLabel | null, cost: string) => `Back from repair${given(supplier, cost) && ` (${given(supplier, cost)})`}`
+// "(Acme Device Repair, $45.00)", or '' with neither.
+const given = (supplier: StatusLabel | null, cost: string) => {
+  const g = [supplier?.name, cost && `$${cost}`].filter(Boolean).join(', ')
+  return g && ` (${g})`
+}
+const backFrom = (supplier: StatusLabel | null, cost: string) => `Back from repair${given(supplier, cost)}`
 // The Maintenance step (#60 §1): close the open one, create one and close it (only when a Supplier or Repair cost was
-// given), or, with no Repair type to create one with, put the Supplier and cost in the note so nothing typed is lost.
+// given), or, with no Repair type to create one with, put the Supplier and Repair cost in the note so nothing typed is
+// lost. An Asset made ready anyway (not Damaged) may never have gone for repair, so there the header's Supplier alone
+// records nothing; a Repair cost typed for it does.
 type Plan = 'close' | 'create' | 'note' | 'none'
 function planOf({ supplier, cost, found }: IncomingCtx): { plan: Plan; supplier: StatusLabel | null; cost: string } {
-  const { open, typeId } = found!
-  const c = (() => { try { return costOf(cost) } catch { return '' } })()
+  const { open, typeId, damaged } = found!
+  const c = wrong(() => costOf(cost)) ? '' : costOf(cost)
   // The Maintenance's own Supplier is kept; the header's fills one that has none.
   const s = open?.supplier ?? supplier
-  return { plan: open ? 'close' : !s && !c ? 'none' : typeId === null ? 'note' : 'create', supplier: s, cost: c }
+  return { plan: open ? 'close' : !c && !(s && damaged) ? 'none' : typeId === null ? 'note' : 'create', supplier: s, cost: c }
 }
 
-// Incoming repair (#60): pick who repaired the box once ("Repaired by"), then each scanned Asset is confirmed (with an
+// Incoming repair (#60): pick who repaired them once ("Repaired by"), then each scanned Asset is confirmed (with an
 // optional Repair cost and note), made Ready to Deploy, its return noted in History, and its open Repair Maintenance
 // closed with the Supplier and cost. Nothing after the status change undoes it.
 export function createIncomingRepair(
@@ -791,7 +817,9 @@ export function createIncomingRepair(
     // The newest is closed: Snipe-IT's ids grow with each new Maintenance.
     const open = repairs.reduce<OpenMaintenance | null>((n, m) => (n && n.id > m.id ? n : m), null)
     if (a.statusId === ready && !open) throw new Error('Already ready: nothing to do')
-    ctx.found = { open, others: Math.max(0, repairs.length - 1), typeId }
+    // Another status with an open Repair Maintenance counts as Damaged: someone changed the label by hand.
+    const isDamaged = a.statusId === damaged || !!open
+    ctx.found = { open, others: Math.max(0, repairs.length - 1), typeId, damaged: isDamaged }
 
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
@@ -802,6 +830,7 @@ export function createIncomingRepair(
       const still = () => sameSession(mine)
       await bridge.updateStatus(a.id, ready)
       still()
+      // "Ready, but <step> failed: <reason>" (#60 §2).
       const failed: string[] = []
       await bridge.addAssetNote(a.id, note).catch((e: Error) => failed.push(`the note failed: ${e.message}`))
       still()
@@ -820,7 +849,8 @@ export function createIncomingRepair(
           closed = true
           sub.push('Maintenance closed')
         } catch (e) {
-          sub.push(`Maintenance not closed: ${(e as Error).message}`)
+          sub.push('Maintenance not closed')
+          failed.push(`the Maintenance failed: ${(e as Error).message}`)
         }
         const n = ctx.found!.others
         if (n) sub.push(`${n} other open Maintenance${n === 1 ? '' : 's'} left as is`)
@@ -834,9 +864,10 @@ export function createIncomingRepair(
           await bridge.completeMaintenance(created, note)
           sub.push('Maintenance created and closed')
         } catch (e) {
-          sub.push(`Maintenance ${created === null ? 'not written' : 'created, not closed'}: ${(e as Error).message}`)
+          sub.push(`Maintenance ${created === null ? 'not written' : 'created, not closed'}`)
+          failed.push(`the Maintenance failed: ${(e as Error).message}`)
         }
-      } else sub.push(plan === 'note' ? 'Maintenance not written: no Repair type found' : 'Maintenance none (nothing to record)')
+      } else sub.push(plan === 'note' ? 'Maintenance not written: no Repair type found' : 'No Maintenance (nothing to record)')
 
       // Undo: the old Status Label and an undo note, then the Maintenance as it was. Only a failed status change stops it.
       const run = async (now: Asset): Promise<string> => {
@@ -858,14 +889,14 @@ export function createIncomingRepair(
         return left.join('; ')
       }
       const says = `${a.assetTag} made Ready to Deploy${closed ? ', its Maintenance closed' : created !== null ? ', a Maintenance created' : ''}`
-      return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: backFrom(s, cost), sub, undo: { says, run } }
+      return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: backFrom(plan === 'none' ? null : s, cost), sub, undo: { says, run } }
     }
 
-    const what = backFrom(open?.supplier ?? ctx.supplier, '')
+    // The header's Supplier shows only where it will be recorded.
+    const what = backFrom(isDamaged ? (open?.supplier ?? ctx.supplier) : null, '')
     // A link in the note, or a Repair cost that isn't a number, keeps it open.
     const check = (text: string) => wrong(() => (workflowNote('Incoming repair', { text }), costOf(ctx.cost)))
-    // Another status with an open Repair Maintenance counts as Damaged: someone changed the label by hand.
-    if (a.statusId === damaged || open) return { what, confirm: { check, write } }
+    if (isDamaged) return { what, confirm: { check, write } }
     return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write } }
   }, events, now, pace)
 
@@ -881,7 +912,7 @@ export function createIncomingRepair(
       supplier = s
       events.changed()
     },
-    /** Snipe-IT's Supplier picker list. */
+    /** Snipe-IT's Supplier picker list. ponytail: its first 50 by name, no search; a school has a few repair Suppliers. */
     suppliers: () => bridge.supplierSelectlist(''),
     /** Opening the Workflow: looks up what it doesn't have yet. fallback: Settings' Maintenance type for repairs. */
     open: (fallback: number | null) => setup.open(fallback),
@@ -893,11 +924,11 @@ export function createIncomingRepair(
       const ctx = openCtx()
       if (!ctx) return null
       const { plan, supplier: s, cost } = planOf(ctx)
-      const g = given(s, cost) && ` (${given(s, cost)})`
+      const g = given(s, cost)
       const step = {
         close: `, close the repair Maintenance${g}`,
         create: `, create and close a repair Maintenance${g}`,
-        note: ` with the ${[s && 'Supplier', cost && 'cost'].filter(Boolean).join(' and ')} (no Repair type found for a Maintenance)`,
+        note: ` with the ${[s && 'Supplier', cost && 'Repair cost'].filter(Boolean).join(' and ')} (no Repair type found for a Maintenance)`,
         none: ', no Maintenance (nothing to record)',
       }[plan]
       return `Make Ready to Deploy, note the return${step}`

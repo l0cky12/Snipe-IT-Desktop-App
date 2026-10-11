@@ -287,7 +287,13 @@ type RawActivity = {
 
 const EXPIRING_DAYS = 90
 // A Repair cost as the app writes it (notes.ts repairCost): 45.00.
-const COST = /^\d+\.\d{2}$/
+const isCost = (v: unknown) => typeof v === 'string' && /^\d+\.\d{2}$/.test(v)
+// A Maintenance's cost as Snipe-IT sends it ("1,234.5", or a number) as the app writes it, or null. ponytail: assumes a
+// '.' decimal separator, as #79 does.
+const costOf = (v: unknown) => {
+  const n = Number(String(v ?? '').replace(/,/g, ''))
+  return v === null || v === undefined || v === '' || !(n >= 0) ? null : n.toFixed(2)
+}
 // Rows per List page.
 export const LIST_PAGE = 50
 // Kinds counted by quantity: their list, and the fields for the whole quantity and the available part. Used is the rest.
@@ -1209,7 +1215,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       // Snipe-IT sends the cost formatted ("1,234.50") and the notes rendered from Markdown.
       return body.rows.map((m) => ({
         id: m.id, type: named(m.maintenance_type_details), startDate: m.start_date?.date ?? null, notes: plainText(m.notes ?? ''),
-        supplier: named(m.supplier), cost: String(m.cost ?? '').replace(/[^\d.]/g, '') || null,
+        supplier: named(m.supplier), cost: costOf(m.cost),
       }))
     },
     // Opens a Maintenance on one Asset; resolves to its id. Needs `assets.edit`.
@@ -1217,7 +1223,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(assetId)
       checkId(typeId, 'Maintenance type')
       if (supplierId !== undefined) checkId(supplierId, 'Supplier')
-      if (typeof name !== 'string' || !name.trim() || typeof notes !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || (cost !== undefined && !COST.test(cost))) throw new Error('Invalid Maintenance')
+      if (typeof name !== 'string' || !name.trim() || typeof notes !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || (cost !== undefined && !isCost(cost))) throw new Error('Invalid Maintenance')
       const body = await request<{ payload?: { id?: number } }>('/maintenances', { asset_id: assetId, maintenance_type_id: typeId, name, start_date: startDate, notes, ...(supplierId !== undefined && { supplier_id: supplierId }), ...(cost !== undefined && { cost }) })
       if (isError(body)) throw new Error(reason(body.messages))
       return Number(body.payload?.id)
@@ -1227,7 +1233,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async updateMaintenance(id: number, { supplierId, cost, reopen }: MaintenanceChange): Promise<void> {
       checkId(id, 'Maintenance')
       if (supplierId != null) checkId(supplierId, 'Supplier')
-      if (cost != null && !COST.test(cost)) throw new Error('Invalid Maintenance')
+      if (cost != null && !isCost(cost)) throw new Error('Invalid Maintenance')
       const body = await request(`/maintenances/${id}`, {
         ...(supplierId !== undefined && { supplier_id: supplierId }), ...(cost !== undefined && { cost }),
         ...(reopen === true && { completed_at: null, completed_by: null, asset_maintenance_time: null }),

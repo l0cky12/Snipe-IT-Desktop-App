@@ -538,7 +538,7 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   )
 }
 
-// Incoming repair (#60). "Repaired by" is picked once for the box. The scan field keeps focus through the confirm (scan,
+// Incoming repair (#60). "Repaired by" is picked once for everything coming back from that Supplier. The scan field keeps focus through the confirm (scan,
 // then Enter or the same tag again); Tab or a click reaches the Repair cost and Note, where Enter confirms too. An Asset
 // that isn't Damaged opens a choice there instead: Make ready anyway (a click, or Tab to it and Enter) or Stop (Esc).
 export function IncomingRepairView({ flow, field, repairTypeId, onOpenAsset }: {

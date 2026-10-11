@@ -13,7 +13,7 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, NOT_ALLOWED, type Runner } from './workflows'
+import { createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, NOT_ALLOWED, sharedRepairType, type Runner } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, IncomingRepairView, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
 const statusColor: Record<string, string> = {
@@ -101,8 +101,10 @@ export function App() {
   const [, changed] = useReducer((n: number) => n + 1, 0)
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
-  const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
-  const [incomingRepair] = useState(() => createIncomingRepair(window.snipeIt, { changed, failed: errorSound }))
+  // The two repair Workflows share one Repair type lookup (#60 §1).
+  const [repairType] = useState(() => sharedRepairType(window.snipeIt.repairTypeId))
+  const [repairIntake] = useState(() => createRepairIntake({ ...window.snipeIt, repairTypeId: repairType.repairTypeId }, { changed, failed: errorSound }))
+  const [incomingRepair] = useState(() => createIncomingRepair({ ...window.snipeIt, repairTypeId: repairType.repairTypeId }, { changed, failed: errorSound }))
   const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Incoming repair': incomingRepair.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
@@ -181,6 +183,7 @@ export function App() {
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
+    repairType.reset()
     repairIntake.reset()
     incomingRepair.reset()
     cancel(); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)

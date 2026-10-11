@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceChange, MaintenanceInput, OpenMaintenance, StatusLabel, UserCard } from '../../main/snipeit'
-import { cleanTag, createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createRunner, NOT_ALLOWED } from './workflows'
+import { cleanTag, createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createRunner, NOT_ALLOWED, sharedRepairType } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
@@ -1279,7 +1279,7 @@ describe('Repair intake', () => {
     const fake = fakeBridge([asset('NOMMA-1')])
     const flow = createRepairIntake(fake.bridge, { changed: () => {} }, clock, 0)
     await flow.open(null)
-    expect(flow.blocked).toBe("No Status Label named 'Damaged' in Snipe-IT; ask an admin to create one")
+    expect(flow.blocked).toBe("No Status Label named 'Damaged' in Snipe-IT; ask a Snipe-IT superuser to create one")
     expect(flow.scan('NOMMA-1')).toBe(flow.blocked)
     expect(flow.runner.rows).toEqual([])
     // Created since: the next open finds it.
@@ -1486,7 +1486,7 @@ describe('Incoming repair', () => {
       fake.bridge.statusLabels.mockResolvedValue(labels)
       const flow = createIncomingRepair(fake.bridge, { changed: () => {} }, clock, 0)
       await flow.open(null)
-      expect(flow.blocked).toBe(labels === LABELS ? "No Status Label named 'Damaged' in Snipe-IT; ask an admin to create one" : "No Status Label named 'Ready to Deploy' in Snipe-IT; ask an admin to create one")
+      expect(flow.blocked).toBe(labels === LABELS ? "No Status Label named 'Damaged' in Snipe-IT; ask a Snipe-IT superuser to create one" : "No Status Label named 'Ready to Deploy' in Snipe-IT; ask a Snipe-IT superuser to create one")
       expect(flow.scan('NOMMA-1')).toBe(flow.blocked)
       expect(flow.runner.rows).toEqual([])
     }
@@ -1555,7 +1555,7 @@ describe('Incoming repair', () => {
       flow.runner.confirmOpen()
       await settled(flow)
       expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
-      expect(flow.runner.rows[0].sub).toEqual(['Maintenance none (nothing to record)'])
+      expect(flow.runner.rows[0].sub).toEqual(['No Maintenance (nothing to record)'])
     })
 
     it('one must be created but no Repair type is found: the Supplier and cost go in the note instead', async () => {
@@ -1564,7 +1564,7 @@ describe('Incoming repair', () => {
       flow.scan('NOMMA-1')
       await showing(flow)
       flow.setCost('45')
-      expect(flow.says).toBe('Make Ready to Deploy, note the return with the Supplier and cost (no Repair type found for a Maintenance)')
+      expect(flow.says).toBe('Make Ready to Deploy, note the return with the Supplier and Repair cost (no Repair type found for a Maintenance)')
       flow.runner.setText('screen replaced')
       flow.runner.confirmOpen()
       await settled(flow)
@@ -1575,7 +1575,7 @@ describe('Incoming repair', () => {
     it("a Maintenance step that fails leaves the Asset Ready and says why; a failed note says so in the result", async () => {
       const { flow, bridge } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
       bridge.completeMaintenance.mockRejectedValueOnce(new Error('This maintenance is already complete.'))
-      expect((await back(flow, 'NOMMA-1')).sub).toEqual(['Maintenance not closed: This maintenance is already complete.'])
+      expect(await back(flow, 'NOMMA-1')).toMatchObject({ result: { state: 'done', text: 'Ready, but the Maintenance failed: This maintenance is already complete.' }, sub: ['Maintenance not closed'] })
       bridge.addAssetNote.mockRejectedValueOnce(new Error('Snipe-IT returned HTTP 500'))
       expect((await back(flow, 'NOMMA-2')).result).toEqual({ state: 'done', text: 'Ready, but the note failed: Snipe-IT returned HTTP 500' })
     })
@@ -1646,6 +1646,32 @@ describe('Incoming repair', () => {
         'maintenance 1 type 9 "NOMMA-1 repair" 2026-10-11 [Incoming repair] No Repair intake record supplier 3 cost 30.00', 'complete maintenance 61 [Incoming repair] hinge replaced',
       ])
     })
+  })
+
+  it("made ready anyway, the header's Supplier alone records no Maintenance: the Asset may never have gone for repair", async () => {
+    const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
+    flow.setSupplier(ACME)
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    expect(flow.says).toBe('Make Ready to Deploy, note the return, no Maintenance (nothing to record)')
+    flow.runner.fixOpen()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
+  })
+
+  it('shares one Repair type lookup with Repair intake for the session, looked up again while none is found or the Settings id changes', async () => {
+    const lookup = vi.fn(async (fallback: number | null) => (fallback === 12 ? 4 : null))
+    const shared = sharedRepairType(lookup)
+    expect(await shared.repairTypeId(null)).toBeNull()
+    expect(await shared.repairTypeId(null)).toBeNull()
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(lookup.mock.calls).toEqual([[null], [null], [12]])
+    lookup.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+    shared.reset()
+    await expect(shared.repairTypeId(12)).rejects.toThrow("Can't reach Snipe-IT")
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(lookup).toHaveBeenCalledTimes(5)
   })
 
   describe('Repair cost', () => {
