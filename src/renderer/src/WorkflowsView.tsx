@@ -357,7 +357,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           <p className="message" role="status">{status}</p>
           {open && a && (
             // The buttons don't take focus either, so the next scan still lands in the field.
-            <div className="confirm" role="group" aria-label="Confirm checkout">
+            <div className="scan-confirm" role="group" aria-label="Confirm checkout">
               <div className="confirm-tag mono">{a.assetTag}</div>
               <dl className="confirm-facts">
                 {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
