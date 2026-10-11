@@ -35,6 +35,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
 // User notes as Snipe-IT sends them: rendered, so one holding a link comes back as markup Repair intake won't rebuild.
 users[6].notes = 'Loaner agreement on file.'
 users[11].notes = 'Loaner agreement: see <a href="https://example.org/forms/loaner">the signed form</a>'
+// An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
+const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
@@ -42,7 +44,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? assigneeOf(pick(users, i), 'user') : assigneeOf(pick(locations.slice(1), i), 'location')
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
@@ -316,7 +318,9 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.location })
+      // Checked in, status_meta is the label's own type again (a kept "Deployed" label reads deployable), as in Snipe-IT.
+      const label = statuses.find((s) => s.id === body.status_id) ?? a.status_label
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: { ...label, status_meta: label.status_type }, location: locations.find((l) => l.id === body.location_id) ?? a.location })
     } else if (m[2] === 'checkout') {
       const other = body.checkout_to_type === 'asset' && assets.find((x) => x.id === body.assigned_asset && x.id !== a.id)
       const target = other ? { id: other.id, name: other.name } : body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
@@ -324,7 +328,7 @@ createServer(async (req, res) => {
       // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
       const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
       if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
-      a.assigned_to = { ...target, type: body.checkout_to_type }
+      a.assigned_to = assigneeOf(target, body.checkout_to_type)
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)

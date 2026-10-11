@@ -125,7 +125,7 @@ A guided screen for one job the Operator repeats at the counter, driven by scann
 _Avoid_: wizard, tool, flow
 
 **Bulk checkout**:
-The Workflow for handing Assets to one User: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. It keeps a list of what was checked out this session and can undo the last one.
+The Workflow for handing Assets to one User, never a Location: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. An Asset already checked out to someone else is moved to this User only if the Operator chooses Move to this User; otherwise it's stopped. Its Running list shows what was checked out this session.
 _Avoid_: bulk issue, issue (say Checkout)
 
 **Bulk return**:
