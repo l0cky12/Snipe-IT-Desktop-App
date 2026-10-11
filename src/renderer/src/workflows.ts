@@ -77,6 +77,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
   const writes = new Map<number, { write: Confirm['write']; text: string }>()
   // Off the Workflow's page: a confirm that would open is skipped, so nothing waits for an Operator who isn't looking.
   let away = false
+  // Bumped by each field submission checked as a tag, so an older lookup never confirms or clears newer input.
+  let typing = 0
 
   const update = (key: number, change: Partial<Row<C>>) => {
     rows = rows.map((r) => (r.key === key ? { ...r, ...change } : r))
@@ -224,11 +226,12 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
      *  null when it isn't a tag (or isn't one word), so the field keeps it. */
     async typedTag(raw: string, ctx: C, clear: () => void): Promise<string | null> {
       const key = opened?.key
+      const mine = ++typing
       const word = cleanTag(raw)
       if (!key || !word || /\s/.test(word)) return null
       const asset = await bridge.assetByTag(word).catch((e: Error) => e)
-      // Esc, another scan or leaving while it was looked up: this text no longer belongs to the confirm.
-      if (opened?.key !== key) return ''
+      // Esc, another scan, newer input or leaving while it was looked up: this text no longer belongs to the confirm.
+      if (opened?.key !== key || mine !== typing) return ''
       // It may have been a scan, so it never becomes the text unchecked; the confirm stays open.
       if (asset instanceof Error) return `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
       if (!asset) return null
@@ -843,6 +846,8 @@ export function createIncomingRepair(
       still()
       // What the undo puts back: the Maintenance's fields it changed, whether it closed it, or the one it created.
       const change: { supplierId?: number; cost?: string } = {}
+      const madeOn = localDate(now())
+      const madeNotes = workflowNote('Incoming repair', { text: 'No Repair intake record' })
       let closed = false
       let created: number | null = null
       const sub: string[] = []
@@ -864,7 +869,7 @@ export function createIncomingRepair(
       } else if (plan === 'create') {
         try {
           created = await bridge.createMaintenance({
-            assetId: a.id, typeId: typeId!, name: `${a.assetTag} repair`, startDate: localDate(now()), notes: workflowNote('Incoming repair', { text: 'No Repair intake record' }),
+            assetId: a.id, typeId: typeId!, name: `${a.assetTag} repair`, startDate: madeOn, notes: madeNotes,
             ...(s && { supplierId: s.id }), ...(cost && { cost }),
           })
           still()
@@ -892,11 +897,13 @@ export function createIncomingRepair(
         if (touched || created !== null) {
           // Read again first: a Supplier or Repair cost someone corrected since the return is never overwritten or deleted.
           const id = created ?? open!.id
-          const wrote = { supplier: created !== null ? (s?.id ?? null) : (change.supplierId ?? open!.supplier?.id ?? null), cost: created !== null ? cost || null : (change.cost ?? open!.cost) }
+          const wrote = created !== null
+            ? { supplier: s?.id ?? null, cost: cost || null, type: typeId, startDate: madeOn, notes: madeNotes }
+            : { supplier: change.supplierId ?? open!.supplier?.id ?? null, cost: change.cost ?? open!.cost, type: open!.type?.id ?? null, startDate: open!.startDate, notes: open!.notes }
           try {
             const m = await bridge.maintenance(id)
             sameSession(mine)
-            if ((m.supplier?.id ?? null) !== wrote.supplier || m.cost !== wrote.cost) throw new Error('it was changed since the return, so it was left as is')
+            if ((m.supplier?.id ?? null) !== wrote.supplier || m.cost !== wrote.cost || (m.type?.id ?? null) !== wrote.type || m.startDate !== wrote.startDate || m.notes !== wrote.notes) throw new Error('it was changed since the return, so it was left as is')
             if (created !== null) await bridge.deleteMaintenance(created)
             else await bridge.updateMaintenance(open!.id, { ...('supplierId' in change && { supplierId: open!.supplier?.id ?? null }), ...('cost' in change && { cost: open!.cost }), ...(closed && { reopen: true }) })
           } catch (e) {

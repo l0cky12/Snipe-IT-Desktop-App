@@ -1458,7 +1458,7 @@ describe('Incoming repair', () => {
     fake.bridge.maintenance.mockImplementation(async (id) => (fake.calls.push(`read maintenance ${id}`), { ...kept.get(id)! }))
     fake.bridge.createMaintenance.mockImplementation(async (m) => {
       fake.calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}${m.supplierId ? ` supplier ${m.supplierId}` : ''}${m.cost ? ` cost ${m.cost}` : ''}`)
-      kept.set(61, maintenance(61, { supplier: m.supplierId ? ACME : null, cost: m.cost ?? null }))
+      kept.set(61, maintenance(61, { type: { id: m.typeId, name: 'Repair' }, startDate: m.startDate, notes: m.notes, supplier: m.supplierId ? ACME : null, cost: m.cost ?? null }))
       return 61
     })
     fake.bridge.updateMaintenance.mockImplementation(async (id, c) => {
@@ -1799,9 +1799,26 @@ describe('Incoming repair', () => {
       expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: "the Maintenance wasn't reopened: it was changed since the return, so it was left as is" })
       expect(calls.filter((c) => c.startsWith('edit') || c.startsWith('delete'))).toEqual([])
       await back(flow, 'NOMMA-2')
-      kept.get(61)!.supplier = null
+      // Its notes corrected, Supplier and Repair cost untouched: still left as is.
+      kept.get(61)!.notes = 'Screen replaced under warranty'
       expect((await undo(flow)).undoFailed).toBe("the Maintenance wasn't deleted: it was changed since the return, so it was left as is")
       expect(calls.filter((c) => c.startsWith('delete'))).toEqual([])
+    })
+
+    it('a one-word note whose lookup is overtaken by a newer submission never confirms', async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      let release = (_: Asset | null) => {}
+      bridge.assetByTag.mockImplementationOnce(() => new Promise((r) => { release = r }))
+      const first = flow.submitNote('fixed')
+      const second = flow.submitNote('NOMMA-2')
+      release(null)
+      expect(await first).toBe('')
+      expect(await second).toBe('')
+      await settled(flow)
+      expect(flow.runner.rows.map((r) => [r.tag, r.result.state])).toEqual([['NOMMA-2', 'confirm'], ['NOMMA-1', 'neutral']])
+      expect(writes(calls)).toEqual([])
     })
 
     it('Settings pointing at another server while the Maintenances are read again stop it before any write', async () => {
