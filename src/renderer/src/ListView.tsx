@@ -561,7 +561,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
           {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
           {auditing && selection.size > 0 && (
             <section className="list-panel" aria-label="Audit Assets">
-              <AuditForm count={selection.size} onAudit={auditSelection} onCancel={() => setAuditing(false)} />
+              <AuditForm count={selection.size} busy={!!bulk?.busy} onAudit={auditSelection} onCancel={() => setAuditing(false)} />
             </section>
           )}
           {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}

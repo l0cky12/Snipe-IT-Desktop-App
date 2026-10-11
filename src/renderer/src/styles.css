@@ -105,8 +105,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-message::before, .settings-success::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 .notice::before, .ferpa::before { -webkit-mask-image: url(./icons/info.svg); }
 /* A done line, like an Audit's: the notice in green, with a check. */
-.notice.said { --edge: var(--green); }
-.notice.said::before { -webkit-mask-image: url(./icons/circle-check.svg); }
+.notice.done { --edge: var(--green); }
+.notice.done::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 
 /* Sheet: page header, then content. */
 .sheet { overflow: auto; }

@@ -172,7 +172,7 @@ describe('Bulk audit', () => {
     expect(results).toEqual([
       [1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }],
       [2, { state: 'failed', reason: 'You do not have permission to audit this asset.' }],
-      [3, { state: 'done', text: 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date' }],
+      [3, { state: 'done', text: 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date (had none)' }],
     ])
   })
 })

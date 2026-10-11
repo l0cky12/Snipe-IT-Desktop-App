@@ -93,7 +93,7 @@ describe('what an Audit says it did', () => {
   })
 
   it('warns when Snipe-IT sent back no next audit date, because it has no audit interval set', () => {
-    const warning = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+    const warning = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date (was 2026-10-01)'
     expect(auditedLine({ was: '2026-10-01', next: null })).toBe(warning)
     expect(auditedResult({ was: '2026-10-01', next: null })).toBe(warning)
   })

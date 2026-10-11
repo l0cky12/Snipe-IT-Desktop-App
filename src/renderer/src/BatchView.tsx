@@ -8,7 +8,7 @@ export type Outcome = { state: 'working' } | { state: 'done'; text: string } | {
 // Runs the action on each Asset in turn and reports each outcome as it lands; one failing doesn't stop the rest, stop() does.
 // Each is the usual single Checkout or Checkin, so History credits the Operator for every one. Work that answers with text
 // (an Audit's dates) is reported with it instead of `done`.
-// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout is two requests); a cart of 30 takes ~20s on a busy server.
+// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout or an Audit is two requests); a cart of 30 takes ~20s on a busy server.
 export async function eachInTurn(ids: number[], work: (id: number) => Promise<string | void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
   for (const id of ids) {
     if (stop()) return

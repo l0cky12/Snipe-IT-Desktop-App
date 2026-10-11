@@ -37,12 +37,14 @@ export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.che
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
 
-// What an Audit did: the next audit date it moved to and from, or Snipe-IT's missing audit interval, which leaves none.
-const NO_INTERVAL = 'Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+// What an Audit did: the next audit date it moved to, or Snipe-IT's missing audit interval, which leaves none; and always
+// the date it was, so the Operator knows what to put back.
+const NO_INTERVAL = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+const wasDate = (was: string | null) => (was ? `was ${was}` : 'had none')
 /** The Asset sheet's line after an Audit. */
-export const auditedLine = ({ was, next }: Audited) => (next ? `Audited. Next audit ${next} (${was ? `was ${was}` : 'had none'})` : `Audited. ${NO_INTERVAL}`)
+export const auditedLine = ({ was, next }: Audited) => `${next ? `Audited. Next audit ${next}` : NO_INTERVAL} (${wasDate(was)})`
 /** One Asset's result in the Audit Bulk Action. */
-export const auditedResult = ({ was, next }: Audited) => (next ? `Audited, next ${next}, ${was ? `was ${was}` : 'had none'}` : `Audited. ${NO_INTERVAL}`)
+export const auditedResult = ({ was, next }: Audited) => (next ? `Audited, next ${next}, ${wasDate(was)}` : `${NO_INTERVAL} (${wasDate(was)})`)
 
 // Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
@@ -607,7 +609,8 @@ export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; s
 
 // Audit…'s form, in the Asset sheet or for a Selection (count): Next audit, left blank for Snipe-IT's audit interval, and an
 // optional one-line note. It is the confirmation: Enter or Audit sends it, Esc cancels. A note with a link is refused here.
-export function AuditForm({ count, onAudit, onCancel }: { count?: number; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void }) {
+// busy: another Bulk Action is still running, so this one would not start.
+export function AuditForm({ count, busy: elsewhere, onAudit, onCancel }: { count?: number; busy?: boolean; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void }) {
   const [nextAudit, setNextAudit] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -634,7 +637,7 @@ export function AuditForm({ count, onAudit, onCancel }: { count?: number; onAudi
       <div className="actions">
         <label className="dim">Next audit <input autoFocus type="date" value={nextAudit} onChange={(e) => setNextAudit(e.target.value)} title="Left blank, Snipe-IT's audit interval sets it" /></label>
         <input value={note} onChange={(e) => (setNote(e.target.value), setError(''))} placeholder="Note (optional)" aria-label="Audit note" />
-        <button disabled={busy}>{busy ? 'Auditing…' : count === undefined ? 'Audit' : `Audit ${count.toLocaleString()} ${count === 1 ? 'Asset' : 'Assets'}`}</button>
+        <button disabled={busy || elsewhere}>{busy ? 'Auditing…' : count === undefined ? 'Audit' : `Audit ${count.toLocaleString()} ${count === 1 ? 'Asset' : 'Assets'}`}</button>
         <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
       </div>
       <p className="dim">{nextAudit ? `Next audit ${nextAudit}.` : "Next audit left blank: Snipe-IT's audit interval sets it."} Records an Audit in History; it can't be undone.</p>
@@ -728,7 +731,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
         </div>
       </header>
       {docked?.notInView && <p className="notice">Not in this View</p>}
-      {audited && <p className={`notice${audited.next ? ' said' : ''}`} role="status">{auditedLine(audited)}</p>}
+      {audited && <p className={`notice${audited.next ? ' done' : ''}`} role="status">{auditedLine(audited)}</p>}
       {form && (
         <div className="sheet-form">
           {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />}
