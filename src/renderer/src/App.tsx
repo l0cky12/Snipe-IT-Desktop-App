@@ -266,15 +266,15 @@ export function App() {
   }
 
   // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
-  // after: what to do with the action's answer once the refreshed Asset shows.
+  // after: what to do with the action's answer once it's done, even if the refresh then fails (an Audit's dates, which a
+  // second Audit would lose).
   const act = <T,>(id: number, done: string, work: Promise<T>, after?: (result: T) => void) =>
     run(async (isStale) => {
       const result = await work
-      // Don't let a failed refresh read as a failed action; retrying would only be refused.
-      await open(id, isStale).catch((e: Error) => {
-        throw new Error(`${done}, but couldn't refresh the Asset: ${e.message}`)
-      })
+      const refreshFailed = await open(id, isStale).then(() => '', (e: Error) => e.message)
       if (!isStale()) after?.(result)
+      // Don't let a failed refresh read as a failed action; retrying would only be refused.
+      if (refreshFailed) throw new Error(`${done}, but couldn't refresh the Asset: ${refreshFailed}`)
     })
   const checkin = (id: number, options: CheckinOptions) => act(id, 'Checked in', window.snipeIt.checkin(id, options))
   const checkout = (id: number, options: CheckoutOptions) => act(id, 'Checked out', window.snipeIt.checkout(id, options))
@@ -330,9 +330,10 @@ export function App() {
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
+  // The reload doesn't start the panel afresh, so a form open in it keeps what's typed.
   const refreshPanel = (id: number) => {
     const seen = panel, epoch = batchEpoch.current
-    window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }), seen)), (e: Error) => epoch === batchEpoch.current && setMessage({ text: e.message, error: true }))
+    window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ ...p, asset: full }), seen)), (e: Error) => epoch === batchEpoch.current && setMessage({ text: e.message, error: true }))
   }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   const page = !showSettings && view?.page
@@ -686,6 +687,8 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     if (docked && !initialForm && panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')) root.current?.focus()
   }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
+  // An Audit that went through closes its form, even when the refresh after it failed, so it isn't sent twice by mistake.
+  useEffect(() => { if (audited) setForm(null) }, [audited])
   // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Escape' || !form) return
