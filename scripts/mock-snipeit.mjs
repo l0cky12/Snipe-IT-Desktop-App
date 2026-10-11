@@ -64,6 +64,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
+    // End of life from 90 days past to about 20 months ahead, a few with none.
+    asset_eol_date: i % 13 === 0 ? null : { date: day(((i * 53) % 700) - 90), formatted: day(((i * 53) % 700) - 90) },
     // Snipe-IT formats money as text ("1,149.99") and sends null for none.
     purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
     last_checkout: holder ? { datetime: `${day(-1 - (i % 60))} 08:15:00`, formatted: day(-1 - (i % 60)) } : null,
@@ -94,7 +96,8 @@ const lists = {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
-    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '' } },
+    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
+    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),

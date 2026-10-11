@@ -31,7 +31,9 @@ export const LIST_COLUMNS: { [K in ListKind]: ListColumn<K>[] } = {
     { key: 'serial', label: 'Serial', hidden: true },
     { key: 'expectedCheckin', label: 'Expected checkin', hidden: true },
     { key: 'purchaseDate', label: 'Purchased', hidden: true },
+    { key: 'purchaseCost', label: 'Purchase cost', hidden: true },
     { key: 'warrantyEnd', label: 'Warranty ends', hidden: true },
+    { key: 'endOfLife', label: 'End of life', hidden: true },
   ],
   users: [
     { key: 'name', label: 'Name' },
