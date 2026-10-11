@@ -151,18 +151,14 @@ app.whenReady().then(() => {
   })
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  // The Health warnings, with GitHub's latest Snipe-IT release beside them; that check failing shows nothing. From source it
-  // asks only SNIPEIT_RELEASES_URL (the mock, scripts/mock-snipeit.mjs), so development and screenshots never ask GitHub.
-  // ponytail: GitHub not answering holds the strip up to its 15-second timeout, once an hour at most (a failed ask is kept).
+  // The Newer Snipe-IT available Health warning; its check failing shows nothing. From source it asks only
+  // SNIPEIT_RELEASES_URL (the mock, scripts/mock-snipeit.mjs), so development and screenshots never ask GitHub.
   const releasesUrl = app.isPackaged ? RELEASES_URL : process.env.SNIPEIT_RELEASES_URL
   const releases = releasesUrl ? createReleaseCheck({ store, fetch, now: () => new Date(), url: releasesUrl }) : null
-  handle('snipeit:health', async () => {
-    const [health, release] = await Promise.all([client().health(), releases?.latest().catch(() => null) ?? null])
-    return { ...health, release }
-  })
+  handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
   handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {

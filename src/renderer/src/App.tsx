@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -704,6 +705,7 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onHideRelease }
   // Why the release notes didn't open, or the release couldn't be hidden.
   const [releaseFailed, setReleaseFailed] = useState('')
   const failed = (e: Error) => setReleaseFailed(e.message)
+  const tryRelease = (action: () => Promise<void>) => (setReleaseFailed(''), action().catch(failed))
   if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
     return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
@@ -719,11 +721,11 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onHideRelease }
       </>
     if ('release' in l)
       return <>
-        <button className="link" onClick={() => window.releases.open(l.release.url).catch(failed)} title="Opens the release notes in your browser">
+        <button className="link" onClick={() => tryRelease(() => window.releases.open(l.release.url))} title="Opens the release notes in your browser">
           <b>{healthName.newer}</b> {l.release.tag} is out; your Snipe-IT runs {l.running}.
         </button>
         {releaseFailed && <span>{releaseFailed}</span>}
-        <span className="health-actions"><button onClick={() => onHideRelease(l.release.tag).catch(failed)}>Hide until the next release</button></span>
+        <span className="health-actions"><button onClick={() => tryRelease(() => onHideRelease(l.release.tag))}>Hide until the next release</button></span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
     return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
@@ -751,7 +753,9 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
   // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
-  const [health, setHealth] = useState<(Health & { lines: HealthLine[]; at: string }) | Failed | null>(null)
+  const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
+  // GitHub's latest Snipe-IT release, asked for beside the Health check so neither waits on the other.
+  const [release, setRelease] = useState<Release | null>(null)
   const latestHealth = useRef(0)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
 
@@ -759,13 +763,13 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
   function check() {
     const mine = ++latestHealth.current
     window.snipeIt.health().then(
-      (h) => mine === latestHealth.current && setHealth({ ...h, lines: healthLines(h), at: new Date().toLocaleTimeString() }),
+      (h) => mine === latestHealth.current && setHealth({ ...h, at: new Date().toLocaleTimeString() }),
       (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
+    window.releases.latest().then((r) => mine === latestHealth.current && setRelease(r), () => {})
   }
   useEffect(check, [])
   // Kept on this PC until a newer release; the line goes now, without checking again.
-  const hideRelease = (tag: string) => window.releases.hide(tag).then(() =>
-    setHealth((h) => h && 'lines' in h ? { ...h, lines: h.lines.filter((l) => l.warning !== 'newer') } : h))
+  const hideRelease = (tag: string) => window.releases.hide(tag).then(() => setRelease(null))
 
   function load() {
     const mine = ++latest.current
@@ -885,7 +889,7 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
           <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
-      <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onHideRelease={hideRelease} />
+      <HealthStrip health={health && !('error' in health) ? { lines: healthLines(health, release), at: health.at } : health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onHideRelease={hideRelease} />
       {customizing && (
         <div className="customize">
           {(['Chart', 'Tables'] as const).map((group) => (

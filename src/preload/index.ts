@@ -63,5 +63,5 @@ contextBridge.exposeInMainWorld('settings', settings)
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
 
-const releases: ReleaseApi = { open: call('release:open'), hide: call('release:hide') }
+const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
 contextBridge.exposeInMainWorld('releases', releases)

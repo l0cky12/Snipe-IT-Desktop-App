@@ -181,8 +181,6 @@ export type Health = {
   probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
   auditLate: number | Failed
   auditDue: number | Failed
-  /** GitHub's latest Snipe-IT release, from the main process's daily check (createReleaseCheck); null when none is known or it's hidden. */
-  release?: Release | null
 }
 /** One line of the Health warnings strip, or why its check couldn't run. */
 export type HealthLine =
@@ -194,8 +192,11 @@ export type HealthLine =
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
-/** The strip's lines, red before amber: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
-export function healthLines({ probe, auditLate, auditDue, release }: Health): HealthLine[] {
+/**
+ * The strip's lines, red before amber: none at 0. Snipe-IT unreachable or the key failing shows only that line. release:
+ * GitHub's latest Snipe-IT release, from the main process's daily check (createReleaseCheck), if one is known and not hidden.
+ */
+export function healthLines({ probe, auditLate, auditDue }: Health, release?: Release | null): HealthLine[] {
   if ('warning' in probe) return [probe]
   const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]

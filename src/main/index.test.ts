@@ -174,16 +174,16 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'No Status Labels for you.', kind: 'refused' })
 })
 
-it("adds GitHub's latest Snipe-IT release to the Health check, opens only its release notes, and hides it", async () => {
+it("gives the window GitHub's latest Snipe-IT release, opens only its release notes, and hides it", async () => {
   const notes = 'https://github.com/grokability/snipe-it/releases/tag/v8.9.1'
   request.mockImplementation(async (url) => new Response(JSON.stringify(
     String(url) === RELEASES_URL ? { tag_name: 'v8.9.1', html_url: notes } : String(url).endsWith('/version') ? { version: 'v8.8.0' } : { total: 0, rows: [] })))
-  expect(await call('snipeit:health')).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0, release: { tag: 'v8.9.1', url: notes } })
+  expect(await call('release:latest')).toEqual({ tag: 'v8.9.1', url: notes })
   await call('release:open', notes)
   await expect(call('release:open', 'https://example.org/grokability/snipe-it/releases/tag/v8.9.1')).rejects.toThrow('Only Snipe-IT release notes')
   expect(openExternal.mock.calls).toEqual([[notes]])
   call('release:hide', 'v8.9.1')
-  expect(await call('snipeit:health')).toMatchObject({ release: null })
+  expect(await call('release:latest')).toBeNull()
   // Asked GitHub once: the second check read the day-long cache.
   expect(request.mock.calls.filter(([url]) => String(url) === RELEASES_URL)).toHaveLength(1)
 })

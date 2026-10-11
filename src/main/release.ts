@@ -7,7 +7,7 @@ export type Release = { tag: string; url: string }
 /** What the release check keeps on this PC: the last release GitHub named and when, the last failed ask, and the tag hidden until the next release. */
 export type ReleaseCache = Partial<Release> & { checkedAt?: string; failedAt?: string; hidden?: string }
 /** What the screen can do with the Newer Snipe-IT available line. */
-export type ReleaseApi = { open(url: string): Promise<void>; hide(tag: string): Promise<void> }
+export type ReleaseApi = { latest(): Promise<Release | null>; open(url: string): Promise<void>; hide(tag: string): Promise<void> }
 
 /** Whether url is a Snipe-IT release page on GitHub; if so, the URL as it would open. */
 function releaseNotes(url: unknown): string | null {
@@ -62,7 +62,7 @@ export function createReleaseCheck({ store, fetch, now, url }: {
     },
     /** Hide until the next release: this tag stays hidden on this PC; a newer one shows. */
     hide(tag: string) {
-      if (typeof tag !== 'string' || !tag) throw new Error('Invalid release')
+      if (typeof tag !== 'string' || !tag || tag.length > 100) throw new Error('Invalid release')
       store.saveRelease({ ...store.release(), hidden: tag })
     },
   }
