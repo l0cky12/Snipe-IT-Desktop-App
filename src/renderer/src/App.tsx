@@ -300,8 +300,8 @@ export function App() {
     asset: a, baseUrl: settings?.baseUrl ?? '', defaultLocation: settings?.defaultLocation ?? null, locations, statusLabels,
     onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
   })
-  // An Asset deleted from the panel leaves it; the List stays.
-  const panelDeleted = (a: Asset) => (forget(a.id), setPanel(null), setMessage({ text: `Deleted ${a.assetTag}` }))
+  // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
+  const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => (p?.asset.id === a.id ? null : p)), setMessage({ text: `Deleted ${a.assetTag}` }))
   const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))

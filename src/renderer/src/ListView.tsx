@@ -236,11 +236,15 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     // A deleted Asset can't stay in the Asset panel.
     if (panel && gone.has(panel.sheet.asset.id)) onClosePanel()
   }, [mine])
-  // The List refreshes when its run ends (finished or stopped).
+  // The List refreshes when its run ends (finished or stopped), and so does the Asset panel if the run included its Asset.
   const running = !!mine?.busy
   const wasRunning = useRef(running)
   useEffect(() => {
-    if (wasRunning.current && !running) setReloads((n) => n + 1)
+    if (wasRunning.current && !running) {
+      setReloads((n) => n + 1)
+      const shown = panel?.sheet.asset.id
+      if (shown !== undefined && !mine?.deletes && mine?.records.some((r) => r.id === shown)) onOpenAsset(shown)
+    }
     wasRunning.current = running
   }, [running])
   // One page of this List as searched, filtered and sorted now, in its View; "select all" pages it in id order instead.
@@ -455,7 +459,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
               {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
             </button>
-            <button className="quiet" onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
+            <button className="quiet" onClick={() => (reload(), panelAsset && onOpenAsset(panelAsset.id))} disabled={loading}>Refresh</button>
             {editable(kind) && <button onClick={() => onNew(kind)}>New {singular(kind)}</button>}
           </div>
         </header>
