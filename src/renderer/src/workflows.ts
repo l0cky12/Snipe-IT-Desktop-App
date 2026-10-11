@@ -195,9 +195,11 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       const key = opened?.key
       const word = cleanTag(raw)
       if (key && word && !/\s/.test(word)) {
-        const asset = await bridge.assetByTag(word).catch(() => null)
+        const asset = await bridge.assetByTag(word).catch((e: Error) => e)
         // Esc, another scan or leaving while it was looked up: this text no longer belongs to the confirm.
         if (opened?.key !== key) return ''
+        // It may have been a scan, so it never becomes the text unchecked; the confirm stays open.
+        if (asset instanceof Error) return `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
         // The text was the tag, so nothing has been said yet.
         if (asset) return (opened.text = ''), this.scan(word, ctx)
       }
@@ -516,15 +518,18 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let blocked = ''
   // Bumped by reset, so a lookup for the old server never lands.
   let attempt = 0
+  // Bumped by reset too: an intake still writing stops before its next step, which would go to the new server.
+  let session = 0
   // "(by <Operator>)", read when the Workflow opens; failing, it's read again when a User notes line needs it.
   let operator: Promise<string> | null = null
   const operatorName = () => (operator ??= bridge.operatorName().catch((e) => { operator = null; throw e }))
 
   // The Maintenance step's sub-result.
-  async function maintenance(a: Asset, typeId: number | null, notes: string): Promise<string> {
+  async function maintenance(a: Asset, typeId: number | null, notes: string, still: () => void): Promise<string> {
     if (typeId === null) return 'not opened: no Repair type found'
     try {
       if ((await bridge.openMaintenances(a.id)).some((m) => isRepair(m.type, typeId))) return 'already open'
+      still()
       await bridge.createMaintenance({ assetId: a.id, typeId, name: `${a.assetTag} damaged`, startDate: localDate(now()), notes })
       return 'opened'
     } catch (e) {
@@ -543,12 +548,17 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee?.type !== held?.type || current.assignee?.id !== held?.id || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
       const note = workflowNote('Repair intake', { text })
+      const mine = session
+      const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
       // No Location is sent, so a checked-in Asset goes back to its Default Location, as any Checkin from the app does.
       if (held) await bridge.checkin(a.id, { statusId: damaged, note })
       else await bridge.updateStatus(a.id, damaged)
       const sub: string[] = []
+      still()
       if (!held) await bridge.addAssetNote(a.id, note).catch((e: Error) => sub.push(`Asset note not added: ${e.message}`))
-      sub.push(`Maintenance ${await maintenance(a, typeId, note)}`)
+      still()
+      sub.push(`Maintenance ${await maintenance(a, typeId, note, still)}`)
+      still()
       let copy: string | undefined
       if (!user) sub.push('User note: no User')
       else {
@@ -556,6 +566,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
           const line = userNotesLine(localDate(now()), a.assetTag, text, await operatorName())
           // Offered whatever goes wrong from here; without the Operator's name there's no line to offer.
           copy = line
+          still()
           await bridge.appendUserNotes(user.id, line)
           sub.push('User note added')
           copy = undefined
@@ -603,6 +614,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     scan: (raw: string) => blocked || runner.scan(raw, null),
     reset() {
       attempt++
+      session++
       setup = null
       found = {}
       blocked = ''

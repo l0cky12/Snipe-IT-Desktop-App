@@ -265,6 +265,17 @@ describe('Confirm step', () => {
     expect(written.at(-1)).toEqual(['NOMMA-1', 'cracked screen'])
   })
 
+  it("a one-word entry whose tag lookup fails is never taken as the text: the confirm stays open and says why", async () => {
+    const { runner, written, bridge } = confirmable([asset('NOMMA-1')], 'Say what happened')
+    runner.scan('NOMMA-1', null)
+    await opened(runner)
+    bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+    expect(await runner.submitText('NOMMA-2', null)).toBe("Couldn't check whether NOMMA-2 is an Asset Tag: Can't reach Snipe-IT")
+    expect(runner.open).not.toBeNull()
+    await flush()
+    expect(written).toEqual([])
+  })
+
   it('the same tag landing in the text field is a rescan, never the text', async () => {
     const { runner, written } = confirmable([asset('NOMMA-1')], 'Say what happened')
     runner.scan('NOMMA-1', null)
@@ -1060,6 +1071,21 @@ describe('Repair intake', () => {
     expect(row.copy).toBeUndefined()
     expect((await intake(flow, 'NOMMA-2')).sub).toEqual(['Maintenance opened', 'User note added'])
     expect(fake.calls.filter((c) => c.startsWith('user notes'))).toEqual([`user notes 7 ${LINE.replace('NOMMA-1', 'NOMMA-2')}`])
+  })
+
+  it('Settings pointing at another server mid-intake stop it before its next step', async () => {
+    const { flow, bridge, calls } = await opened([asset('NOMMA-1')])
+    let release = () => {}
+    bridge.checkin.mockImplementationOnce(async (id) => { calls.push(`checkin ${id}`); await new Promise<void>((r) => { release = r }) })
+    flow.scan('NOMMA-1')
+    await confirming(flow)
+    await flow.runner.submitText('cracked screen', null)
+    await vi.waitFor(() => expect(calls.at(-1)).toBe('checkin 1'))
+    flow.reset()
+    release()
+    await flush()
+    await flush()
+    expect(calls.at(-1)).toBe('checkin 1')
   })
 
   it('a first step that fails stops there: a red row, nothing else written', async () => {
