@@ -78,7 +78,7 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
           <p className="dim">What each group grants is under All records → Permission groups.</p>
           {own.length === 0
             ? <p className="dim">None; everything they may do comes from their groups.</p>
-            : <ul className="permissions">{own.map(([k, v]) => <li key={k}><span className={`chip ${v === '1' ? 'c-green' : 'c-red'}`}>{v === '1' ? 'Granted' : 'Denied'}</span> <span className="mono">{k}</span></li>)}</ul>}
+            : <ul className="permissions">{own.map(([k, v]) => <li key={k}><span className={`chip ${v === '1' ? 'c-green' : 'c-red'}`}>{v === '1' ? 'Granted' : 'Denied'}</span> <span>{k}</span></li>)}</ul>}
         </div>
       )}
     </section>

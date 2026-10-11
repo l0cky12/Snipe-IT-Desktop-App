@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
-import { listName } from './ListView'
+import { choices as filterChoices, listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, PLACE_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
@@ -135,6 +135,11 @@ function EmailNow({ report, name, onDone }: { report: ReportRef; name: string; o
 }
 
 // Runs when asked (a report can page through a lot), not on every change of a filter. A Saved Report opens as its List.
+// A Location or Category picker's options: names shared by two choices (two buildings' "Room 101") get their ids, as in the list filters.
+export function pickerOptions(label: string, list: StatusLabel[] = []) {
+  return filterChoices({ label, options: list.map((l) => ({ value: String(l.id), label: l.name })) })
+}
+
 export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport) => void }) {
   const [kind, setKind] = useState<ReportKind>('activity')
   const [query, setQuery] = useState<ReportQuery>({})
@@ -204,7 +209,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
     <>
       <header className="head">
         <h1>Reports</h1>
-        <span className="dim mono">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
+        <span className="dim">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
           <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
           <EmailNow report={{ builtIn: kind, query: sent }} name={REPORT_NAMES[kind]} onDone={setNotice} />
@@ -235,11 +240,11 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
             <>
               <select value={query.locationId ?? ''} onChange={(e) => set({ locationId: e.target.value })} aria-label="Location">
                 <option value="">Any Location</option>
-                {choices?.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {pickerOptions('Any Location', choices?.locations).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
               <select value={query.categoryId ?? ''} onChange={(e) => set({ categoryId: e.target.value })} aria-label="Category">
                 <option value="">Any Category</option>
-                {choices?.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {pickerOptions('Any Category', choices?.categories).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </>
           )}
