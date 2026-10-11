@@ -246,11 +246,26 @@ it('follows the system appearance until one is chosen, and keeps the choice acro
 
 it('the end-of-day time is 2:50 pm until changed, must be a real HH:MM, and is kept across a restart', () => {
   const { path, storage, store } = setup()
-  expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50' })
-  expect(store.saveTempCheckout({ endOfDay: '15:10' }).tempCheckout).toEqual({ endOfDay: '15:10' })
-  for (const endOfDay of ['24:00', '3:10', '15:60', '', 1510]) expect(() => store.saveTempCheckout({ endOfDay } as never)).toThrow('Enter the end-of-day time as HH:MM, like 14:50.')
-  expect(() => store.saveTempCheckout({ endOfDay: '00:00' })).toThrow("The end-of-day time can't be midnight.")
-  expect(createSettingsStore(path, storage, '0.1.0').get().tempCheckout).toEqual({ endOfDay: '15:10' })
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50', reminder: true })
+  expect(store.saveTempCheckout({ endOfDay: '15:10', reminder: true }).tempCheckout).toEqual({ endOfDay: '15:10', reminder: true })
+  for (const endOfDay of ['24:00', '3:10', '15:60', '', 1510]) expect(() => store.saveTempCheckout({ endOfDay, reminder: true } as never)).toThrow('Enter the end-of-day time as HH:MM, like 14:50.')
+  expect(() => store.saveTempCheckout({ endOfDay: '00:00', reminder: true })).toThrow("The end-of-day time can't be midnight.")
+  expect(createSettingsStore(path, storage, '0.1.0').get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true })
+})
+
+it('the End-of-day reminder is on until switched off; its last day is kept but not shown', () => {
+  const { path, storage, store } = setup()
+  // Saved before the switch existed: still on.
+  writeFileSync(path, JSON.stringify({ baseUrl: '', defaultLocation: null, tempCheckout: { endOfDay: '15:10' } }))
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true })
+  expect(store.saveTempCheckout({ endOfDay: '15:10', reminder: false }).tempCheckout).toEqual({ endOfDay: '15:10', reminder: false })
+  expect(() => store.saveTempCheckout({ endOfDay: '15:10', reminder: 'yes' } as never)).toThrow('Invalid Temp checkout settings')
+  expect(store.lastReminder()).toBeUndefined()
+  store.recordReminder('2026-10-12')
+  const reopened = createSettingsStore(path, storage, '0.1.0')
+  expect(reopened.lastReminder()).toBe('2026-10-12')
+  expect(reopened.get()).not.toHaveProperty('reminderShown')
+  expect(reopened.get().tempCheckout.reminder).toBe(false)
 })
 
 it('keeps the School calendar as checked entries sorted by date; a bad line refuses the whole save', () => {

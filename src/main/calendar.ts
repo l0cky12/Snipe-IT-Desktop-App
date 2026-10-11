@@ -48,8 +48,8 @@ export function parseCalendar(text: string): CalendarEntry[] {
 export const formatCalendar = (entries: CalendarEntry[]) =>
   entries.map((e) => [e.from, e.to !== e.from && `to ${e.to}`, e.halfDay && `half day ${e.halfDay}`, e.label].filter(Boolean).join(' ')).join('\n')
 
-// A date's end-of-day time, or null when it isn't a School day: weekends, and any no-school entry (which beats a half day).
-function endOn(date: Date, { endOfDay, calendar }: SchoolTimes): string | null {
+/** A date's end-of-day time ("HH:MM"), or null when it isn't a School day: weekends, and any no-school entry (which beats a half day). */
+export function endOn(date: Date, { endOfDay, calendar }: SchoolTimes): string | null {
   if (date.getDay() === 0 || date.getDay() === 6) return null
   const day = ymd(date)
   const on = calendar.filter((e) => e.from <= day && day <= e.to)

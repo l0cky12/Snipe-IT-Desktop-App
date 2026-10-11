@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
+import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -66,3 +67,12 @@ contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const reminder: ReminderApi = {
+  onOpen(listener) {
+    const opened = () => listener()
+    ipcRenderer.on('reminder:open', opened)
+    return () => void ipcRenderer.removeListener('reminder:open', opened)
+  },
+}
+contextBridge.exposeInMainWorld('reminder', reminder)

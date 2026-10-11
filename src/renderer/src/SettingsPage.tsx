@@ -101,7 +101,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     {place === 'mail' && notes}
     <fieldset disabled={busy}>
       <section className="settings-section">
-        <h2>Running in the background</h2><p className="dim">So scheduled Reports still send with the window closed.</p>
+        <h2>Running in the background</h2><p className="dim">So scheduled Reports and the End-of-day reminder still happen with the window closed.</p>
         {([['tray', 'Keep running in the tray', 'Closing the window hides it. Open it again from the tray icon, or by starting the app again; quit from the tray icon.'],
           ['startAtLogin', 'Start at login', 'With Keep running in the tray on too, it starts hidden in the tray.']] as const).map(([key, name, hint]) =>
           <label key={key} className="check"><input type="checkbox" checked={settings.background[key]} onChange={(e) => {
@@ -112,13 +112,18 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     </fieldset>
     {place === 'background' && notes}
     {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
-    <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ endOfDay })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, endOfDay })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
       <fieldset disabled={busy}>
         <section className="settings-section">
           <h2>Temp checkout</h2><p className="dim">When Temp checkouts are due back.</p>
           <label htmlFor="end-of-day">End-of-day time</label>
           <input id="end-of-day" type="time" required value={endOfDay} onChange={(e) => { setEndOfDay(e.target.value); setMessage('') }} />
           <p className="hint">A Temp checkout is due at this time on a School day, or on the next School day once it has passed. A half day in the School calendar ends at its own time.</p>
+          {/* Saves on change, with the end-of-day time as saved, not as typed. */}
+          <label className="check"><input type="checkbox" checked={settings.tempCheckout.reminder} onChange={(e) => {
+            const reminder = e.target.checked
+            run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, reminder })); setMessage('Saved.') }, 'temp')
+          }} /><span>End-of-day reminder<span className="hint">To get it with the window closed, turn on Keep running in the tray and Start at login.</span></span></label>
         </section>
         <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save Temp checkout settings'}</button></div>
       </fieldset>
