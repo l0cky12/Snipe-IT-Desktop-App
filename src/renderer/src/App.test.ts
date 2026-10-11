@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
-import { routeKey, startsOver } from './App'
+import { defaultLocationChoice, routeKey, startsOver } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -59,5 +59,16 @@ describe('which Settings saves start the session over', () => {
   it('a different server URL, or logging out, clears it', () => {
     expect(startsOver(before, { ...before, baseUrl: 'https://other.example.org' })).toBe(true)
     expect(startsOver(before, { ...before, hasToken: false })).toBe(true)
+  })
+})
+
+describe("the Checkin form's empty Location choice", () => {
+  // Snipe-IT moves an Asset checked in with no Location to its Default Location, or to none.
+  it("names the Asset's Default Location when it has one", () => {
+    expect(defaultLocationChoice('IT Office')).toBe('Default Location (IT Office)')
+  })
+
+  it('says No Location when the Asset has no Default Location', () => {
+    expect(defaultLocationChoice('')).toBe('No Location')
   })
 })
