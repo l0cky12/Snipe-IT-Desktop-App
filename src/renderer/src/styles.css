@@ -248,10 +248,19 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page .settings-success { margin: 4px 0 12px; }
 .settings-page .message.error { margin: 4px 0 12px; }
 
-/* Lists: a filter bar, a sortable table, Quick Actions per Asset row, a pager. */
-.filters { padding: 14px 28px; border-bottom: 1px solid var(--line); }
-.filters input { flex: 1; min-width: 200px; }
-.filters .filter { flex: 0 1 220px; min-width: 150px; }
+/* Lists: a 44px top bar, the toolbar (search, filters, the Selection bar), a sortable table, Quick Actions per Asset row, a pager. */
+/* The top bar, the toolbar and the pager stay put when a wide List scrolls sideways; only the table moves. */
+.topbar { left: 0; min-height: 44px; padding: 3px 16px; gap: 8px; }
+.list-top { position: sticky; left: 0; }
+.topbar h1 { flex: none; font: 600 13px/28px var(--sans); letter-spacing: 0; }
+.topbar .actions { margin-left: auto; gap: 6px; }
+.toolbar { gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.toolbar > input:not(.filter) { flex: 1 1 160px; min-width: 160px; max-width: 360px; }
+.toolbar .filter { flex: 0 1 150px; min-width: 120px; }
+/* The Selection bar: the count, select-all, its Bulk Actions and Clear, at the toolbar's right end; it takes its own row
+   (and wraps inside it) when the filters leave too little room. */
+.selection-bar { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.selection-bar > b { font-weight: 600; }
 .list-table td, .list-table th { white-space: nowrap; }
 /* Row states: hover, ticked, and selected (its Quick Action open) with the --mark bar. */
 .list-table tbody tr:not(.quick-form):hover td { background: var(--hover); }
@@ -261,8 +270,12 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }
 .list-table .tick label { display: flex; align-items: center; height: 28px; padding: 0 6px 0 16px; cursor: pointer; }
 .list-table .tick input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); cursor: pointer; }
-/* The Selection bar: the count, select-all, its Bulk Actions and Clear, above the List. */
-.selection { margin: 12px 28px 0; padding: 8px 14px; border-radius: var(--r-ctl); background: var(--side); }
+/* A panel under the toolbar (Edit shared fields, Bulk results): a card whose 44px header row lines up with the toolbar. */
+.selection { margin: 10px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+.selection > .actions { padding: 8px 16px; gap: 6px; }
+/* Messages and the FERPA confirmation under a List's toolbar line up with it too. */
+.toolbar ~ :is(.message.error, .list-message, .ferpa) { margin: 10px 16px; }
+.toolbar ~ .list-message { display: block; width: fit-content; }
 .list-table .sort { all: unset; display: inline-flex; align-items: center; min-height: 24px; cursor: pointer; }
 .list-table .sort:hover, .list-table .sort:focus-visible { color: var(--text); }
 /* Pinned to the right so the Quick Actions stay in reach when a wide List scrolls sideways. */
@@ -274,11 +287,12 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
-.pager { justify-content: flex-end; padding: 14px 28px; }
+.pager { position: sticky; left: 0; justify-content: flex-end; gap: 6px; padding: 8px 16px; }
 .batch td { white-space: nowrap; }
 .batch td[role=status] { white-space: normal; width: 100%; }
-.form-grid.bulk-form { padding: 12px 0 4px; }
-.bulk-rows { max-height: 40vh; overflow: auto; margin-top: 8px; }
+.form-grid.bulk-form { padding: 4px 16px 16px; }
+.bulk-rows { max-height: 40vh; overflow: auto; border-top: 1px solid var(--line); }
+.bulk-rows tr:last-child td { border-bottom: 0; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
