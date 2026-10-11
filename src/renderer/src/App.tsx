@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -46,7 +46,7 @@ const PANEL_KEY = 'scanPanelOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the left strip; every List (these and the rest) is on the All records page.
+// The Lists in the sidebar; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
@@ -272,7 +272,7 @@ export function App() {
     setMessage({ text: `Deleted ${name}` })
   }
   const page = !showSettings && view?.page
-  // The All records button stands for every page not in the strip.
+  // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
@@ -288,39 +288,38 @@ export function App() {
   return (
     <div className="layout">
       <aside className="rail">
-        <nav className="strip" aria-label="Pages">
-          <span className="logo" aria-hidden="true">S</span>
-          <button title={panelOpen ? 'Close Scan/Search' : 'Scan/Search (Ctrl+K)'} aria-label="Scan/Search panel" aria-expanded={panelOpen} aria-controls={panelOpen ? 'scan-panel' : undefined} className="nav panel-nav"
-            onClick={() => (panelOpen ? setPanelOpen(false) : openPanel())}>
-            <Search size={20} />
+        <nav className="sidebar" aria-label="Pages">
+          <div className="brand"><span className="logo" aria-hidden="true">S</span>Snipe-IT Desktop</div>
+          <button aria-label="Search or scan" aria-controls={panelOpen ? 'scan-panel' : undefined} className="find" onClick={openPanel}>
+            <Search size={14} />Search or scan<kbd>Ctrl K</kbd>
           </button>
-          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
-            <LayoutGrid size={20} />
+          <button aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
+            <LayoutGrid size={18} />Dashboard
           </button>
           {LISTS.map((k) => {
             const Icon = listIcon[k]
-            return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
+            return <button key={k} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={18} />{listName[k]}</button>
           })}
-          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
-            <ListChecks size={20} />
-            {batch.length > 0 && <span className="badge">{batch.length}</span>}
-          </button>
-          <button title="Reports" aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
-            <FileSpreadsheet size={20} />
+          <button aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
+            <FileSpreadsheet size={18} />Reports
           </button>
           {canImport && (
-            <button title="Import" aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
-              <FileUp size={20} />
+            <button aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
+              <FileUp size={18} />Import
             </button>
           )}
-          <button title="All records" aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
-            <Boxes size={20} />
+          <button aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
+            <Boxes size={18} />All records
           </button>
-          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
+          <button aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
+            <ListChecks size={18} />Batch
+            {batch.length > 0 && <span className="badge">{batch.length}</span>}
+          </button>
+          <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
           <form onSubmit={onSubmit}>
-            <ScanBarcode size={16} />
+            <ScanBarcode size={18} />
             <input
               disabled={!settings?.hasToken || showSettings}
               ref={search}
@@ -330,6 +329,7 @@ export function App() {
               placeholder="Scan / search…"
               aria-label="Scan an Asset Tag, or search everything"
             />
+            <button type="button" className="panel-close" aria-label="Close Scan/Search" onClick={() => setPanelOpen(false)}><X size={16} /></button>
           </form>
           {railMessage}
           <div className="list">
@@ -342,7 +342,7 @@ export function App() {
                   {m.rows.map((t) => {
                     const text = <>
                       <span className="t">{t.name}</span>
-                      {t.detail && <span className="n mono">{t.detail}</span>}
+                      {t.detail && <span className="n">{t.detail}</span>}
                       {t.matched && <span className="n">Found in {t.matched}</span>}
                     </>
                     const kind = m.kind
@@ -356,7 +356,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -369,7 +369,7 @@ export function App() {
   )
 }
 
-// Every List, the ones in the strip and the rest.
+// Every List, the ones in the sidebar and the rest.
 function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
   return (
     <>
@@ -406,6 +406,9 @@ function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+// A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
+export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
+
 export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
@@ -436,7 +439,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         ))}
       </select>
       <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-        <option value="">Keep current Location</option>
+        <option value="">{defaultLocationChoice(a.defaultLocation)}</option>
         {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -540,12 +543,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
   const facts: [string, string, boolean?][] = [
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? '', true],
+    ['Expected checkin', a.expectedCheckin ?? ''],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial, true],
-    ['Purchased', a.purchaseDate ?? '', true],
-    ['Warranty ends', a.warrantyEnd ?? '', true],
+    ['Purchased', a.purchaseDate ?? ''],
+    ['Warranty ends', a.warrantyEnd ?? ''],
   ]
   return (
     <>
@@ -734,7 +737,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
       }))
     const { used, available } = entry as { used: number; available: number }
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
-    return [{ name: usedName, count: used, color: 'var(--bar-used)' }, { name: freeName, count: available, color: 'var(--bar-free)' }]
+    return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
 
   const tag = (a: AssetSummary) => (
@@ -809,7 +812,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
     <>
       <header className="head">
         <h1>Dashboard</h1>
-        <span className="dim mono">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
+        <span className="dim">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Customize</button>
           <button onClick={load} disabled={loading}>Refresh</button>
