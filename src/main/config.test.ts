@@ -203,6 +203,8 @@ it('keeps a date range only on the Schedules of ranged Reports: Audit due and Au
   // The Schedule form shows the range choice by the same rule.
   expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
   expect(takesRange({ saved: 'x' })).toBe(false)
+  // The snapshot Reports send what's true at the time.
+  for (const builtIn of ['statusLocation', 'checkedOut'] as const) expect(store.schedules().find((s) => 'builtIn' in s.report && s.report.builtIn === builtIn)?.schedule).not.toHaveProperty('range')
 })
 
 it('refuses a schedule it could not keep', () => {
