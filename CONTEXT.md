@@ -115,6 +115,10 @@ _Avoid_: state, status (alone, when the label is meant)
 **Quick Action**:
 A Checkout, Checkin, status change, or add-to-Batch started from an Asset's row in the Assets List. Its form opens in the Asset panel, without leaving the List.
 
+**Asset panel**:
+One Asset's sheet shown beside the Assets List, opened by a scan, a row or a Quick Action, so the List and its Selection stay put.
+_Avoid_: drawer, slide-out, sheet (the sheet is the full-page Asset)
+
 **Batch**:
 Assets gathered on the Batch page for one Checkout or Checkin of all of them. It lives only for the session; each Asset still goes through the single Checkout or Checkin, so History credits the Operator as usual.
 _Avoid_: cart, selection (a Selection is ticked rows in one List; it can be added to the Batch)

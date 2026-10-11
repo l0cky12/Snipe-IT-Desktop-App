@@ -161,6 +161,7 @@ export function App() {
   async function run(work: (isStale: () => boolean) => Promise<void>) {
     const mine = ++latest.current
     const isStale = () => mine !== latest.current
+    docking.current = false
     setBusy(mine)
     try {
       await work(isStale)
@@ -169,8 +170,8 @@ export function App() {
       if (!isStale()) setMessage({ text: (err as Error).message, error: true })
     } finally {
       setBusy((b) => (b === mine ? 0 : b))
-      if (docking.current) docking.current = false
-      else search.current?.focus()
+      // Only the newest run moves focus: one superseded by ↑/↓ mustn't pull it into the Scan box after the panel took it.
+      if (!isStale() && !docking.current) search.current?.focus()
     }
   }
 
@@ -598,11 +599,11 @@ export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void;
 
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
-export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: opening, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
-  const [form, setForm] = useState<SheetForm | null>(opening ?? null)
+export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
+  const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
   // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
-  useEffect(() => { if (docked && !opening) root.current?.focus() }, [])
+  useEffect(() => { if (docked && !initialForm) root.current?.focus() }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
   // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -623,7 +624,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     ['Purchased', a.purchaseDate ?? ''],
     ['Warranty ends', a.warrantyEnd ?? ''],
   ]
-  const canCheckout = a.checkoutAllowed && a.can.checkout
+  const canCheckout = !checkoutReason(a)
   return (
     <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
       <header className="head">

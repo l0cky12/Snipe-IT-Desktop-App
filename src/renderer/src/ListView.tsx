@@ -215,8 +215,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const [customizing, setCustomizing] = useState(false)
   // The row ↑/↓ have moved to (Assets only), by id.
   const [cursor, setCursor] = useState<number | null>(null)
-  // Whether the panel's Asset is outside the open View.
-  const [outside, setOutside] = useState(false)
+  // The id of the panel's Asset once it's found outside the open View; kept while a reload checks again, so the notice doesn't blink.
+  const [outside, setOutside] = useState<number | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   // The Selection lives with this List, across its Views; leaving it (or opening another) starts the next one empty.
   const [selection, setSelection] = useState<Selection<Row>>(new Map())
@@ -390,17 +390,18 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     const { history: _h, historyError: _e, fields: _f, ...a } = panelAsset
     return rows.find((r) => r.id === a.id) ?? a
   }
-  const tickRow = (row?: Row) => row && setSelection((s) => tick(s, [row]))
+  // Ticks or unticks one row; false when there's none to tick.
+  const tickRow = (row?: Row) => !!row && (setSelection((s) => tick(s, [row])), true)
   // The focused row follows the panel when it opens on a row of this page.
   useEffect(() => { if (panelAsset && rows.some((r) => r.id === panelAsset.id)) setCursor(panelAsset.id) }, [panel?.n])
   // The panel's Asset is outside the View when it's not among the rows and searching the View for its Asset Tag doesn't find it;
   // the List's own search and filter boxes don't count. ponytail: one search per check; a tag that matches 50+ others reads as outside.
   useEffect(() => {
-    setOutside(false)
-    if (!panelAsset || view === 'all' || !page || page.rows.some((r) => r.id === panelAsset.id)) return
+    if (!panelAsset || !page) return
+    if (view === 'all' || page.rows.some((r) => r.id === panelAsset.id)) return setOutside(null)
     let stale = false
     window.snipeIt.list('assets', listQuery('assets', { view, search: panelAsset.assetTag, filters: {}, sort: null }))
-      .then((p) => !stale && setOutside(!p.rows.some((r) => r.id === panelAsset.id)), () => {})
+      .then((p) => !stale && setOutside(p.rows.some((r) => r.id === panelAsset.id) ? null : panelAsset.id), () => {})
     return () => { stale = true }
   }, [panelAsset, view, page])
   // ↑/↓, Enter, Space and Esc on the Assets List (listKey); always the latest render's handler, so it sees the rows and panel shown.
@@ -564,7 +565,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               const a = row as Asset
               // Open in the Asset panel, focused by ↑/↓, ticked.
               const docked = kind === 'assets' && panelAsset?.id === row.id
-              const quick = (form: SheetForm) => ({ onClick: () => onOpenAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
+              const quickProps = (form: SheetForm) => ({ onClick: () => onOpenAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
               const inBatch = batch.some((b) => b.id === a.id)
               return (
                 <tr key={row.id} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
@@ -578,9 +579,9 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
                   {kind === 'assets' && (
                     <td className="quick">
                       {/* Each opens the Asset panel with its form ready. */}
-                      <button disabled={!a.assignee || !a.can.checkin} {...quick('checkin')} title={checkinReason(a)}>Checkin</button>
-                      <button disabled={!a.checkoutAllowed || !a.can.checkout} {...quick('checkout')} title={checkoutReason(a)}>Checkout</button>
-                      <button disabled={!a.can.update} {...quick('status')} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
+                      <button disabled={!!checkinReason(a)} {...quickProps('checkin')} title={checkinReason(a)}>Checkin</button>
+                      <button disabled={!!checkoutReason(a)} {...quickProps('checkout')} title={checkoutReason(a)}>Checkout</button>
+                      <button disabled={!a.can.update} {...quickProps('status')} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
                       <button disabled={inBatch} onClick={() => onBatch([toSummary(a)])}>{inBatch ? 'In batch' : 'Batch'}</button>
                     </td>
                   )}
@@ -602,7 +603,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
         <AssetSheet key={panel.n} {...panel.sheet} form={panel.form} onCheckin={reloading(panel.sheet.onCheckin)} onCheckout={reloading(panel.sheet.onCheckout)}
           onStatus={reloading(panel.sheet.onStatus)}
           onDeleted={() => (setSelection((s) => (s.has(panelAsset.id) ? new Map([...s].filter(([id]) => id !== panelAsset.id)) : s)), reload(), panel.sheet.onDeleted())}
-          docked={{ ticked: selection.has(panelAsset.id), notInView: outside, onClose: onClosePanel, onTick: () => tickRow(panelRow()) }} />
+          docked={{ ticked: selection.has(panelAsset.id), notInView: outside === panelAsset.id, onClose: onClosePanel, onTick: () => tickRow(panelRow()) }} />
       )}
     </div>
   )
