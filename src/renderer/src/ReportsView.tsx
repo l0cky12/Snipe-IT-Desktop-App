@@ -3,10 +3,10 @@ import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Schedu
 import type { ReportRef } from '../../main/scheduler'
 import { choices as filterChoices, listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, LOCATION_CATEGORY_REPORTS, itemTypeName, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
-// What the date range bounds in each report.
-const rangeName: Record<ReportKind, string> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life' }
+// What the date range bounds in each report; a snapshot Report has none.
+const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life' }
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
@@ -170,7 +170,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
   }, [placeFilters, choices])
   // The filters the chosen report has: only the Activity Report narrows by record type and action, only LOCATION_CATEGORY_REPORTS by Location and Category.
   const sent: ReportQuery = {
-    from: query.from, to: query.to,
+    ...(rangeName[kind] && { from: query.from, to: query.to }),
     ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType }),
     ...(placeFilters && { locationId: query.locationId, categoryId: query.categoryId }),
   }
@@ -218,8 +218,12 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
           <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), stale())} aria-label="Report">
             {(Object.keys(REPORT_NAMES) as ReportKind[]).map((k) => <option key={k} value={k}>{REPORT_NAMES[k]}</option>)}
           </select>
-          <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
-          <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
+          {rangeName[kind] && (
+            <>
+              <label className="range">{rangeName[kind]} from <input type="date" value={query.from ?? ''} onChange={(e) => set({ from: e.target.value })} /></label>
+              <label className="range">to <input type="date" value={query.to ?? ''} onChange={(e) => set({ to: e.target.value })} /></label>
+            </>
+          )}
           {kind === 'activity' && (
             <>
               <select value={query.itemType ?? ''} onChange={(e) => set({ itemType: e.target.value })} aria-label="Record type">
