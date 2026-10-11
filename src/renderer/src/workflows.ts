@@ -457,9 +457,11 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       if (stop) throw new Error(`Stopped: ${stop}`)
       return { neutral: SKIPPED, what }
     }
-    // Undo's guard: it's still checked out to this User.
-    const stillTheirs = (now: Asset) => {
+    // Undo's guard: it's still checked out to this User, on the Checkout this row wrote as far as the Asset can tell (the
+    // Expected Checkin it sent). ponytail: a replacement Checkout with the same Expected Checkin passes; Asset has no Checkout id.
+    const stillTheirs = (now: Asset, sent: string) => {
       if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+      if ((now.expectedCheckin ?? '') !== sent) throw new Error(`${a.assetTag} was checked out to ${user.name} again since`)
     }
     // The Expected Checkin a Checkout written now sends: Temp checkout's due time, worked out at each Checkout (so a
     // confirm left open past 2:50 pm rolls over), or Bulk checkout's Options date. Throws, writing nothing, when there's none.
@@ -479,25 +481,30 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
         if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
         if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
-        const due = dueNow()
+        dueNow()
         const mine = session
         await bridge.checkin(a.id, { note: workflowNote(workflow, { move: true }) })
         sameSession(mine)
         // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
-        await checkout(due).catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
+        // The due time is worked out again for the Checkout itself: the Checkin may have taken it past 2:50 pm.
+        const due = await (async () => {
+          const due = dueNow()
+          await checkout(due)
+          return due
+        })().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
         // had. A time of day means it was a Temp checkout, so the undo makes it one again.
         const run = async (now: Asset) => {
-          stillTheirs(now)
+          stillTheirs(now, due)
           // A label changed (or made non-deployable) since couldn't be checked out again.
           if (now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} is '${now.status}' now`)
           // Both calls must be allowed before the first, so a refused Checkout never leaves it checked in.
           if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
-          const { expectedCheckin: due } = a
+          const { expectedCheckin: had } = a
           const mine = session
           await bridge.checkin(a.id, { note: undoNote(workflow) })
           sameSession(mine)
-          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote(workflow, due && due.length > 10 ? due : undefined) })
+          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: had ?? undefined, note: undoNote(workflow, had && had.length > 10 ? had : undefined) })
             .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
         }
         return { text: 'Checked out', what: times ? `${whatFor(user, due)}, moved from ${from}` : `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
@@ -510,7 +517,7 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       await checkout(due)
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
-        stillTheirs(now)
+        stillTheirs(now, due)
         // A label someone set since the Checkout isn't overwritten with the old one.
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote(workflow) })
@@ -537,6 +544,8 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       if (step.step !== 'scan') return 'Find the User first'
       const [date = '', time = ''] = to.split(' ')
       if (!realDate(date) || !realTime(time)) return 'Choose a due date and time'
+      // 00:00 reads back as a date-only Expected Checkin, due at the end of that date (#71).
+      if (time === '00:00') return "A due time can't be midnight (00:00)"
       if (to <= stamp(now())) return 'That due time has already passed'
       dueSet = { round: step.round, to }
       events.changed()

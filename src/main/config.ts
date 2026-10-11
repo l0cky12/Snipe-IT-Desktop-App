@@ -230,6 +230,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     },
     saveTempCheckout({ endOfDay }: TempCheckout) {
       if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')
+      // 00:00 would read back as a date-only Expected Checkin (#71).
+      if (endOfDay === '00:00') throw new Error("The end-of-day time can't be midnight.")
       write({ ...read(), tempCheckout: { endOfDay } })
       return get()
     },

@@ -76,6 +76,7 @@ describe('the School calendar text', () => {
     expect(refused('2026-11-27 to 2026-11-23 Break')).toThrow('Line 2: the end date is before the start date')
     expect(refused('2026-12-18 half day Winter concert')).toThrow('Line 2: a half day needs its time, like half day 12:00')
     expect(refused('2026-12-18 half day 25:00 Concert')).toThrow("Line 2: 25:00 isn't a real time")
+    expect(refused('2026-12-18 half day 0:00 Concert')).toThrow("Line 2: a half day can't end at midnight (00:00)")
     expect(refused('2026-12-18')).toThrow('Line 2: add a label, like Thanksgiving')
     expect(refused('2026-12-18 half day 12:00')).toThrow('Line 2: add a label, like Thanksgiving')
   })

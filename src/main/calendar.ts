@@ -36,6 +36,8 @@ export function parseCalendar(text: string): CalendarEntry[] {
     if (to < from) no('the end date is before the start date')
     if (half && !time) no('a half day needs its time, like half day 12:00')
     if (time && !realTime(time)) no(`${time.replace(/^0(?=\d\d:)/, '')} isn't a real time`)
+    // 00:00 would read back as a date-only Expected Checkin (#71).
+    if (time === '00:00') no("a half day can't end at midnight (00:00)")
     if (!label.trim()) no('add a label, like Thanksgiving')
     return [{ from, to, ...(time && { halfDay: time }), label: label.trim() }]
   })

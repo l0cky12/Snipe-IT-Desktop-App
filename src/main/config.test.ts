@@ -249,6 +249,7 @@ it('the end-of-day time is 2:50 pm until changed, must be a real HH:MM, and is k
   expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50' })
   expect(store.saveTempCheckout({ endOfDay: '15:10' }).tempCheckout).toEqual({ endOfDay: '15:10' })
   for (const endOfDay of ['24:00', '3:10', '15:60', '', 1510]) expect(() => store.saveTempCheckout({ endOfDay } as never)).toThrow('Enter the end-of-day time as HH:MM, like 14:50.')
+  expect(() => store.saveTempCheckout({ endOfDay: '00:00' })).toThrow("The end-of-day time can't be midnight.")
   expect(createSettingsStore(path, storage, '0.1.0').get().tempCheckout).toEqual({ endOfDay: '15:10' })
 })
 
