@@ -1315,6 +1315,33 @@ describe('Temp checkout', () => {
     expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
   })
 
+  it("a due time set for one User stays with that User's queued Checkouts after Done and another User", async () => {
+    const { flow, bridge, checkouts } = await scanning([ready('NOMMA-1')])
+    expect(flow.setDue('2026-10-12 12:00')).toBe('')
+    expect(flow.scan('NOMMA-1')).toBe('')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    // Its write waits its turn behind a slow lookup, while the Operator moves on.
+    let release = () => {}
+    bridge.assetByTag.mockImplementationOnce(() => new Promise((r) => { release = () => r(ready('NOMMA-1')) }))
+    flow.runner.confirmOpen()
+    flow.done()
+    await flow.find('atestwell')
+    expect(flow.setDue('2026-10-12 13:00')).toBe('')
+    release()
+    await settled(flow)
+    expect(checkouts[0][1].expectedCheckin).toBe('2026-10-12 12:00')
+  })
+
+  it("Undo refuses when the Asset had no Location and Snipe-IT would move it to its Default Location", async () => {
+    const { flow, bridge, checkins } = await scanning([ready('NOMMA-1', { location: '', locationId: null })])
+    await confirmed(flow, 'NOMMA-1')
+    bridge.assetByTag.mockResolvedValueOnce(ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, location: 'Room 204', locationId: 4, defaultLocation: 'IT Office', expectedCheckin: '2026-10-12 14:50' }))
+    flow.runner.askUndo()
+    await flow.runner.undo()
+    expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; checking it in would move it to IT Office')
+    expect(checkins).toEqual([])
+  })
+
   it('refuses a midnight due time, which would read back as date-only', async () => {
     const { flow } = await scanning([])
     expect(flow.setDue('2026-10-13 00:00')).toBe("A due time can't be midnight (00:00)")

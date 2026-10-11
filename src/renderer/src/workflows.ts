@@ -427,10 +427,11 @@ export const createTempCheckout = (bridge: CheckoutBridge, events: Events, times
 
 function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: CheckoutBridge, events: Events, now: () => Date, pace: number, times?: () => SchoolTimes) {
   let step: BulkCheckoutStep = { step: 'user' }
-  // Temp checkout: the due time the Operator set, for the round (User) it was set in; Done or another User ends it.
-  let dueSet: { round: number; to: string } | null = null
+  // Temp checkout: the due time the Operator set, by the round (User) it was set in, kept so a write still queued after
+  // Done or another User gets its own round's; a new round starts without one. ponytail: one entry per round, all session.
+  const dueSets = new Map<number, string>()
   // Temp checkout: the due time a Checkout in this round gets if written now, or null when the School calendar leaves none.
-  const dueFor = (r?: number) => (!times ? null : dueSet && dueSet.round === r ? dueSet.to : dueAt(now(), times()))
+  const dueFor = (r?: number) => (!times ? null : (r !== undefined && dueSets.get(r)) || dueAt(now(), times()))
   // Temp checkout: "Temp, due 2:50 pm"; Bulk checkout: "To <User>".
   const whatFor = (user: UserCard, due: string | null) => (!times ? `To ${user.name}` : due ? `Temp, due ${dueLabel(due, now(), true)}` : 'Temp')
   let options = NO_OPTIONS
@@ -520,6 +521,8 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         stillTheirs(now, due)
         // A label someone set since the Checkout isn't overwritten with the old one.
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
+        // It had no Location: a Checkin can't put that back while Snipe-IT would send it to a Default Location instead.
+        if (a.locationId === null && now.defaultLocation) throw new Error(`${a.assetTag} had no Location; checking it in would move it to ${now.defaultLocation}`)
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote(workflow) })
       }
       return { text: 'Checked out', what: whatFor(user, due), undo: { says: `${a.assetTag} → ${user.name}`, run } }
@@ -547,7 +550,7 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       // 00:00 reads back as a date-only Expected Checkin, due at the end of that date (#71).
       if (time === '00:00') return "A due time can't be midnight (00:00)"
       if (to <= stamp(now())) return 'That due time has already passed'
-      dueSet = { round: step.round, to }
+      dueSets.set(step.round, to)
       events.changed()
       return ''
     },
@@ -616,7 +619,7 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       attempt++
       session++
       step = { step: 'user' }
-      dueSet = null
+      dueSets.clear()
       options = NO_OPTIONS
       runner.reset()
     },
