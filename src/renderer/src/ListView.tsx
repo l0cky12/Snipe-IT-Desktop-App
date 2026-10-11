@@ -499,7 +499,7 @@ export function BulkResults({ title, run, onStop, onRetry, onClose }: { title: s
   const inRun = new Set(run.ids)
   const c = counts(run)
   return (
-    <section className="selection bulk" aria-label={title}>
+    <section className="list-panel bulk" aria-label={title}>
       <div className="actions">
         <b>{title}</b>
         <span className="dim" role="status">{progress(run)}{run.busy ? '' : c.finished < c.of ? ', stopped' : ' finished'}</span>

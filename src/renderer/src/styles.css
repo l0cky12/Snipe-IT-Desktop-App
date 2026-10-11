@@ -248,10 +248,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page .settings-success { margin: 4px 0 12px; }
 .settings-page .message.error { margin: 4px 0 12px; }
 
-/* Lists: a 44px top bar, the toolbar (search, filters, the Selection bar), a sortable table, Quick Actions per Asset row, a pager. */
-/* The top bar, the toolbar and the pager stay put when a wide List scrolls sideways; only the table moves. */
-.topbar { left: 0; min-height: 44px; padding: 3px 16px; gap: 8px; }
-.list-top { position: sticky; left: 0; }
+/* Lists: a 44px top bar, the toolbar (search, filters, the Selection bar), a sortable table, Quick Actions per Asset row, a pager.
+   All but the table stay put when a wide List scrolls sideways. */
+.topbar, .list-top, .pager { position: sticky; left: 0; }
+.topbar { min-height: 44px; padding: 3px 16px; gap: 8px; }
 .topbar h1 { flex: none; font: 600 13px/28px var(--sans); letter-spacing: 0; }
 .topbar .actions { margin-left: auto; gap: 6px; }
 .toolbar { gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
@@ -271,8 +271,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table .tick label { display: flex; align-items: center; height: 28px; padding: 0 6px 0 16px; cursor: pointer; }
 .list-table .tick input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); cursor: pointer; }
 /* A panel under the toolbar (Edit shared fields, Bulk results): a card whose 44px header row lines up with the toolbar. */
-.selection { margin: 10px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-.selection > .actions { padding: 8px 16px; gap: 6px; }
+.list-panel { margin: 10px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+.list-panel > .actions { padding: 8px 16px; gap: 6px; }
 /* Messages and the FERPA confirmation under a List's toolbar line up with it too. */
 .toolbar ~ :is(.message.error, .list-message, .ferpa) { margin: 10px 16px; }
 .toolbar ~ .list-message { display: block; width: fit-content; }
@@ -287,7 +287,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
-.pager { position: sticky; left: 0; justify-content: flex-end; gap: 6px; padding: 8px 16px; }
+.pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
 .batch td { white-space: nowrap; }
 .batch td[role=status] { white-space: normal; width: 100%; }
 .form-grid.bulk-form { padding: 4px 16px 16px; }
