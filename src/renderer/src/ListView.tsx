@@ -19,6 +19,9 @@ const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K])
   assets: { status: (a) => <StatusChip asset={a} /> },
   activity: { note: (r) => r.note && <span className="note">{r.note}</span> },
 }
+/** The keys of the columns that hold numbers (counts like Assets, Seats, Remaining), which right-align. */
+export const numericColumns = (columns: AnyColumn[], rows: object[]) =>
+  new Set(columns.filter((c) => rows.some((r) => typeof (r as Record<string, unknown>)[c.key] === 'number')).map((c) => c.key))
 // Stored per computer and per List: which columns show.
 const columnsKey = (kind: ListKind) => `columns:${kind}`
 function readColumns(kind: ListKind): string[] {
@@ -305,12 +308,13 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     const shownValue = value === '' || value == null ? '—' : value
     // The row's way in: the first column, or for the Activity Report the Asset it names.
     const go = (first && kind !== 'activity') || (kind === 'activity' && c.key === 'item') ? open(row) : undefined
-    // Space Mono only for Asset Tags and Serials; the link inherits it.
-    return <td key={c.key} className={c.key === 'assetTag' || c.key === 'serial' ? 'mono' : undefined}>{go ? <button className="link" onClick={go}>{shownValue}</button> : shownValue}</td>
+    // Space Mono only for Asset Tags and Serials; the link inherits it. Numbers right-align.
+    return <td key={c.key} className={c.key === 'assetTag' || c.key === 'serial' ? 'mono' : numeric.has(c.key) ? 'num' : undefined}>{go ? <button className="link" onClick={go}>{shownValue}</button> : shownValue}</td>
   }
 
   const rows = page?.rows ?? []
   const total = page?.total ?? 0
+  const numeric = numericColumns(columns, rows)
   // Activity Report rows are log entries, not Records: nothing to select.
   const selectable = kind !== 'activity'
   const ticks = pageTicks(selection, rows)
@@ -330,100 +334,106 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const filterBar = filtersFor(kind, names, statusLabels, locations)
   return (
     <>
-      <header className="head">
-        <h1>{listName[kind]}{saved && `: ${saved.name}`}</h1>
-        <span className="dim">{loading ? 'Loading…' : page && `${total.toLocaleString()} total`}</span>
+      {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
+      <header className="head topbar">
+        <h1>{saved ? <><span className="dim">{listName[kind]} / </span>{saved.name}</> : listName[kind]}</h1>
+        <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
           <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
-          {editable(kind) && <button className="quiet" onClick={() => onNew(kind)}>New {singular(kind)}</button>}
           <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
             onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
             {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
           </button>
-          <button onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
+          <button className="quiet" onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
+          {editable(kind) && <button onClick={() => onNew(kind)}>New {singular(kind)}</button>}
         </div>
       </header>
-      {customizing && (
-        <div className="customize">
-          <ol aria-label="Columns">
-            <li className="k">Columns</li>
-            {all.slice(1).map((c) => (
-              <li key={c.key}>
-                <label>
-                  <input type="checkbox" checked={shown.includes(c.key)} onChange={() => setShown((s) => (s.includes(c.key) ? s.filter((k) => k !== c.key) : [...s, c.key]))} />
-                  {c.label}
-                </label>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-      {naming !== null && (
-        <form className="filters actions" onSubmit={(e) => (e.preventDefault(), saveReport(false))}>
-          <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
-          <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
-          {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
-          <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
-          <span className="dim">Saves this List's search, filters, sort and Columns.</span>
-        </form>
-      )}
-      <div className="filters actions">
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
-        {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
-        {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
-        {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
-          <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
-            {drill?.label ?? 'Filtered'} ×
-          </button>
-        ))}
-      </div>
-      {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
-      {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
-      {selectable && (selection.size > 0 || selectingAll) && (
-        <div className="selection actions" role="region" aria-label="Selection">
-          {/* Ticks on other pages, or hidden by the filter, still count; the bar says how many are here. */}
-          <b>{selection.size.toLocaleString()} selected</b>
-          {tickedHere < selection.size && <span className="dim">{tickedHere.toLocaleString()} on this page</span>}
-          {selectingAll === 'asking' ? (
-            <span className="confirm" role="alertdialog" aria-label={`Select all ${total.toLocaleString()} ${listName[kind]}?`}>
-              <span>Select all {total.toLocaleString()} matching {listName[kind]}?</span>
-              <button autoFocus onClick={selectAll}>Select all</button>
-              <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
-            </span>
-          ) : total > rows.length && (
-            <button className="quiet" disabled={selectingAll === 'fetching' || bulk?.busy} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
-              {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+      {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
+      <div className="list-top">
+        {customizing && (
+          <div className="customize">
+            <ol aria-label="Columns">
+              <li className="k">Columns</li>
+              {all.slice(1).map((c) => (
+                <li key={c.key}>
+                  <label>
+                    <input type="checkbox" checked={shown.includes(c.key)} onChange={() => setShown((s) => (s.includes(c.key) ? s.filter((k) => k !== c.key) : [...s, c.key]))} />
+                    {c.label}
+                  </label>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+        {naming !== null && (
+          <form className="toolbar actions" onSubmit={(e) => (e.preventDefault(), saveReport(false))}>
+            <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
+            <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
+            {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
+            <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
+            <span className="dim">Saves this List's search, filters, sort and Columns.</span>
+          </form>
+        )}
+        {/* The toolbar: search and filters, then the Selection bar at its right end while rows are ticked. */}
+        <div className="toolbar actions">
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
+          {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
+          {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
+          {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
+            <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
+              {drill?.label ?? 'Filtered'} ×
             </button>
+          ))}
+          {selectable && (selection.size > 0 || selectingAll) && (
+            <div className="selection-bar" role="region" aria-label="Selection">
+              {/* Ticks on other pages, or hidden by the filter, still count; the bar says how many are here. */}
+              <b>{selection.size.toLocaleString()} selected</b>
+              {tickedHere < selection.size && <span className="dim">{tickedHere.toLocaleString()} on this page</span>}
+              {selectingAll === 'asking' ? (
+                <span className="confirm" role="alertdialog" aria-label={`Select all ${total.toLocaleString()} ${listName[kind]}?`}>
+                  <span>Select all {total.toLocaleString()} matching {listName[kind]}?</span>
+                  <button autoFocus onClick={selectAll}>Select all</button>
+                  <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
+                </span>
+              ) : total > rows.length && (
+                <button className="quiet" disabled={selectingAll === 'fetching' || bulk?.busy} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
+                  {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+                </button>
+              )}
+              {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+              {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
+              {mayEdit(kind, [...selection.values()]) && (
+                <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
+              )}
+              {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
+                <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
+                  <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
+                  <button className="danger" autoFocus onClick={deleteSelection}>Delete</button>
+                  <button className="quiet" onClick={() => setConfirmingDelete(false)}>Cancel</button>
+                </span>
+              ) : <button className="quiet danger" disabled={bulk?.busy || !!selectingAll} onClick={() => setConfirmingDelete(true)}>Delete…</button>)}
+              <button className="quiet" onClick={clear}>Clear</button>
+            </div>
           )}
-          {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
-          {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
-          {mayEdit(kind, [...selection.values()]) && (
-            <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
-          )}
-          {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
-            <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
-              <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
-              <button className="danger" autoFocus onClick={deleteSelection}>Delete</button>
-              <button className="quiet" onClick={() => setConfirmingDelete(false)}>Cancel</button>
-            </span>
-          ) : <button className="quiet danger" disabled={bulk?.busy || !!selectingAll} onClick={() => setConfirmingDelete(true)}>Delete…</button>)}
-          <button className="quiet" onClick={clear}>Clear</button>
         </div>
-      )}
-      {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
-      {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
+        {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
+        {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
+        {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
+        {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
+      </div>
       <table className="history list-table">
         <thead>
           <tr>
             {selectable && (
               <th className="tick">
-                <input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
-                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" />
+                {/* The label fills the cell, so the whole cell ticks the box. */}
+                <label><input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
+                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" /></label>
               </th>
             )}
             {columns.map((c) => (
-              <th key={c.key} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
+              <th key={c.key} className={numeric.has(c.key) ? 'num' : undefined} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
                 {Object.hasOwn(sortable, c.key)
                   ? <button className="sort" onClick={() => toggleSort(c.key)}>{c.label}{sort?.key === c.key ? (sort.order === 'asc' ? ' ▲' : ' ▼') : ''}</button>
                   : c.label}
@@ -442,8 +452,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               <tr key={row.id} className={q ? 'sel' : selection.has(row.id) ? 'ticked' : undefined}>
                 {selectable && (
                   <td className="tick">
-                    <input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
-                      aria-label={`Select ${rowName(row)}`} />
+                    <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
+                      aria-label={`Select ${rowName(row)}`} /></label>
                   </td>
                 )}
                 {columns.map((c, i) => cell(c, row, i === 0))}
@@ -489,7 +499,7 @@ export function BulkResults({ title, run, onStop, onRetry, onClose }: { title: s
   const inRun = new Set(run.ids)
   const c = counts(run)
   return (
-    <section className="selection bulk" aria-label={title}>
+    <section className="list-panel bulk" aria-label={title}>
       <div className="actions">
         <b>{title}</b>
         <span className="dim" role="status">{progress(run)}{run.busy ? '' : c.finished < c.of ? ', stopped' : ' finished'}</span>

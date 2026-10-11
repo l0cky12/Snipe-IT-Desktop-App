@@ -6,7 +6,7 @@ import { csvName, rowCount, toCsv } from '../../main/export'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report; a snapshot Report has none.
-const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started' }
+const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started', tempHistory: 'Checked out' }
 
 // Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
 export function saveCsv(name: string, columns: string[], rows: string[][]) {
@@ -271,7 +271,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
         </table>
       </section>
       <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} scheduleOf={scheduleOf} onScheduled={setSchedules} />
-      {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
+      {report?.capped && <p className="message notice" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
           <thead><tr>{report.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>

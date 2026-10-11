@@ -61,7 +61,7 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
           <div className="actions">
             {access.groups.length === 0 && <span className="dim">None</span>}
             {access.groups.map((g) => (
-              <span key={g.id} className="chip c-blue">
+              <span key={g.id} className="flag c-blue">
                 {g.name}
                 {canManage && <button className="chip-x" disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== g.id))} aria-label={`Remove from ${g.name}`}>×</button>}
               </span>

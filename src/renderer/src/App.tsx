@@ -377,7 +377,7 @@ export function App() {
           <div className="list">
             {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={choose} />}
             {others.map((m) => 'error' in m
-              ? <p key={m.kind} className="message">{kindName[m.kind]}: {m.error}</p>
+              ? <p key={m.kind} className="message error">{kindName[m.kind]}: {m.error}</p>
               : m.rows.length > 0 && (
                 <div key={m.kind}>
                   <div className="section">{kindName[m.kind]} ({m.rows.length})</div>
@@ -603,12 +603,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           <span className="sub">{a.model}</span>
         </h1>
         <StatusChip asset={a} />
-        {a.overdue !== null && <span className="chip c-red">Overdue {lateness(a.overdue)}</span>}
+        {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
         {a.warranty &&
           (a.warranty.expired ? (
-            <span className="chip c-grey">Warranty expired</span>
+            <span className="flag c-grey">Warranty expired</span>
           ) : (
-            <span className="chip c-amber">Warranty {a.warranty.daysLeft}d left</span>
+            <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
           ))}
         <div className="actions">
           <button
@@ -806,7 +806,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th>How late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -815,7 +815,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
                   <td>{a.expectedCheckin}</td>
-                  <td className="late">{lateness(a.overdue)}</td>
+                  <td className="late num">{lateness(a.overdue)}</td>
                 </tr>
               ))}
             </tbody>
@@ -830,7 +830,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
         <div className="section">Warranty expiring in 90 days ({rows.length})</div>
         <table className="history">
           <thead>
-            <tr><th>Asset Tag</th><th>Name</th><th>Status</th><th>Days left</th></tr>
+            <tr><th>Asset Tag</th><th>Name</th><th>Status</th><th className="num">Days left</th></tr>
           </thead>
           <tbody>
             {rows.map((a) => (
@@ -838,7 +838,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                 {tag(a)}
                 <td>{a.name || '—'}</td>
                 <td>{a.status}</td>
-                <td>{a.daysLeft}d</td>
+                <td className="num">{a.daysLeft}d</td>
               </tr>
             ))}
           </tbody>
