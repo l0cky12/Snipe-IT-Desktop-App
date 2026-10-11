@@ -843,8 +843,8 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
       const { rows: all, tempError } = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
       const rows = overdueList(all, tempOnly && !tempError)
       return (
-        <div key={piece} ref={overdueRef}>
-          <div className="section section-bar">
+        <div key={piece}>
+          <div className="section section-bar" ref={overdueRef}>
             {tempOnly ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
             <label className="dim"><input type="checkbox" checked={tempOnly} onChange={(e) => setTempOnly(e.target.checked)} disabled={!!tempError} /> Temp only</label>
           </div>
