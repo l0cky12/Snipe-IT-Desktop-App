@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createSettingsStore } from './config'
+import { RANGED_REPORTS, REPORTS, takesRange } from './snipeit'
 
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
@@ -193,6 +194,17 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   expect(relaunched.schedules()).toEqual([])
 })
 
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts', () => {
+  const { store } = setup()
+  for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
+  const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited'])
+  expect(ranged).toEqual(RANGED_REPORTS)
+  // The Schedule form shows the range choice by the same rule.
+  expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
+  expect(takesRange({ saved: 'x' })).toBe(false)
+})
+
 it('refuses a schedule it could not keep', () => {
   const { store } = setup()
   for (const [schedule, message] of [
@@ -218,4 +230,16 @@ it('keeps running in the tray and starting at login off until turned on, and kee
   expect(relaunched.get()).toMatchObject({ hasToken: true, background: { tray: true, startAtLogin: true } })
   expect(relaunched.saveBackground({ tray: false, startAtLogin: true }).background).toEqual({ tray: false, startAtLogin: true })
   expect(() => store.saveBackground({ tray: 'yes', startAtLogin: false } as never)).toThrow('Invalid')
+})
+
+it('follows the system appearance until one is chosen, and keeps the choice across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().appearance).toBe('system')
+  store.save(input)
+  expect(store.saveAppearance('dark').appearance).toBe('dark')
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, appearance: 'dark' })
+  expect(relaunched.saveAppearance('light').appearance).toBe('light')
+  expect(relaunched.saveAppearance('system').appearance).toBe('system')
+  expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
 })

@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
-import { LIST_SORTS, REPORT_NAMES, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
+import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background }
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance }
 /** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
+/** Light or dark on this PC; system follows the OS. */
+export const APPEARANCES = ['system', 'light', 'dark'] as const
+export type Appearance = (typeof APPEARANCES)[number]
 /** ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted. */
 export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string }
 /** A blank password keeps the saved one, as long as the mail server's host and username are the same. */
@@ -22,6 +25,7 @@ export type SettingsApi = {
   clearToken(): Promise<Settings>
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
+  saveAppearance(input: Appearance): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
   testMail(input: MailInput): Promise<string>
   savedReports(): Promise<SavedReport[]>
@@ -42,7 +46,8 @@ export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
  * When a Report emails itself: every day, week (day: 0 Sunday to 6 Saturday) or month (day: 1 to 31, the month's last
  * day in a shorter month) at time ("HH:MM", local). range: a built-in Report's dates: the 1, 7 or 30 whole days before
  * the day it sends (so daily and weekly sends neither miss a day nor repeat one), or from the day of the last send. None
- * (and always for Warranty expiring, which looks ahead, and a Saved Report, whose List has no dates): all of it.
+ * (and always for a Report not in RANGED_REPORTS, such as Warranty expiring, which looks ahead, or a Saved Report, whose List
+ * has no dates): all of it. No Schedule keeps a Location or Category: an audit Report's send covers all of them.
  */
 export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since' }
 /** A scheduled send: when, and the rows it sent or why it failed. */
@@ -52,7 +57,7 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background }
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -138,7 +143,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF }
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system' }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -208,6 +213,11 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       write({ ...read(), background: { tray, startAtLogin } })
       return get()
     },
+    saveAppearance(appearance: Appearance) {
+      if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
+      write({ ...read(), appearance })
+      return get()
+    },
     savedReports,
     saveReport(input: SavedReportInput): SavedReport {
       const query = reportQuery(input)
@@ -239,7 +249,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
      * it can't skip a send that's just come due. Changing a schedule keeps its last send.
      */
     setSchedule(key: ScheduleKey, input: Schedule | null, since: Date) {
-      const schedule = input && checkSchedule(input, !!key && typeof key === 'object' && 'builtIn' in key && key.builtIn !== 'expiring')
+      const schedule = input && checkSchedule(input, takesRange(key))
       reschedule(key, (old) => schedule ? {
         ...schedule,
         since: old && old.every === schedule.every && old.day === schedule.day && old.time === schedule.time ? old.since : since.toISOString(),
