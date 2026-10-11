@@ -983,12 +983,6 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }))
   }
 
-  // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
-  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
-  // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
-  // Only the dashboard calls it (the End-of-day reminder and Automatic check-in through it). ponytail: the Out on temp View will too.
-  // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
-  // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   // The Activity Report newest first, a page at a time: the next page is asked for only when the caller reads on past this
   // one, so a caller that stops once it's past its start asks no further. Each page starts where the last one's rows ended:
   // a server may cap pages below PAGE_LIMIT.
@@ -1003,26 +997,26 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
   }
 
+  // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
+  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
+  // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
+  // Only the dashboard calls it (the End-of-day reminder and Automatic check-in through it). ponytail: the Out on temp View will too.
+  // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
+  // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
     const since = new Map(assets.flatMap((a) => (a.assignee && a.lastCheckout && a.expectedCheckin && a.expectedCheckin.length > 10 ? [[a.id, a.lastCheckout]] : [])))
     const temp = new Set<number>()
     if (!since.size) return temp
     const oldest = [...since.values()].sort()[0]
-    for (let offset = 0; ; ) {
-      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
-      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
-      if (isError(page)) throw new Error(reason(page.messages))
-      for (const r of page.rows) {
-        // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
-        const when = r.created_at?.datetime.slice(0, 16) ?? ''
-        if (when && when < oldest) return temp
-        const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
-        const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
-        if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
-      }
-      offset += page.rows.length
-      if (!page.rows.length || offset >= page.total) return temp
+    for await (const r of activityLog({ action_type: 'checkout', item_type: 'asset', search: 'Temp' })) {
+      // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
+      const when = r.created_at?.datetime.slice(0, 16) ?? ''
+      if (when && when < oldest) break
+      const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
+      const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
+      if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
     }
+    return temp
   }
 
   return {
@@ -1508,7 +1502,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             return s ? { id: s.id, name: s.name, type, color: label?.color ?? null } : { id: null, name: 'No Status Label', type, color: null }
           })
         }),
-        // The Activity Report's paging, counted here by week: Snipe-IT can't count its log by date.
+        // The Activity Report's paging, counted here by week: Snipe-IT can't count its log by date. ponytail: every load pages
+        // the whole year (about 20 requests at 10,000 Checkouts a year); keeping the past weeks between loads would cut it to one.
         entry('checkouts', async () => {
           const weeks = lastYearOfWeeks(now)
           const byMonday = new Map(weeks.map((w) => [w.week, w]))

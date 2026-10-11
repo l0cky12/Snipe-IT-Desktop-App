@@ -713,6 +713,8 @@ const pieceGroup: Record<DashboardPiece, Group> = {
   licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
   overdue: 'Tables', expiring: 'Tables',
 }
+// The Charts group's pieces: the Assets charts and Checkouts over time.
+type ChartsPiece = ChartPiece | 'checkouts'
 const chartColumn: Record<ChartPiece, string> = { assets: 'Status Label', categories: 'Category', locations: 'Location' }
 
 // Stored per computer: which pieces show, in what order (by group).
@@ -875,7 +877,7 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onReport, on
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
-  function chart(piece: ChartPiece | 'checkouts') {
+  function chart(piece: ChartsPiece) {
     if (piece === 'checkouts') {
       const entry = data.checkouts
       const openWeek = (week: string) => onReport(weekCheckouts(week))
@@ -1045,7 +1047,7 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onReport, on
           ))}
         </div>
       )}
-      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece | 'checkouts'))}</div>}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartsPiece))}</div>}
       {bars.length > 0 && (
         <section className="card inventory" aria-label="Inventory Chart">
           <header><h2>Inventory Chart</h2></header>

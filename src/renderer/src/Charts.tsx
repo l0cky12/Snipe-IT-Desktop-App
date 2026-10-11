@@ -168,16 +168,20 @@ const checkouts = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'Checkout' :
 export const weekRows = (weeks: Week[]): ChartRow<string>[] =>
   weeks.map((w, i) => ({ key: w.week, name: `${day.format(dateOf(w.week))}${i === weeks.length - 1 ? ' (so far)' : ''}`, count: w.count, color: 'var(--series-1)', drill: w.week }))
 
-const LM = { top: 18, right: 64, bottom: 28, left: 36 }
+const LINE_M = { top: 18, bottom: 28, left: 36 }
 
 /** Checkouts over time: one 2px line, a point per week, the current week dashed and labelled "so far", y from 0. A crosshair
  * tooltip gives the week and its count. One Tab stop: the arrow keys step weeks, Enter (or a click) opens the week. */
 export function WeekLine({ rows, onDrill }: { rows: ChartRow<string>[]; onDrill: (week: string) => void }) {
   const [ref, width] = useWidth()
   const [at, setAt] = useState<number | null>(null)
+  const [focused, setFocused] = useState(false)
   const last = rows.length - 1
-  const x = scaleLinear([0, last], [LM.left, Math.max(LM.left, width - LM.right)])
-  const y = scaleLinear([0, Math.max(1, ...rows.map((r) => r.count))], [H - LM.bottom, LM.top]).nice()
+  const end = `${rows[last].count.toLocaleString()} so far`
+  // Room at the right for the "so far" label, about 7px a character.
+  const right = 16 + end.length * 7
+  const x = scaleLinear([0, last], [LINE_M.left, Math.max(LINE_M.left, width - right)])
+  const y = scaleLinear([0, Math.max(1, ...rows.map((r) => r.count))], [H - LINE_M.bottom, LINE_M.top]).nice()
   const points = rows.map((r, i): [number, number] => [x(i), y(r.count)])
   const path = line()
   // A month's name under its first week; every other month when narrow.
@@ -185,37 +189,37 @@ export function WeekLine({ rows, onDrill }: { rows: ChartRow<string>[]; onDrill:
   const step = (by: number) => setAt((i) => Math.min(last, Math.max(0, (i ?? last) + by)))
   const open = (i: number | null) => i !== null && rows[i].drill && onDrill(rows[i].drill!)
   const keys: Record<string, () => void> = {
-    ArrowLeft: () => step(-1), ArrowRight: () => step(1), Home: () => setAt(0), End: () => setAt(last), Enter: () => open(at),
+    ArrowLeft: () => step(-1), ArrowRight: () => step(1), Home: () => setAt(0), End: () => setAt(last), Enter: () => open(at), ' ': () => open(at),
   }
   const shown = at === null ? null : rows[at]
   return (
     <div ref={ref} className="week-line" tabIndex={0} role="group"
       aria-label="Asset Checkouts per week. Left and Right arrows step through the weeks; Enter opens the week in the Activity Report."
-      onFocus={() => setAt((i) => i ?? last)} onBlur={() => setAt(null)}
+      onFocus={() => (setFocused(true), setAt((i) => i ?? last))} onBlur={() => (setFocused(false), setAt(null))}
       onKeyDown={(e) => { if (keys[e.key]) e.preventDefault(), keys[e.key]() }}>
       {width > 0 && (
-        <svg width={width} height={H} onClick={() => open(at)} onPointerLeave={() => document.activeElement !== ref.current && setAt(null)}
+        <svg width={width} height={H} onClick={() => open(at)} onPointerLeave={() => !focused && setAt(null)}
           onPointerMove={(e) => setAt(Math.min(last, Math.max(0, Math.round(x.invert(e.clientX - e.currentTarget.getBoundingClientRect().left)))))}>
           {y.ticks(4).map((t) => (
             <g key={t} className="tick">
-              <line x1={LM.left} x2={width - LM.right} y1={y(t)} y2={y(t)} />
-              <text x={LM.left - 6} y={y(t)} dy="0.32em">{compact.format(t)}</text>
+              <line x1={LINE_M.left} x2={x(last)} y1={y(t)} y2={y(t)} />
+              <text x={LINE_M.left - 6} y={y(t)} dy="0.32em">{compact.format(t)}</text>
             </g>
           ))}
-          {months.map((i) => <text key={i} className="month" x={x(i)} y={H - LM.bottom + 18}>{month.format(dateOf(rows[i].key))}</text>)}
+          {months.map((i) => <text key={i} className="month" x={x(i)} y={H - LINE_M.bottom + 18}>{month.format(dateOf(rows[i].key))}</text>)}
           <path className="line" d={path(points.slice(0, -1)) ?? ''} />
           <path className="line so-far" d={path(points.slice(-2)) ?? ''} />
-          <text className="end" x={x(last) + 8} y={y(rows[last].count)} dy="0.32em">{rows[last].count.toLocaleString()} so far</text>
+          <text className="end" x={x(last) + 8} y={y(rows[last].count)} dy="0.32em">{end}</text>
           {shown && (
             <g className="crosshair">
-              <line x1={x(at!)} x2={x(at!)} y1={LM.top} y2={H - LM.bottom} />
+              <line x1={x(at!)} x2={x(at!)} y1={LINE_M.top} y2={H - LINE_M.bottom} />
               <circle cx={x(at!)} cy={y(shown.count)} r="4" />
             </g>
           )}
         </svg>
       )}
-      {/* Always in the page, so a screen reader hears each week as the arrow keys step to it. */}
-      <div className="tip" role="status" aria-live="polite" hidden={!shown}
+      {/* Always in the page, so a screen reader hears each week as the arrow keys step to it (but not each pointer move). */}
+      <div className="tip" role="status" aria-live={focused ? 'polite' : 'off'} hidden={!shown}
         style={shown ? at! > last / 2 ? { right: width - x(at!) + 10 } : { left: x(at!) + 10 } : undefined}>
         {shown && <><b>{checkouts(shown.count)}</b><span>Week of {shown.name}</span></>}
       </div>
