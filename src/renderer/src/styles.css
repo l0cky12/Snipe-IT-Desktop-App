@@ -53,14 +53,16 @@ button, input, select { font-family: inherit; }
 .find, .nav { all: unset; box-sizing: border-box; display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
 .find { gap: 8px; flex: none; margin-bottom: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--dim); }
 .find:hover { border-color: var(--dim); }
-.nav { position: relative; flex: none; gap: 9px; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
+.nav { position: relative; flex: none; gap: 9px; white-space: nowrap; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
 .nav svg { flex: none; }
 .nav:hover:not(:disabled), .nav:focus-visible { background: var(--hover); color: var(--text); }
 .nav.sel { background: var(--hover); color: var(--text); font-weight: 600; }
 .nav.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
 .nav:disabled { opacity: .45; cursor: default; }
 /* Key hints. */
-.find kbd { margin-left: auto; }
+.find kbd, .nav kbd { margin-left: auto; }
+/* A Workflow, listed under the Workflows item. */
+.nav.sub { padding-left: 20px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
 .settings-nav { margin-top: auto; }
@@ -146,6 +148,11 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .codes .dim { margin: 0; max-width: 220px; text-align: center; }
 .section { padding: 18px 28px 6px; font: 600 16px var(--sans); color: var(--text); }
 .rail .section { font-size: 15px; }
+/* A section title with its own controls beside it (the dashboard Overdue list's Temp only). */
+/* Scrolled to, it clears the sticky page header. */
+.section-bar { display: flex; align-items: baseline; gap: 16px; scroll-margin-top: 80px; }
+.section-bar label { display: inline-flex; align-items: center; gap: 6px; font: 400 13px var(--sans); cursor: pointer; }
+.history .flag { margin-left: 8px; }
 
 /* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
 .history { border-collapse: collapse; width: 100%; }
@@ -265,9 +272,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* Cards: --bg, a 1px --line border, 8px corners, no shadow. */
 .settings-section, .settings-about { padding: 12px 16px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
 .settings-page label { display: block; font: 600 12px var(--sans); color: var(--dim); margin: 12px 0 6px; }
-.settings-page input, .settings-page select, .settings-page button { min-height: 28px; font: 13px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 0 10px; transition: border-color var(--fast); }
-.settings-page input, .settings-page select { width: 100%; min-width: 0; }
-.settings-page input:focus, .settings-page select:focus { border-color: var(--mark); }
+.settings-page input, .settings-page select, .settings-page textarea, .settings-page button { min-height: 28px; font: 13px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 0 10px; transition: border-color var(--fast); }
+.settings-page input, .settings-page select, .settings-page textarea { width: 100%; min-width: 0; }
+.settings-page textarea { font-family: var(--mono); resize: vertical; padding: 6px 10px; }
+.settings-page input:focus, .settings-page select:focus, .settings-page textarea:focus { border-color: var(--mark); }
 .settings-page button { cursor: pointer; white-space: nowrap; font: 500 12.5px var(--sans); background: var(--bg); }
 .settings-page button:hover:not(:disabled) { border-color: var(--primary); }
 .settings-page :disabled { opacity: .5; cursor: default; }
@@ -278,6 +286,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font: 500 13px var(--sans); color: var(--text); }
 .settings-page .check input { flex: none; width: 14px; height: 14px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
 .settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
+.settings-page .check .inline-time { display: inline-block; width: auto; height: auto; min-height: 28px; margin: -6px 0 0 6px; padding: 0 10px; cursor: text; }
 .settings-footer { display: flex; align-items: center; gap: 16px; padding: 20px 4px; font-size: 13px; }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
@@ -333,7 +342,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick button { height: 24px; font: 500 12.5px var(--sans); padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
-.list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
+:is(.list-table, .history) .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
 .pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
@@ -396,3 +405,45 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .saved-reports .history td { vertical-align: middle; }
 /* A Report's schedule and last send, or the form changing it. */
 .schedule { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; white-space: normal; }
+
+/* Workflows: the page of cards, and a Workflow's field, Running list and Keys panel. */
+.workflow-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 20px 28px; }
+.workflow-card { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                 color: var(--text); font: 13px var(--sans); cursor: pointer; transition: border-color var(--fast); }
+.workflow-card:hover, .workflow-card:focus-visible { border-color: var(--primary); }
+.card-title { display: flex; align-items: center; gap: 8px; font: 600 14px var(--sans); }
+.card-title kbd { margin-left: auto; }
+.workflow { display: grid; grid-template-columns: minmax(0, 1fr) 248px; min-height: 100%; }
+.workflow-field { padding: 16px 28px 0; }
+.workflow-field .search { width: 100%; padding-left: 12px; }
+.workflow-field .message { min-height: 1.4em; }
+.undo-confirm { margin: 4px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--mark); }
+.pick-list { list-style: none; margin: 8px 28px; padding: 0; max-width: 480px; }
+.pick-list li { display: flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 6px; cursor: pointer; }
+.pick-list li:hover { background: var(--hover); }
+.pick-list li.sel { background: var(--hover); font-weight: 600; box-shadow: inset 3px 0 0 var(--mark); }
+.running-head { display: flex; align-items: center; justify-content: space-between; }
+.running td { white-space: nowrap; }
+.running td:last-child { white-space: normal; }
+.running tbody tr:first-child { background: var(--selrow); }
+/* A refused or failed row: a red edge, and the reason in words. */
+.running tr.failed td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+.keys { border-left: 1px solid var(--line); padding: 16px; }
+.keys h2 { margin: 0 0 10px; font: 600 12px var(--sans); color: var(--dim); }
+.keys dl { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.keys dl div { display: flex; align-items: center; gap: 8px; }
+.keys dt { min-width: 64px; }
+.keys dd { margin: 0; }
+.keys p { margin: 14px 0 0; font-size: 12px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Bulk checkout's confirm: in place under the field, saying exactly what will be written. */
+.scan-confirm { margin: 4px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--mark); display: flex; flex-direction: column; gap: 6px; }
+.scan-confirm p { margin: 0; }
+.confirm-tag { font-size: 22px; font-weight: 700; }
+.confirm-facts { display: grid; grid-template-columns: repeat(4, minmax(0, auto)); justify-content: start; gap: 4px 24px; margin: 0; }
+.confirm-facts dt { font-size: 12px; color: var(--dim); }
+.confirm-facts dd { margin: 0; }
+.options { margin: 8px 28px; }
+.options summary { cursor: pointer; }
+.options .actions { margin-top: 8px; }
+.running tr.line td { border-top: 1px solid var(--line); }

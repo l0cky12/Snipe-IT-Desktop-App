@@ -1,6 +1,9 @@
+import { parseWorkflowNote } from './notes'
+
 export type Config = { baseUrl: string; apiKey: string }
 
-export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string }
+/** username, employeeNum: a User Assignee's, when Snipe-IT sends them (only to a key that may view Users). */
+export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string; username?: string; employeeNum?: string }
 
 export type Asset = {
   id: number
@@ -12,21 +15,31 @@ export type Asset = {
   statusId: number | null
   /** Snipe-IT's status_meta: deployed, deployable, pending, archived, undeployable */
   statusMeta: string
+  /** The Status Label's own type (status_type): deployable, pending, archived, undeployable. Unlike status_meta, which
+   *  says 'deployed' for any checked-out Asset, it still shows a Pending or Broken label on one that's out. */
+  statusType: string
   assignee: Assignee | null
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
   location: string
+  /** The Location's id, so an undo can put it back */
+  locationId: number | null
+  /** Where Snipe-IT puts the Asset on a Checkin with no Location (its rtd_location); '' when it has none */
+  defaultLocation: string
   category: string
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
+  /** When its current Checkout was made, "YYYY-MM-DD HH:MM"; null when Snipe-IT doesn't say */
+  lastCheckout: string | null
   /** The date of the Asset's last Audit, or null when it has never been Audited */
   lastAudited: string | null
   /** The date Snipe-IT expects its next Audit, or null when it has none */
   nextAudit: string | null
-  /** Days past the Expected Checkin, or null when not Overdue */
-  overdueDays: number | null
+  /** How late, or null when not Overdue */
+  overdue: Lateness | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
   /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
@@ -55,11 +68,26 @@ export type StatusLabel = { id: number; name: string }
 
 export type CheckinOptions = { statusId?: number; locationId?: number; note?: string }
 
+/** The User a Workflow's first step found, for its header. assets: how many Assets they hold. */
+export type UserCard = { id: number; name: string; username: string; employeeNum: string; assets: number }
+
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
 
-/** Checkout targets are Users and Locations only; Asset-to-Asset isn't supported. expectedCheckin is "YYYY-MM-DD". */
-export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
+/**
+ * How late an Overdue Asset is: whole days past its Expected Checkin's date (0 on the due day, once its time of day has
+ * passed), and minutes past the moment it became Overdue, which lists sort by.
+ */
+export type Lateness = { days: number; minutes: number }
+
+/** How late, for display: "40 min" or "2 h" on the due day, "3d" after it. */
+export const lateness = ({ days, minutes }: Lateness) =>
+  days ? `${days}d` : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
+
+/** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
+ *  must be deployable). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
+export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; expectedCheckin?: string; note?: string }
+const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
@@ -167,13 +195,22 @@ export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
     assets: StatusTally[]; categories: Tally[]; locations: Tally[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
-    overdue: (AssetSummary & { overdueDays: number })[]
+    overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
   }[K]
 }
 
+/** An Overdue Asset on the dashboard; temp when it's an outstanding Temp checkout. Whole, so its Checkin Quick Action can run. */
+export type OverdueRow = Asset & { expectedCheckin: string; overdue: Lateness; temp: boolean }
+/** The dashboard Overdue list, or only its Temp checkouts (Health warning 5 counts that). */
+export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly ? rows.filter((r) => r.temp) : rows)
+/** The Overdue list's Temp checkouts, most late first, or why they can't be told apart; undefined until it has loaded. */
+export const overdueTemp = (overdue?: Dashboard['overdue']): OverdueRow[] | Failed | undefined =>
+  !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true)
+
 /**
- * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
+ * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
+ * dashboard's Overdue list instead). probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
  * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
  */
@@ -186,22 +223,26 @@ export type Health = {
 export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
   | { warning: 'tooOld'; version: string }
-  | { warning: 'auditLate' | 'auditDue'; count: number }
-  | { warning: 'tooOld' | 'auditLate' | 'auditDue'; error: string }
+  | { warning: 'auditLate' | 'auditDue' | 'temp'; count: number }
+  | { warning: 'tooOld' | 'auditLate' | 'auditDue' | 'temp'; error: string }
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
-/** The strip's lines, in order: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
-export function healthLines({ probe, auditLate, auditDue }: Health): HealthLine[] {
+/**
+ * The strip's lines, red then amber: none at 0. Snipe-IT unreachable or the key failing shows only that line.
+ * Temp checkouts Overdue counts the dashboard's Overdue list (none until it has loaded).
+ */
+export function healthLines({ probe, auditLate, auditDue }: Health, overdue?: Dashboard['overdue']): HealthLine[] {
   if ('warning' in probe) return [probe]
   const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
   const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
     : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
     : older ? [{ warning: 'tooOld', version: probe.version }] : []
-  const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
-    typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue)]
+  const total = (warning: 'auditLate' | 'auditDue' | 'temp', t: number | Failed | undefined): HealthLine[] =>
+    t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
+  const temp = overdueTemp(overdue)
+  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', Array.isArray(temp) ? temp.length : temp), ...total('auditDue', auditDue)]
 }
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
@@ -223,9 +264,10 @@ export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
- * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports. search: Snipe-IT's own search
+ * of the Activity Report (notes, among other things).
  */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
@@ -320,8 +362,8 @@ export function fromWire(message: string): Failure {
 }
 
 export type SnipeIt = ReturnType<typeof createSnipeIt>
-/** What the screen can call: labelPdf only the main process uses, to print Labels. */
-export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
+/** What the screen can call: labelPdf (to print Labels) and automaticCheckin only the main process uses. */
+export type SnipeItBridge = Omit<SnipeIt, 'labelPdf' | 'automaticCheckin'>
 
 type SnipeItError = { status: 'error'; messages: unknown }
 type Named = { id: number; name: string } | null
@@ -331,13 +373,16 @@ type RawAsset = {
   name: string | null
   serial: string | null
   model: Named
-  status_label: { id: number; name: string; status_meta: string } | null
+  status_label: { id: number; name: string; status_meta: string; status_type?: string } | null
   category: Named
   location: Named
-  assigned_to: { id: number; name: string; type: Assignee['type'] } | null
+  rtd_location: Named
+  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
-  expected_checkin: { date: string } | null
+  // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
+  expected_checkin: { date?: string; datetime?: string } | null
+  last_checkout?: { date?: string; datetime?: string } | null
   // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
   last_audit_date?: { date?: string; datetime?: string } | null
   next_audit_date?: { date?: string; datetime?: string } | null
@@ -465,11 +510,28 @@ export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, ca
 
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day.
+// ponytail: 00:00 means date-only, so a real midnight due time is Overdue only from the next day; no Workflow sets one.
+function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
+  const when = v?.datetime ?? v?.date
+  if (!when) return null
+  const time = when.slice(11, 16)
+  return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
+}
+
+// How late an Expected Checkin is, or null until it has passed: its time of day when it has one, else the last moment of its date.
+// A started minute counts as 1, so an Asset just past due reads "1 min", never "0 min".
+function overdueOf(now: Date, due: string): Lateness | null {
+  const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
+  const at = due.length > 10 ? new Date(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d + 1, 0, 0, 0, -1)
+  const ms = now.getTime() - at.getTime()
+  if (ms <= 0) return null
+  return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.max(1, Math.floor(ms / 6e4)) } // || 0: not -0
+}
 
 function toAsset(raw: RawAsset, today: Date): Asset {
-  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
-  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
   const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
@@ -479,17 +541,24 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     status: raw.status_label?.name ?? '',
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
-    assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
+    statusType: raw.status_label?.status_type ?? '',
+    assignee: raw.assigned_to && {
+      type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name,
+      username: raw.assigned_to.username || undefined, employeeNum: raw.assigned_to.employee_number || undefined,
+    },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
+    locationId: raw.location?.id ?? null,
+    defaultLocation: raw.rtd_location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
     warrantyEnd,
     expectedCheckin,
+    lastCheckout: (raw.last_checkout?.datetime ?? raw.last_checkout?.date)?.slice(0, 16) || null,
     lastAudited: dayOf(raw.last_audit_date),
     nextAudit: dayOf(raw.next_audit_date),
-    overdueDays: overdue > 0 ? overdue : null,
+    overdue: expectedCheckin && raw.assigned_to ? overdueOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
@@ -527,7 +596,8 @@ const toImportFile = (r: RawImport): ImportFile => ({
   headers: strings(r.header_row), firstRow: strings(r.first_row),
   mapping: r.field_map && typeof r.field_map === 'object' ? Object.fromEntries(Object.entries(r.field_map).filter(([, f]) => typeof f === 'string')) : {},
 })
-type RawUser = { id: number; name: string; username: string | null; email: string | null; department: Named; location: Named; assets_count: number | null }
+type RawUser = { id: number; name: string; username: string | null; email: string | null; employee_num?: string | null; department: Named; location: Named; assets_count: number | null }
+const toUserCard = (r: RawUser): UserCard => ({ id: r.id, name: r.name, username: r.username ?? '', employeeNum: r.employee_num ?? '', assets: r.assets_count ?? 0 })
 type RawLocation = { id: number; name: string; parent: Named; city: string | null; assets_count: number | null; assigned_assets_count: number | null; users_count: number | null }
 type RawModel = { id: number; name: string; model_number: string | null; manufacturer: Named; category: Named; assets_count: number | null; remaining?: number | null }
 
@@ -554,8 +624,8 @@ export const LIST_SORTS = {
 } satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
 
 // Snipe-IT action_type values the Activity Report can be filtered by.
-// Not item_type: Snipe-IT only applies it together with one item_id.
-export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
+// Not item_type: Snipe-IT only applies it together with one item_id. Repair intake and Incoming repair write `note added` on an Asset.
+export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit', 'note added'] as const
 const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note']
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
@@ -657,11 +727,14 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
-// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
-  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
+  if (typeof v === 'object') {
+    const o = v as { id?: unknown; date?: unknown; datetime?: unknown }
+    return String(o.id ?? o.date ?? (typeof o.datetime === 'string' ? o.datetime.slice(0, 10) : ''))
+  }
   // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
   // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
   if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
@@ -772,6 +845,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
+
+  // The Asset with exactly this Asset Tag, or null; no search fallback, so a Workflow scan never acts on a near match.
+  async function assetByTag(tag: string): Promise<Asset | null> {
+    if (typeof tag !== 'string' || !tag) throw new Error('Invalid Asset Tag')
+    const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
+    // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
+    return isError(body) ? null : toAsset(body, today())
+  }
 
   // ponytail: pages through a whole list and counts in the app; fine under ~5k rows (~10 requests). Users may be the largest list.
   // Past that, ask Snipe-IT for counts instead (e.g. limit=1 and read `total` per status or filter).
@@ -889,6 +970,34 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }))
   }
 
+  // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
+  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
+  // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
+  // Only the dashboard calls it (the End-of-day reminder and Automatic check-in through it). ponytail: the Out on temp View will too.
+  // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
+  // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
+  async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
+    const since = new Map(assets.flatMap((a) => (a.assignee && a.lastCheckout && a.expectedCheckin && a.expectedCheckin.length > 10 ? [[a.id, a.lastCheckout]] : [])))
+    const temp = new Set<number>()
+    if (!since.size) return temp
+    const oldest = [...since.values()].sort()[0]
+    for (let offset = 0; ; ) {
+      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
+      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      for (const r of page.rows) {
+        // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
+        const when = r.created_at?.datetime.slice(0, 16) ?? ''
+        if (when && when < oldest) return temp
+        const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
+        const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
+        if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
+      }
+      offset += page.rows.length
+      if (!page.rows.length || offset >= page.total) return temp
+    }
+  }
+
   return {
     async testConnection(): Promise<{ version: string }> {
       const user = await request<{ id: number }>('/users/me')
@@ -908,12 +1017,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async locations(): Promise<StatusLabel[]> {
       return (await allRows<StatusLabel>('/locations')).map(({ id, name }) => ({ id, name }))
     },
+    assetByTag,
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
       if (!tag) return { exact: false, assets: [], others: [] }
-      const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
-      // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
-      if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
+      const exact = await assetByTag(tag)
+      if (exact) return { exact: true, assets: [exact] }
       // Snipe-IT's search covers an Asset's fields, related names (Asset Model, Assignee, Location…), notes and
       // unencrypted custom fields. The other kinds are searched alongside; one the key can't read says so without hiding the rest.
       const [found, ...others] = await Promise.all([
@@ -985,19 +1094,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
     // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited is every Asset.
-    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId }: ReportQuery = {}): Promise<Report> {
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
       for (const [id, what] of [[locationId, 'Location'], [categoryId, 'Category']]) if (id !== undefined && id !== '' && !/^[1-9]\d*$/.test(String(id))) throw new Error(`Invalid ${what} id: ${id}`)
+      if (search !== undefined && typeof search !== 'string') throw new Error('Invalid search')
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
         // Each page starts where the last one's rows ended: a server may cap pages below PAGE_LIMIT.
         for (let offset = 0; ; ) {
-          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }) })
+          const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })
           const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
           if (isError(page)) throw new Error(reason(page.messages))
           for (const r of page.rows) {
@@ -1044,9 +1154,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {
-          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
-            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
+          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],
+          rows: assets.filter((a) => a.overdue !== null && inRange(a.expectedCheckin!.slice(0, 10))).sort((a, b) => b.overdue!.minutes - a.overdue!.minutes)
+            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, lateness(a.overdue!)]),
           capped: false,
         }
       return {
@@ -1235,21 +1345,54 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     searchUsers: (text: string) => searchTargets('users', text),
+
+    // A Workflow's exact User match on Enter (#57): a whole employee number (all digits, e.g. a scanned ID card) or an
+    // email first, then a username. Only rows whose field really is the text count, whatever the server's filter does.
+    async exactUsers(text: string): Promise<UserCard[]> {
+      const q = String(text).trim()
+      if (!q) return []
+      const fields: ('employee_num' | 'email' | 'username')[] = [...(/^\d+$/.test(q) ? ['employee_num' as const] : q.includes('@') ? ['email' as const] : []), 'username']
+      for (const field of fields) {
+        const body = await request<{ rows: RawUser[] }>(`/users?${field}=${encodeURIComponent(q)}&limit=2`)
+        if (isError(body)) throw new Error(reason(body.messages))
+        const rows = body.rows.filter((r) => String(r[field] ?? '').toLowerCase() === q.toLowerCase())
+        if (rows.length) return rows.map(toUserCard)
+      }
+      return []
+    },
+    // Snipe-IT's User picker (Users only): each row's text tells namesakes apart, "name (username) - #employee number".
+    async userSelectlist(text: string): Promise<StatusLabel[]> {
+      const q = String(text).trim()
+      if (!q) return []
+      const body = await request<{ results: { id: number; text: string }[] }>(`/users/selectlist?search=${encodeURIComponent(q)}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.results.map((r) => ({ id: r.id, name: r.text }))
+    },
+    async userCard(id: number): Promise<UserCard> {
+      checkId(id, 'User')
+      const body = await request<RawUser>(`/users/${id}`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return toUserCard(body)
+    },
     searchLocations: (text: string) => searchTargets('locations', text),
 
-    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent.
-    async checkout(id: number, { targetType, targetId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
-      if (targetType !== 'user' && targetType !== 'location') throw new Error('An Asset can only be checked out to a User or a Location.')
-      checkId(targetId, targetType === 'user' ? 'User' : 'Location')
+    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
+    // unless another is given (Snipe-IT accepts only a deployable one).
+    async checkout(id: number, { targetType, targetId, statusId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
+      if (!Object.hasOwn(TARGET_NAME, targetType)) throw new Error('An Asset can only be checked out to a User, a Location or another Asset.')
+      checkId(targetId, TARGET_NAME[targetType])
+      if (statusId !== undefined) checkId(statusId, 'status')
+      if (expectedCheckin && !/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(expectedCheckin)) throw new Error(`Expected Checkin must be YYYY-MM-DD or YYYY-MM-DD HH:MM, not ${expectedCheckin}`)
       const body = await current(id)
       if (body.assigned_to) throw new Error(`${body.asset_tag} is already checked out to ${body.assigned_to.name}. Check it in first.`)
       if (body.status_label?.status_meta !== 'deployable')
         throw new Error(`${body.asset_tag} is "${body.status_label?.name ?? 'no status'}", which can't be checked out.`)
       const result = await request(`/hardware/${id}/checkout`, {
-        status_id: body.status_label.id,
+        status_id: statusId ?? body.status_label.id,
         checkout_to_type: targetType,
         [`assigned_${targetType}`]: targetId,
-        ...(expectedCheckin && { expected_checkin: expectedCheckin }),
+        // A time of day goes as YYYY-MM-DD HH:MM:00, which Snipe-IT reads in the server's timezone (also Central, #61 §1).
+        ...(expectedCheckin && { expected_checkin: expectedCheckin.length > 10 ? `${expectedCheckin}:00` : expectedCheckin }),
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))
@@ -1266,6 +1409,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // Automatic check-in's Checkin (#62 §8), main process only: just the note, no Status Label (it stays as it was) and no
+    // Location (Snipe-IT's Default Location). Only while the Asset is still Overdue on the Checkout made at `checkout` (its
+    // last_checkout, "YYYY-MM-DD HH:MM"); otherwise it's skipped (false), so several Operators' apps don't collide.
+    async automaticCheckin(id: number, checkout: string, note: string): Promise<boolean> {
+      const a = toAsset(await current(id), today())
+      if (!a.assignee || a.lastCheckout !== checkout || !a.overdue) return false
+      const result = await request(`/hardware/${id}/checkin`, { note })
+      if (isError(result)) throw new Error(reason(result.messages))
+      return true
     },
 
     // The Health warnings' checks: three small requests at once, each failing on its own. Runs on open and Refresh only.
@@ -1336,9 +1490,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
-        entry('overdue', async () => (await assets!)
-          .flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
-          .sort((a, b) => b.overdueDays - a.overdueDays)),
+        // The Temp marks failing (say a 403 on the Activity Report) leaves the list, unmarked, with the reason.
+        entry('overdue', async () => {
+          const list = await assets!
+          const temp = await outstandingTemp(list).catch((e: Error) => e)
+          const rows = list
+            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue, temp: temp instanceof Set && temp.has(a.id) }]))
+            .sort((a, b) => b.overdue.minutes - a.overdue.minutes)
+          return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
+        }),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),

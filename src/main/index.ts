@@ -3,10 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
+import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt, toWire } from './snipeit'
+import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
 
 // The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
@@ -97,6 +98,8 @@ app.whenReady().then(() => {
     return saved
   })
   handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
+  handle('settings:saveTempCheckout', (_e, input: TempCheckout) => store.saveTempCheckout(input))
+  handle('settings:saveSchoolCalendar', (_e, text: string) => store.saveSchoolCalendar(text))
   handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()
@@ -134,8 +137,50 @@ app.whenReady().then(() => {
     },
   })
   handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
-  // At launch, sending what came due while the app was closed, then every minute.
-  const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+  // Kept, so their clicks still open the window after the notifications would otherwise be garbage collected.
+  let reminderNote: Notification | null = null
+  let automaticNote: Notification | null = null
+  // Even with the window open: at the end of the day it may be behind other windows.
+  const notify = ({ title, body }: { title: string; body: string }, click: () => void) => {
+    if (!Notification.isSupported()) return null
+    const note = new Notification({ title, body })
+    note.on('click', () => { show(); click() })
+    note.show()
+    return note
+  }
+  // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+  // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
+  const outstanding = async () => {
+    const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
+    if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+    return temp
+  }
+  const reminder = createEndOfDayReminder({
+    now: () => new Date(),
+    settings: store.get,
+    lastShown: store.lastReminder,
+    recordShown: store.recordReminder,
+    outstanding: async () => (await outstanding()).map((a) => a.assetTag),
+    notify: (text) => { reminderNote = notify(text, () => win.webContents.send('reminder:open')) },
+  })
+  const automatic = createAutomaticCheckin({
+    now: () => new Date(),
+    settings: store.get,
+    lastRan: store.lastAutomatic,
+    recordRan: store.recordAutomatic,
+    outstanding,
+    checkin: (id, checkout, note) => client().automaticCheckin(id, checkout, note),
+    // Opens the Activity Report on that day's automatic check-ins.
+    notify: (text, day) => { automaticNote = notify(text, () => win.webContents.send('automatic:open', day)) },
+    log: (message) => console.error('Automatic check-in:', message),
+  })
+  // At launch, sending what came due while the app was closed (and today's End-of-day reminder and Automatic check-in if
+  // their times have passed), then every minute.
+  const tick = () => {
+    scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+    reminder.tick().catch((e: Error) => console.error('End-of-day reminder:', e.message))
+    automatic.tick().catch((e: Error) => console.error('Automatic check-in:', e.message))
+  }
   tick()
   setInterval(tick, 60_000)
   handle('settings:saveBackground', (_e, input: Background) => {
@@ -150,7 +195,7 @@ app.whenReady().then(() => {
   })
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {

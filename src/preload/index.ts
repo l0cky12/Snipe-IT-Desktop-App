@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
+import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -16,10 +17,14 @@ const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
+  assetByTag: call('snipeit:assetByTag'),
   lookup: call('snipeit:lookup'),
   getAsset: call('snipeit:getAsset'),
   statusLabels: call('snipeit:statusLabels'),
   searchUsers: call('snipeit:searchUsers'),
+  exactUsers: call('snipeit:exactUsers'),
+  userSelectlist: call('snipeit:userSelectlist'),
+  userCard: call('snipeit:userCard'),
   searchLocations: call('snipeit:searchLocations'),
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
@@ -55,9 +60,24 @@ contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
   saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'),
+  saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }
 contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const reminder: ReminderApi = {
+  onOpen(listener) {
+    const opened = () => listener()
+    ipcRenderer.on('reminder:open', opened)
+    return () => void ipcRenderer.removeListener('reminder:open', opened)
+  },
+  onAutomatic(listener) {
+    const opened = (_e: unknown, day: string) => listener(day)
+    ipcRenderer.on('automatic:open', opened)
+    return () => void ipcRenderer.removeListener('automatic:open', opened)
+  },
+}
+contextBridge.exposeInMainWorld('reminder', reminder)

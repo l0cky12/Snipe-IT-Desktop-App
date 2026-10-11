@@ -1,18 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { END_OF_DAY } from '../../main/calendar'
+import { WORKFLOWS, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
-import { ReportsView } from './ReportsView'
+import { automaticCheckins, ReportsView, type ReportStart } from './ReportsView'
 import { ImportView } from './ImportView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
 import { Bars, ChartCard, Donut, chartRows, type ChartPiece } from './Charts'
+import { createBulkCheckout, createBulkReturn, createTempCheckout, NOT_ALLOWED } from './workflows'
+import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -30,17 +34,25 @@ export const StatusChip = ({ asset }: { asset: AssetSummary }) => (
 export const statusChoices = (labels: StatusLabel[], a: Asset) =>
   labels.some((l) => l.id === a.statusId) || a.statusId === null ? labels : [{ id: a.statusId, name: a.status }, ...labels]
 
-// Why an action is off when Snipe-IT says the Operator's key may not do it.
-export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
+export { NOT_ALLOWED }
 // Why an Asset's Checkin / Checkout button is disabled (its title), or undefined when it may go ahead.
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
 
-// Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
+// Where a keydown goes. 'panel': the Scan/Search panel opens and takes it, for Ctrl+K from anywhere or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
-export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
-  !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
+// On a Workflow page that character goes to the Workflow's field instead. A Workflow: Ctrl+1–5 from anywhere, in
+// glossary order. null: the key keeps its usual job.
+export function routeKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean, onWorkflow = false): 'panel' | 'workflow field' | Workflow | null {
+  if (e.altKey || e.metaKey) return null
+  if (e.ctrlKey) return e.key.toLowerCase() === 'k' ? 'panel' : /^[1-5]$/.test(e.key) ? WORKFLOWS[Number(e.key) - 1] : null
+  return inField || e.key.length !== 1 || e.key === ' ' ? null : onWorkflow ? 'workflow field' : 'panel'
+}
+
+// Only another server (or logging out) starts the session over; saving Email, Background or a new key for the same
+// server keeps the Workflows, Bulk Action results and the open List.
+export const startsOver = (before: Settings | null, after: Settings) => !before || before.baseUrl !== after.baseUrl || !after.hasToken
 
 // Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
 const PANEL_KEY = 'scanPanelOpen'
@@ -59,7 +71,9 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+// reminderClick: opened from the End-of-day reminder, to the Overdue list with Temp only on; a new one each click.
+// start: Reports opened on a starting query (Automatic check-in's notification), a new one each click.
+type View = { page: 'dashboard'; reminderClick?: number } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports'; start?: ReportStart & { click: number } } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 
 export function App() {
@@ -87,6 +101,16 @@ export function App() {
   const bulkBusy = useRef(false)
   const bulkStop = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
+  // Each Workflow's step, queue and Running list, kept for the session (in memory only) so leaving one loses nothing.
+  const [, changed] = useReducer((n: number) => n + 1, 0)
+  const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
+  const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  // Temp checkout reads the end-of-day time and School calendar as saved now, at each scan.
+  const savedSettings = useRef<Settings | null>(null)
+  savedSettings.current = settings
+  const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
+    () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
+  const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
   // Whether the Operator's account has Snipe-IT's import permission; Import shows only once Snipe-IT says yes.
@@ -111,18 +135,39 @@ export function App() {
   // Discards any lookup or open still loading, so it can't pull the Operator off the page they chose.
   const cancel = () => (setBusy(0), ++latest.current)
 
+  const page = !showSettings && view?.page
+  const onWorkflow = page === 'workflow'
+  // Read by run(), whose closure may predate the page it finishes on.
+  const workflowShowing = useRef(onWorkflow)
+  workflowShowing.current = onWorkflow
+  // Straight in, skipping the Workflows page; from Settings too, like the sidebar. Rendered now, so its field takes focus
+  // even when the Workflow was already showing (e.g. Ctrl+K, then Ctrl+2 to carry on scanning).
+  function openWorkflow(workflow: Workflow) {
+    cancel()
+    flushSync(() => (setShowSettings(false), setView({ page: 'workflow', workflow })))
+    workflowField.current?.focus()
+  }
+
   useEffect(() => search.current?.focus(), [])
+  // The End-of-day reminder clicked: the dashboard's Overdue list with Temp only on, from wherever the Operator was.
+  useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', reminderClick: Date.now() }))), [])
+  // Automatic check-in's notification clicked: the Activity Report of that day's automatic check-ins.
+  useEffect(() => window.reminder.onAutomatic((day) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...automaticCheckins(day), click: Date.now() } }))), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inField = e.target instanceof Element && !!e.target.closest('input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]')
-      if (!opensPanel(e, inField)) return
-      // Ctrl+K is the app's; a scanned character goes on to the box once it has focus.
+      const to = routeKey(e, inField, onWorkflow)
+      if (!to) return
+      // Ctrl+K and Ctrl+1–5 are the app's; a typed character goes on to the box or field once it has focus.
       if (e.ctrlKey) e.preventDefault()
-      openPanel()
+      if (to === 'panel') openPanel()
+      else if (to === 'workflow field') workflowField.current?.focus()
+      // Unbuilt Workflows do nothing; nothing does until an API key is saved.
+      else if (settings?.hasToken && BUILT.includes(to)) openWorkflow(to)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [onWorkflow, settings?.hasToken])
   useEffect(() => {
     window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
@@ -140,7 +185,13 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
+    const over = startsOver(settings, value)
+    setSettings(value)
+    if (!over) return
+    bulkCheckout.reset()
+    bulkReturn.reset()
+    tempCheckout.reset()
+    cancel(); setAsset(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -155,7 +206,8 @@ export function App() {
       if (!isStale()) setMessage({ text: (err as Error).message, error: true })
     } finally {
       setBusy((b) => (b === mine ? 0 : b))
-      search.current?.focus()
+      // Not while a Workflow shows: its field keeps focus, so the next scan lands there.
+      if (!workflowShowing.current) search.current?.focus()
     }
   }
 
@@ -270,9 +322,11 @@ export function App() {
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
-  const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+
+  // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
+  const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending + tempCheckout.runner.pending
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -314,6 +368,14 @@ export function App() {
             <ListChecks size={18} />Batch
             {batch.length > 0 && <span className="badge">{batch.length}</span>}
           </button>
+          <button aria-label={`Workflows${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
+            <WorkflowsIcon size={18} />Workflows
+            {workflowsBusy > 0 && <span className="badge">{workflowsBusy}</span>}
+          </button>
+          {BUILT.map((w) => {
+            const Icon = workflowIcon[w]!
+            return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
+          })}
           <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
@@ -355,7 +417,10 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : w === 'Temp checkout' ? tempCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
+        : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -405,6 +470,9 @@ function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+// A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
+export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
+
 export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
@@ -435,7 +503,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         ))}
       </select>
       <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-        <option value="">Keep current Location</option>
+        <option value="">{defaultLocationChoice(a.defaultLocation)}</option>
         {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -555,7 +623,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
           <span className="sub">{a.model}</span>
         </h1>
         <StatusChip asset={a} />
-        {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
+        {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
         {a.warranty &&
           (a.warranty.expired ? (
             <span className="flag c-grey">Warranty expired</span>
@@ -691,16 +759,18 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 
 const healthName: Record<HealthLine['warning'], string> = {
   unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
+  temp: 'Temp checkouts Overdue',
 }
 // red: fix it now; amber: keep an eye on it.
-const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber' }
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', temp: 'red' }
 
 // The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
-function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
+function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly }: {
   health: { lines: HealthLine[]; at: string } | Failed | null
   onRetry: () => void
   onSettings: () => void
   onAssetView: (v: AssetView) => void
+  onTempOnly: () => void
 }) {
   if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
@@ -716,7 +786,10 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
         </span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
-    return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
+    if (l.warning === 'temp')
+      return <button className="link" onClick={onTempOnly}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Temp checkout is' : 'Temp checkouts are'} Overdue</button>
+    const view = l.warning
+    return <button className="link" onClick={() => onAssetView(view)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[view]}</button>
   }
   return (
     <section className="health" aria-label="Health warnings" aria-live="polite">
@@ -728,11 +801,16 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
 }
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
+// tempOnly: opens with the Overdue list's Temp only on (the End-of-day reminder was clicked).
+function DashboardView({ tempOnly: openedTempOnly, onPick, onDrill, onAssetView, onSettings, statusLabels, locations, defaultLocation }: {
+  tempOnly: boolean
   onPick: (id: number) => void
   onDrill: (d: Drill) => void
   onAssetView: (v: AssetView) => void
   onSettings: () => void
+  statusLabels: StatusLabel[]
+  locations: StatusLabel[]
+  defaultLocation: StatusLabel | null
 }) {
   const [layout, setLayout] = useState(() => layoutFrom(localStorage.getItem(LAYOUT_KEY)))
   const [customizing, setCustomizing] = useState(false)
@@ -741,15 +819,20 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
   // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
-  const [health, setHealth] = useState<(Health & { lines: HealthLine[]; at: string }) | Failed | null>(null)
+  const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
   const latestHealth = useRef(0)
+  // The Overdue list: only Temp checkouts, the row whose Checkin form is open, and what the last Checkin said.
+  const [tempOnly, setTempOnly] = useState(false)
+  const [checkingIn, setCheckingIn] = useState<number | null>(null)
+  const [overdueMessage, setOverdueMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
+  const overdueRef = useRef<HTMLDivElement>(null)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
 
   // On open and Refresh only, not when Customize shows a piece; the last result stays up while a new one loads.
   function check() {
     const mine = ++latestHealth.current
     window.snipeIt.health().then(
-      (h) => mine === latestHealth.current && setHealth({ ...h, lines: healthLines(h), at: new Date().toLocaleTimeString() }),
+      (h) => mine === latestHealth.current && setHealth({ ...h, at: new Date().toLocaleTimeString() }),
       (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
   }
   useEffect(check, [])
@@ -758,7 +841,8 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     const mine = ++latest.current
     setLoading(true)
     // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
-    const shared = shown.filter((p) => ASSET_PIECES.includes(p))
+    // Overdue is always fetched, shown or not: Health warning 5 counts its Temp checkouts.
+    const shared = [...new Set([...shown.filter((p) => ASSET_PIECES.includes(p)), 'overdue' as const])]
     const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
     const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
     // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
@@ -798,9 +882,36 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     )
   }
 
-  const tag = (a: AssetSummary) => (
+  // A rejected Checkin keeps its form open with what was typed; a done one reloads the dashboard and the Health check.
+  const checkin = (assetTag: string) => async (id: number, o: CheckinOptions) => {
+    try {
+      await window.snipeIt.checkin(id, o)
+      setCheckingIn(null)
+      setOverdueMessage({ text: `Checked in ${assetTag}` })
+      load(), check()
+    } catch (e) {
+      setOverdueMessage({ text: (e as Error).message, error: true })
+    }
+  }
+  // Health warning 5 and the End-of-day reminder: the Overdue list with Temp only on, shown if Customize hid it.
+  function openTempOnly() {
+    setTempOnly(true)
+    setLayout((layout) => layout.map((p) => (p.piece === 'overdue' ? { ...p, show: true } : p)))
+    requestAnimationFrame(() => overdueRef.current?.scrollIntoView({ block: 'start' }))
+  }
+  // Opened from the reminder, the list scrolls into view once it has loaded.
+  const scrollWhenLoaded = useRef(openedTempOnly)
+  useEffect(() => { if (openedTempOnly) openTempOnly() }, [])
+  useEffect(() => {
+    if (!scrollWhenLoaded.current || !data.overdue) return
+    scrollWhenLoaded.current = false
+    overdueRef.current?.scrollIntoView({ block: 'start' })
+  }, [data.overdue])
+
+  const tag = (a: AssetSummary, flag?: React.ReactNode) => (
     <td>
       <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
+      {flag}
     </td>
   )
   function table(piece: DashboardPiece) {
@@ -814,26 +925,46 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
         </div>
       )
     if (piece === 'overdue') {
-      const rows = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      const { rows: all, tempError } = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      // The Temp marks failing turns Temp only off until they load again.
+      const only = tempOnly && !tempError
+      const rows = overdueList(all, only)
       return (
         <div key={piece}>
-          <div className="section">Overdue ({rows.length})</div>
+          <div className="section section-bar" ref={overdueRef}>
+            {only ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
+            <label className="dim"><input type="checkbox" checked={tempOnly} onChange={(e) => setTempOnly(e.target.checked)} disabled={!!tempError} /> Temp only</label>
+          </div>
+          {tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {tempError}</p>}
+          {overdueMessage.text && <p className={overdueMessage.error ? 'message error' : 'message'} role={overdueMessage.error ? 'alert' : 'status'}>{overdueMessage.text}</p>}
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th className="num">Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Asset</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th><th className="quick">Quick Actions</th></tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
+              {rows.map((a) => [
                 <tr key={a.id}>
-                  {tag(a)}
-                  <td>{a.name || '—'}</td>
+                  {tag(a, a.temp && <span className="flag c-blue">Temp</span>)}
+                  <td>{a.name || a.model || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late num">{a.overdueDays}d</td>
-                </tr>
-              ))}
+                  <td>{a.expectedCheckin}</td>
+                  <td className="late num">{lateness(a.overdue)}</td>
+                  <td className="quick">
+                    <button disabled={!a.can.checkin} onClick={() => (setCheckingIn(checkingIn === a.id ? null : a.id), setOverdueMessage({ text: '' }))}
+                      className={checkingIn === a.id ? 'on' : undefined} title={checkinReason(a)}>Checkin</button>
+                  </td>
+                </tr>,
+                checkingIn === a.id && (
+                  <tr key={`${a.id}-quick`} className="quick-form">
+                    <td colSpan={6}>
+                      <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a.assetTag)} />
+                    </td>
+                  </tr>
+                ),
+              ])}
             </tbody>
           </table>
-          {rows.length === 0 && <p className="empty">Nothing Overdue</p>}
+          {rows.length === 0 && <p className="empty">{only ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
         </div>
       )
     }
@@ -862,6 +993,9 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
   }
 
   const showing = (group: Group) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
+  // Lines show as they're known; "All clear" waits for the Overdue list too, so it never shows before the Temp checkouts line can.
+  const lines = health && !('error' in health) ? healthLines(health, data.overdue) : []
+  const strip = !health || 'error' in health ? health : lines.length || data.overdue ? { lines, at: health.at } : null
   const bars = showing('Inventory Chart').flatMap((piece) => {
     const entry = segments(piece)
     return entry ? [<BarRow key={piece} name={pieceName[piece]} entry={entry} />] : []
@@ -876,7 +1010,10 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
           <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
-      <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} />
+      <HealthStrip
+        health={strip}
+        onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onTempOnly={openTempOnly}
+      />
       {customizing && (
         <div className="customize">
           {GROUPS.map((group) => (
