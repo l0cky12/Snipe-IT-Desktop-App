@@ -1510,7 +1510,7 @@ describe('Incoming repair', () => {
       flow.setSupplier(ACME)
       const row = await back(flow, 'NOMMA-1', '$45', 'screen replaced')
       expect(calls).toEqual([
-        'bytag NOMMA-1', 'open maintenances 1', 'bytag NOMMA-1', 'status 1 1', 'note 1 [Incoming repair] screen replaced',
+        'bytag NOMMA-1', 'open maintenances 1', 'bytag NOMMA-1', 'open maintenances 1', 'status 1 1', 'note 1 [Incoming repair] screen replaced',
         'edit maintenance 51 {"supplierId":3,"cost":"45.00"}', 'complete maintenance 51 [Incoming repair] screen replaced',
       ])
       expect(row).toMatchObject({ what: 'Back from repair (Acme Device Repair, $45.00)', result: { state: 'done', text: 'Ready' }, sub: ['Maintenance closed'] })
@@ -1521,6 +1521,19 @@ describe('Incoming repair', () => {
       const row = await back(flow, 'NOMMA-1')
       expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]', 'complete maintenance 57 [Incoming repair]'])
       expect(row).toMatchObject({ what: 'Back from repair', sub: ['Maintenance closed', '1 other open Maintenance left as is'] })
+    })
+
+    it('refuses, writing nothing, when the Maintenance changed while the confirm was open', async () => {
+      const open = { 1: [maintenance(51)] }
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], open)
+      flow.setSupplier(ACME)
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      bridge.openMaintenances.mockResolvedValueOnce([maintenance(51, { supplier: { id: 5, name: 'Campus Tech Supply' } })])
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "NOMMA-1's Maintenance changed since it was scanned" })
+      expect(writes(calls)).toEqual([])
     })
 
     it("the Maintenance's own Supplier is kept, not replaced by the header's", async () => {

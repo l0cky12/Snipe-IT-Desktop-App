@@ -766,6 +766,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
 }
 export type RepairIntake = ReturnType<typeof createRepairIntake>
 
+const newest = (list: OpenMaintenance[]) => list.reduce<OpenMaintenance | null>((n, m) => (n && n.id > m.id ? n : m), null)
 /** What an Incoming repair scan was made under: the "Repaired by" Supplier then. Once its confirm or choice opens, also
  *  what the scan found (the newest open Repair Maintenance, how many others, the Repair type id, and whether it counts
  *  as Damaged) and the Repair cost typed there, as typed. */
@@ -813,9 +814,10 @@ export function createIncomingRepair(
     if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}, so it can't be back from repair. Use Bulk return or Repair intake.`)
     if (a.statusType === 'archived') throw new Error(`${a.assetTag} is Archived, so it can't be back from repair`)
     if (!a.can.update) throw new Error(NOT_ALLOWED)
-    const repairs = (await bridge.openMaintenances(a.id)).filter((m) => isRepair(m.type, typeId))
+    const openRepairs = async () => (await bridge.openMaintenances(a.id)).filter((m) => isRepair(m.type, typeId))
+    const repairs = await openRepairs()
     // The newest is closed: Snipe-IT's ids grow with each new Maintenance.
-    const open = repairs.reduce<OpenMaintenance | null>((n, m) => (n && n.id > m.id ? n : m), null)
+    const open = newest(repairs)
     if (a.statusId === ready && !open) throw new Error('Already ready: nothing to do')
     // Another status with an open Repair Maintenance counts as Damaged: someone changed the label by hand.
     const isDamaged = a.statusId === damaged || !!open
@@ -823,6 +825,9 @@ export function createIncomingRepair(
 
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
+      const fresh = newest(await openRepairs())
+      if (fresh?.id !== open?.id || fresh?.supplier?.id !== open?.supplier?.id || fresh?.cost !== open?.cost) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
       const { plan, supplier: s, cost } = planOf(ctx)
       // Built first, so a link in it refuses before anything is written.
       const note = workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
