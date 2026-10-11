@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, markdownOf, toWire, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -368,38 +368,47 @@ describe('Overdue (today is 2026-09-24)', () => {
 
   it('an Asset whose Expected Checkin was yesterday is Overdue by 1 day', async () => {
     const asset = await snipeItWith(due('2026-09-23 00:00:00')).getAsset(4812)
-    expect(asset.overdueDays).toBe(1)
+    expect(asset.overdue).toEqual({ days: 1, minutes: 1 })
   })
 
   it('an Asset due back today is not Overdue', async () => {
     const asset = await snipeItWith(due('2026-09-24 00:00:00')).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
   })
 
-  it('an Expected Checkin with a time of day keeps it, and is Overdue once that time has passed', async () => {
+  it('an Asset due today at 14:50 is not Overdue at 14:49, and is Overdue 1 min at 14:51', async () => {
     const before = await atTime(due('2026-09-24 14:50:00'), 14, 49).getAsset(4812)
-    expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdueDays: null })
-    expect((await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)).overdueDays).toBe(0)
-    expect((await atTime(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdueDays).toBe(1)
+    expect(before).toMatchObject({ expectedCheckin: '2026-09-24 14:50', overdue: null })
+    expect((await atTime(due('2026-09-24 14:50:00'), 14, 50).getAsset(4812)).overdue).toBeNull()
+    const after = await atTime(due('2026-09-24 14:50:00'), 14, 51).getAsset(4812)
+    expect(after.overdue).toEqual({ days: 0, minutes: 1 })
+    expect(lateness(after.overdue!)).toBe('1 min')
+    expect((await atTime(due('2026-09-23 14:50:00'), 9, 0).getAsset(4812)).overdue).toEqual({ days: 1, minutes: 1090 })
   })
 
-  it('a date-only Expected Checkin is Overdue from the next day, whatever the time', async () => {
-    expect((await atTime(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdueDays).toBeNull()
+  it('a date-only Expected Checkin is Overdue from the end of its date, whatever the time', async () => {
+    expect((await atTime(due('2026-09-24 00:00:00'), 23, 59).getAsset(4812)).overdue).toBeNull()
+    expect((await atTime(due('2026-09-23 00:00:00'), 0, 40).getAsset(4812)).overdue).toEqual({ days: 1, minutes: 40 })
   })
 
   it('a Snipe-IT before v8.7 sends Expected Checkin as a date, which still works', async () => {
     const asset = await snipeItWith({ ...chromebook, expected_checkin: { date: '2026-09-23', formatted: '09/23/2026' } }).getAsset(4812)
-    expect(asset).toMatchObject({ expectedCheckin: '2026-09-23', overdueDays: 1 })
+    expect(asset).toMatchObject({ expectedCheckin: '2026-09-23', overdue: { days: 1 } })
   })
 
   it('an Asset without an Expected Checkin is never Overdue', async () => {
     const asset = await snipeItWith({ ...chromebook, expected_checkin: null }).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
   })
 
   it('an Asset with no Assignee is not Overdue even with a past Expected Checkin', async () => {
     const asset = await snipeItWith({ ...chromebook, assigned_to: null }).getAsset(4812)
-    expect(asset.overdueDays).toBeNull()
+    expect(asset.overdue).toBeNull()
+  })
+
+  it('how late reads in minutes, then hours, on the due day, and in days after it', () => {
+    expect([1, 59, 60, 119, 120, 549].map((minutes) => lateness({ days: 0, minutes }))).toEqual(['1 min', '59 min', '1 h', '1 h', '2 h', '9 h'])
+    expect(lateness({ days: 3, minutes: 3000 })).toBe('3d')
   })
 })
 
@@ -696,9 +705,10 @@ describe('dashboard (today is 2026-09-24)', () => {
     })
   })
 
-  it('lists every Overdue Asset with its Assignee and days late, most late first', async () => {
+  it('lists every Overdue Asset with its Assignee, Expected Checkin and how late, most late first', async () => {
     const { snipeIt } = fleet({ hardware: [
       asset(1, { expected_checkin: { datetime: '2026-09-23 00:00:00' } }),
+      asset(6, { expected_checkin: { datetime: '2026-09-23 14:50:00' } }), // a time of day: late since 14:50, before 1's end of day
       asset(2, { expected_checkin: { datetime: '2026-09-24 00:00:00' } }), // due today: not Overdue
       asset(3, { expected_checkin: { datetime: '2026-09-01 00:00:00' } }),
       asset(4, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, assigned_to: null }), // no Assignee: not Overdue
@@ -706,7 +716,9 @@ describe('dashboard (today is 2026-09-24)', () => {
     ] })
     const { overdue } = await snipeIt.dashboard(['overdue'])
     if (!Array.isArray(overdue)) throw new Error('expected rows')
-    expect(overdue.map((a) => [a.assetTag, a.overdueDays])).toEqual([['NOMMA-3', 23], ['NOMMA-1', 1]])
+    expect(overdue.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
+      ['NOMMA-3', '2026-09-01', '23d'], ['NOMMA-6', '2026-09-23 14:50', '1d'], ['NOMMA-1', '2026-09-23', '1d'],
+    ])
     expect(overdue[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
   })
 
@@ -1058,8 +1070,8 @@ describe('report', () => {
     const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
     const snipeIt = createSnipeIt(config, fetch, today)
     expect(await snipeIt.report('overdue')).toEqual({
-      columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-      rows: [['NOMMA-2', 'CB-2', 'Jordan Reyes', '2026-08-01', '54'], ['NOMMA-1', 'CB-1', 'Jordan Reyes', '2026-09-20', '4'], ['NOMMA-3', 'CB-3', 'Jordan Reyes', '2026-09-23 08:15', '1']],
+      columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],
+      rows: [['NOMMA-2', 'CB-2', 'Jordan Reyes', '2026-08-01', '54d'], ['NOMMA-1', 'CB-1', 'Jordan Reyes', '2026-09-20', '4d'], ['NOMMA-3', 'CB-3', 'Jordan Reyes', '2026-09-23 08:15', '1d']],
       capped: false,
     })
     expect((await snipeIt.report('overdue', { from: '2026-09-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-1', 'NOMMA-3'])
@@ -1067,6 +1079,14 @@ describe('report', () => {
     expect((await snipeIt.report('overdue', { from: '2026-09-23', to: '2026-09-23' })).rows.map((r) => r[0])).toEqual(['NOMMA-3'])
     expect((await snipeIt.report('expiring')).rows).toEqual([['NOMMA-4', 'CB-4', 'Deployed', '2026-10-01', '7'], ['NOMMA-5', 'CB-5', 'Deployed', '2026-12-01', '68']])
     expect((await snipeIt.report('expiring', { to: '2026-11-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-4'])
+  })
+
+  it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
+    const asset = (id: number, datetime: string) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: { datetime } })
+    const hardware = [asset(1, '2026-09-24 15:30:00'), asset(2, '2026-09-24 14:50:00'), asset(3, '2026-09-23 00:00:00'), asset(4, '2026-09-24 16:30:00')]
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    const snipeIt = createSnipeIt(config, fetch, () => new Date(2026, 8, 24, 16, 0))
+    expect((await snipeIt.report('overdue')).rows.map((r) => r.slice(3))).toEqual([['2026-09-23', '1d'], ['2026-09-24 14:50', '1 h'], ['2026-09-24 15:30', '30 min']])
   })
 
   // Snipe-IT v8.7+ sends last_audit_date as {datetime, formatted} and next_audit_date as {date, formatted}.
@@ -1125,6 +1145,30 @@ describe('report', () => {
     expect((await snipeIt.report('lastAudited', { from: '2026-03-01' })).rows.map((row) => row[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
   })
 
+  it('End of life lists Assets past it or reaching it within 365 days, past first, in the Location and Category, Archived left out', async () => {
+    const eol = (id: number, date: string | null, fields: object = {}) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, asset_eol_date: date && { date, formatted: date }, ...fields })
+    const archived = { status_label: { id: 6, name: 'Archived', status_type: 'archived', status_meta: 'archived' } }
+    const hardware = [eol(1, '2027-03-01'), eol(2, '2026-06-01'), eol(3, '2027-09-25'), eol(4, null), eol(5, '2026-09-24'), eol(6, '2025-01-01', archived), eol(7, '2027-09-24')]
+    const { fetch, calls, queries } = auditFetch('/hardware', hardware)
+    const snipeIt = createSnipeIt(config, fetch, today)
+    const r = await snipeIt.report('endOfLife', { locationId: '9', categoryId: '3' })
+    expect(calls).toEqual(['/hardware'])
+    expect(queries[0]).toMatchObject({ location_id: '9', category_id: '3' })
+    expect(r).toEqual({
+      columns: ['Asset Tag', 'Name', 'Asset Model', 'Status Label', 'Assignee', 'Location', 'Purchase date', 'End of life', 'Days left'],
+      rows: [
+        ['NOMMA-2', 'CB-2', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2026-06-01', '-115'],
+        ['NOMMA-5', 'CB-5', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2026-09-24', '0'],
+        ['NOMMA-1', 'CB-1', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2027-03-01', '158'],
+        ['NOMMA-7', 'CB-7', 'HP Chromebook 14 G7', 'Deployed', 'Jordan Reyes', 'Library', '2023-08-01', '2027-09-24', '365'],
+      ],
+      capped: false,
+    })
+    // From/To narrow the End of life date within that window.
+    expect((await snipeIt.report('endOfLife', { from: '2026-09-01', to: '2027-12-31' })).rows.map((row) => row[0])).toEqual(['NOMMA-5', 'NOMMA-1', 'NOMMA-7'])
+    expect(queries[1]).not.toHaveProperty('location_id')
+  })
+
   it('a Location or Category that is not an id is refused without asking Snipe-IT', async () => {
     const { fetch, calls } = fakeFetch({})
     const snipeIt = createSnipeIt(config, fetch)
@@ -1135,11 +1179,16 @@ describe('report', () => {
   })
 })
 
-describe('audit dates', () => {
+describe('audit, End of life and cost', () => {
   it('an Asset reads its last audited and next audit dates from the v8.7+ shape', async () => {
     const asset = await snipeItWith({ ...chromebook, last_audit_date: { datetime: '2026-03-02 09:15:00', formatted: '03/02/2026 9:15AM' }, next_audit_date: { date: '2027-03-02', formatted: '03/02/2027' } }).getAsset(4812)
     expect(asset).toMatchObject({ lastAudited: '2026-03-02', nextAudit: '2027-03-02' })
     expect(await snipeItWith({ ...chromebook, last_audit_date: null, next_audit_date: null }).getAsset(4812)).toMatchObject({ lastAudited: null, nextAudit: null })
+  })
+  it('an Asset reads its End of life date and its purchase cost as a plain number', async () => {
+    expect(await snipeItWith({ ...chromebook, asset_eol_date: { date: '2029-08-01', formatted: '08/01/2029' }, purchase_cost: '1,234.56' }).getAsset(4812))
+      .toMatchObject({ endOfLife: '2029-08-01', purchaseCost: '1234.56' })
+    expect(await snipeItWith({ ...chromebook, asset_eol_date: null, purchase_cost: null }).getAsset(4812)).toMatchObject({ endOfLife: null, purchaseCost: null })
   })
 })
 

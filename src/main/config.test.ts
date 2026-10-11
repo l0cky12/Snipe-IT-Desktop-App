@@ -194,7 +194,7 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   expect(relaunched.schedules()).toEqual([])
 })
 
-it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts', () => {
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
   const { store } = setup()
   for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
   const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)

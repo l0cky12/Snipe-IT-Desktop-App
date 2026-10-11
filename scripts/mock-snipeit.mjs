@@ -40,6 +40,9 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
+// A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
+const minutesAgo = (m) => new Date(Date.now() - (m + new Date().getTimezoneOffset()) * 6e4).toISOString().slice(0, 16).replace('T', ' ') + ':00'
+const dueOf = (i) => (i === 1 ? minutesAgo(40) : i === 19 ? minutesAgo(125) : i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30)))
 const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
@@ -55,10 +58,13 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
     // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
     rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
-    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(i % 2 ? `${day(-(i % 30))} 14:50:00` : day(-(i % 30))) : null,
+    purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
+    // End of life from 90 days past to about 20 months ahead, a few with none; the cost as Snipe-IT formats it.
+    asset_eol_date: i % 13 === 0 ? null : { date: day(((i * 53) % 700) - 90), formatted: day(((i * 53) % 700) - 90) },
+    purchase_cost: i % 10 === 9 ? null : ['329.00', '289.00', '1,049.00', '649.00', '349.00'][model.id - 1],
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -86,7 +92,8 @@ const lists = {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
     assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
-    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '' } },
+    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
+    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' } },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
