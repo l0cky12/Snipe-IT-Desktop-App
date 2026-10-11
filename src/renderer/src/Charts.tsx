@@ -228,14 +228,16 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
     setActive(to)
     ;(e.currentTarget.parentNode?.children[to] as SVGGElement | undefined)?.focus()
   }
-  const shadeTo = dueThrough && dateOf(dueThrough) >= start ? x(new Date(dateOf(dueThrough).getTime() + 864e5)) : null
+  const through = dueThrough ? dateOf(dueThrough) : null
+  // To the end of the last Audit due day.
+  const shadeTo = through && through >= start ? x(new Date(through.getFullYear(), through.getMonth(), through.getDate() + 1)) : null
   return (
     <div className="audits">
       {major && (
         <p className="audit-next">Next major audit: <button className="link" onClick={() => onDay(major)}>{longDay(major.day)} · {assets(major.assets.length)}</button></p>
       )}
       <div className="audit-strip">
-        <ul className="audit-now" aria-label="Before today">
+        <ul className="audit-now" aria-label="Audit late and Audit due">
           <AuditCount view="auditLate" name="Audit late" tone="red" total={late} onView={onView} />
           <AuditCount view="auditDue" name="Audit due" tone="amber" total={due} onView={onView} />
         </ul>
@@ -260,7 +262,7 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
               {days.length === 0 && <text className="month" x={(x(start) + x(end)) / 2} y={base - 12} textAnchor="middle">Nothing due in the next 12 months</text>}
               <g role="group" aria-label="Days with Assets due">
                 {days.map((d, i) => {
-                  const big = d === major, r = big ? 6 : 4, top = y(d.assets.length)
+                  const big = d === major, r = big ? 7 : 5, top = y(d.assets.length)
                   const label = `${longDay(d.day)}: ${assets(d.assets.length)}${big ? ', the Next major audit' : ''}`
                   // Each day's hit area runs halfway to its neighbours, so a pointer near a marker finds it.
                   const left = i ? (xs[i - 1] + xs[i]) / 2 : xs[i] - 12, right = i < days.length - 1 ? (xs[i] + xs[i + 1]) / 2 : xs[i] + 12
@@ -270,7 +272,7 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
                       <title>{label}</title>
                       <rect className="hit" x={left} y={TM.top} width={Math.max(1, right - left)} height={base - TM.top} fill="transparent" />
                       <line className="stem" x1={xs[i]} x2={xs[i]} y1={base} y2={top} />
-                      <circle className="ring" cx={xs[i]} cy={top} r={r + 4} />
+                      <circle className="ring" cx={xs[i]} cy={top} r={r + 3} />
                       <circle cx={xs[i]} cy={top} r={r} />
                       {big && <text className="cap" x={xs[i]} y={top - 11}>{d.assets.length.toLocaleString()}</text>}
                     </g>

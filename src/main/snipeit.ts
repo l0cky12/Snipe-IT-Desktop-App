@@ -1294,14 +1294,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // The Health warnings' checks: three small requests at once, each failing on its own. Runs on open and Refresh only.
     async health(): Promise<Health> {
       const failed = (e: Error): Failed => ({ error: e.message })
-      const total = async (path: string, sort = '') => {
+      // A list's total and its first row (all limit=1 asks for).
+      const peek = async (path: string, sort = '') => {
         const body = await request<{ total?: unknown; rows?: RawAsset[] }>(`${path}?limit=1${sort}`)
         if (isError(body)) throw new Error(reason(body.messages))
         if (typeof body.total !== 'number') throw new Error(`Snipe-IT didn't send a total for ${path.slice(1)}.`)
         return { total: body.total, rows: body.rows ?? [] }
       }
       // Latest first, so the one row it sends is where Audit due ends, without a second request.
-      const due = total('/hardware/audit/due', '&sort=next_audit_date&order=desc')
+      const due = peek('/hardware/audit/due', '&sort=next_audit_date&order=desc')
       const [probe, auditLate, auditDue, dueThrough] = await Promise.all([
         request<{ version?: unknown }>('/version').then(
           (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
@@ -1311,7 +1312,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             // /version needs no permission, so a 403 on it is about the whole key (since v8.8: 2FA not enrolled, or User-Agent blocked).
             : e.kind === 'key' || e.kind === 'forbidden' ? { warning: 'key', message: e.message }
             : failed(e)),
-        total('/hardware/audit/overdue').then((b) => b.total, failed),
+        peek('/hardware/audit/overdue').then((b) => b.total, failed),
         due.then((b) => b.total, failed),
         due.then((b) => dayOf(b.rows[0]?.next_audit_date), () => null),
       ])
