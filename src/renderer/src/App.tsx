@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
@@ -421,9 +421,9 @@ function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGr
       <div className="records">
         {(Object.keys(listName) as ListKind[]).map((k) => {
           const Icon = listIcon[k]
-          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
+          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={18} />{listName[k]}</button>
         })}
-        <button className="record-kind" onClick={onGroups}><ShieldCheck size={20} />Permission groups</button>
+        <button className="record-kind" onClick={onGroups}><ShieldCheck size={18} />Permission groups</button>
       </div>
     </>
   )
@@ -581,32 +581,26 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
   onCheckout: (id: number, o: CheckoutOptions) => Promise<void>
 }) {
   const [checkingOut, setCheckingOut] = useState(false)
-  const facts: [string, string, boolean?][] = [
+  // Overdue and Warranty flag the fact they're about.
+  const facts: [string, React.ReactNode][] = [
+    ['Name', a.name || 'Unnamed Asset'],
+    ['Asset Model', a.model],
+    ['Status', <StatusChip asset={a} />],
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
-    ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? ''],
+    ['Type', a.assignee && kind[a.assignee.type]],
+    ['Expected checkin', <>{a.expectedCheckin || '—'}{a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}</>],
     ['Location', a.location],
     ['Category', a.category],
-    ['Serial', a.serial, true],
-    ['Purchased', a.purchaseDate ?? ''],
-    ['Warranty ends', a.warrantyEnd ?? ''],
+    ['Serial', a.serial && <span className="mono">{a.serial}</span>],
+    ['Purchased', a.purchaseDate],
+    ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
+      ? <span className="flag c-grey">Warranty expired</span>
+      : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>],
   ]
   return (
     <>
       <header className="head">
-        <span className="tag">{a.assetTag}</span>
-        <h1>
-          {a.name || 'Unnamed Asset'}
-          <span className="sub">{a.model}</span>
-        </h1>
-        <StatusChip asset={a} />
-        {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
-        {a.warranty &&
-          (a.warranty.expired ? (
-            <span className="flag c-grey">Warranty expired</span>
-          ) : (
-            <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
-          ))}
+        <h1><span className="dim">Assets / </span><span className="mono">{a.assetTag}</span></h1>
         <div className="actions">
           <button
             disabled={!a.checkoutAllowed || !a.can.checkout}
@@ -622,15 +616,12 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
         <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />
       </header>
       {checkingOut && a.checkoutAllowed && a.can.checkout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
-      <div className="grid">
-        {facts.map(([k, v, mono]) => (
-          <div className="cell" key={k}>
-            <div className="k">{k}</div>
-            <span className={mono ? 'mono' : undefined}>{v || '—'}</span>
-          </div>
-        ))}
+      <div className="asset-top">
+        <dl className="facts">
+          {facts.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}</dd></Fragment>)}
+        </dl>
+        <AssetCodes baseUrl={baseUrl} asset={a} />
       </div>
-      <AssetCodes baseUrl={baseUrl} asset={a} />
       {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
       <details className="all-fields">
         <summary className="section">All fields ({a.fields.length})</summary>
