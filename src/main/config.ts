@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
-import { LIST_SORTS, REPORT_NAMES, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
+import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
@@ -50,7 +50,8 @@ export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
  * When a Report emails itself: every day, week (day: 0 Sunday to 6 Saturday) or month (day: 1 to 31, the month's last
  * day in a shorter month) at time ("HH:MM", local). range: a built-in Report's dates: the 1, 7 or 30 whole days before
  * the day it sends (so daily and weekly sends neither miss a day nor repeat one), or from the day of the last send. None
- * (and always for Warranty expiring, which looks ahead, and a Saved Report, whose List has no dates): all of it.
+ * (and always for a Report not in RANGED_REPORTS, such as Warranty expiring, which looks ahead, or a Saved Report, whose List
+ * has no dates): all of it. No Schedule keeps a Location or Category: an audit Report's send covers all of them.
  */
 export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since' }
 /** A scheduled send: when, and the rows it sent or why it failed. */
@@ -259,7 +260,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
      * it can't skip a send that's just come due. Changing a schedule keeps its last send.
      */
     setSchedule(key: ScheduleKey, input: Schedule | null, since: Date) {
-      const schedule = input && checkSchedule(input, !!key && typeof key === 'object' && 'builtIn' in key && key.builtIn !== 'expiring')
+      const schedule = input && checkSchedule(input, takesRange(key))
       reschedule(key, (old) => schedule ? {
         ...schedule,
         since: old && old.every === schedule.every && old.day === schedule.day && old.time === schedule.time ? old.since : since.toISOString(),
