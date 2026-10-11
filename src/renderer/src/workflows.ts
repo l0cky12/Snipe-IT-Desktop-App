@@ -502,8 +502,8 @@ export type BulkCheckout = ReturnType<typeof createBulkCheckout>
 export const DAMAGED = 'Damaged'
 export const NO_DAMAGED = `No Status Label named '${DAMAGED}' in Snipe-IT; ask an admin to create one`
 const isRepair = (t: StatusLabel | null, typeId: number) => !!t && (t.id === typeId || t.name.trim().toLowerCase() === 'repair')
-/** What Repair intake needs from Snipe-IT before a scan: the Damaged label, "(by <Operator>)" and the Maintenance type. */
-type RepairSetup = { damaged: number; operator: string; typeId: number | null }
+/** What Repair intake needs from Snipe-IT before a scan: the Damaged label and the Maintenance type. */
+type RepairSetup = { damaged: number; typeId: number | null }
 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
@@ -516,6 +516,9 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let blocked = ''
   // Bumped by reset, so a lookup for the old server never lands.
   let attempt = 0
+  // "(by <Operator>)", read when the Workflow opens; failing, it's read again when a User notes line needs it.
+  let operator: Promise<string> | null = null
+  const operatorName = () => (operator ??= bridge.operatorName().catch((e) => { operator = null; throw e }))
 
   // The Maintenance step's sub-result.
   async function maintenance(a: Asset, typeId: number | null, notes: string): Promise<string> {
@@ -530,7 +533,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   }
 
   const runner = createRunner<null>(bridge, async (a) => {
-    const { damaged, operator, typeId } = await (setup ?? Promise.reject(new Error(NO_DAMAGED)))
+    const { damaged, typeId } = await (setup ?? Promise.reject(new Error(NO_DAMAGED)))
     const held = a.assignee
     if (!a.can.checkin || (!held && !a.can.update)) throw new Error(NOT_ALLOWED)
     // No confirm, so a second intake can't stack another note or Maintenance.
@@ -549,13 +552,15 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       let copy: string | undefined
       if (!user) sub.push('User note: no User')
       else {
-        const line = userNotesLine(localDate(now()), a.assetTag, text, operator)
         try {
+          const line = userNotesLine(localDate(now()), a.assetTag, text, await operatorName())
+          // Offered whatever goes wrong from here; without the Operator's name there's no line to offer.
+          copy = line
           await bridge.appendUserNotes(user.id, line)
           sub.push('User note added')
+          copy = undefined
         } catch (e) {
           sub.push(`User note skipped: ${(e as Error).message}`)
-          copy = line
         }
       }
       return { text: cleanText(text), what: held ? `Damaged, from ${from}` : "Damaged (wasn't checked out)", sub, copy }
@@ -574,14 +579,14 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     get blocked() { return blocked },
     /** Opening the Workflow: looks up what it doesn't have yet. fallback: Settings' Maintenance type for repairs. */
     async open(fallback: number | null): Promise<void> {
-      if (found.damaged !== undefined && found.operator !== undefined && found.typeId != null) return
+      operatorName().catch(() => {})
+      if (found.damaged !== undefined && found.typeId != null) return
       const mine = ++attempt
       const was = found
       const next = (async (): Promise<RepairSetup> => {
         const damaged = was.damaged ?? (await bridge.statusLabels()).find((l) => l.name.trim().toLowerCase() === DAMAGED.toLowerCase())?.id
         if (damaged === undefined) throw new Error(NO_DAMAGED)
-        const operator = was.operator ?? await bridge.operatorName()
-        return { damaged, operator, typeId: was.typeId ?? await bridge.repairTypeId(fallback) }
+        return { damaged, typeId: was.typeId ?? await bridge.repairTypeId(fallback) }
       })()
       setup = next
       try {
@@ -601,6 +606,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       setup = null
       found = {}
       blocked = ''
+      operator = null
       runner.reset()
     },
   }

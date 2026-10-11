@@ -80,8 +80,8 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
   onClear: () => void
 }) {
   const done = rows.filter((r) => r.result.state === 'done').length
-  // The row whose line was just copied, so its button says so.
-  const [copied, setCopied] = useState<number | null>(null)
+  // The row whose line was just copied, and whether it was, so its button says so.
+  const [copied, setCopied] = useState<{ key: number; ok: boolean } | null>(null)
   return (
     <>
       <div className="section running-head">
@@ -110,7 +110,7 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
                   : <OutcomeText outcome={r.result} />}
                 {r.result.state === 'done' && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
                 {r.result.state === 'done' && r.copy && (
-                  <button className="link" title={r.copy} onClick={() => navigator.clipboard.writeText(r.copy!).then(() => setCopied(r.key), () => {})}>{copied === r.key ? 'Copied' : 'Copy line'}</button>
+                  <button className="link" title={r.copy} onClick={() => navigator.clipboard.writeText(r.copy!).then(() => setCopied({ key: r.key, ok: true }), () => setCopied({ key: r.key, ok: false }))}>{copied?.key !== r.key ? 'Copy line' : copied.ok ? 'Copied' : "Couldn't copy"}</button>
                 )}
                 {r.undoFailed && <> <span className="late">Undo failed: {r.undoFailed}</span></>}
               </td>
@@ -452,7 +452,7 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
     ;(key ? noteField : field).current?.focus()
   }, [key])
   // Text that cleans away to nothing ("***") hasn't said what happened; a link stays, for the write to refuse.
-  const said = (v: string) => { try { return cleanText(v) ? v : '' } catch { return v } }
+  const stated = (v: string) => { try { return cleanText(v) ? v : '' } catch { return v } }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -465,7 +465,7 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   async function submitNote(e?: React.FormEvent) {
     e?.preventDefault()
     try { cleanText(note) } catch (err) { return setStatus((err as Error).message) }
-    setStatus(await flow.runner.submitText(said(note), null))
+    setStatus(await flow.runner.submitText(stated(note), null))
     setNote(flow.runner.open?.text ?? '')
   }
   function cancel() {
@@ -493,7 +493,7 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
               {([['Name', a.name], ['Asset Model', a.model], ['Status Label', a.status], ['Assignee', a.assignee?.name ?? "Isn't checked out"]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
             </dl>
             <p>→ {open.says}</p>
-            <input ref={noteField} value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(said(e.target.value)); setStatus('') }} onKeyDown={onKeyDown}
+            <input ref={noteField} value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(stated(e.target.value)); setStatus('') }} onKeyDown={onKeyDown}
               placeholder="What happened to the Asset (e.g. cracked screen, won't power on)" aria-label="What happened to the Asset (required)" aria-required="true" />
             <p className="dim">Describe the Asset, never the student: Snipe-IT keeps this in History for good.</p>
             <div className="actions">

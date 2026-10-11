@@ -133,12 +133,20 @@ The Workflow for taking many Assets back: scan Assets one at a time and Check ea
 _Avoid_: collection, bulk checkin
 
 **Repair intake**:
-The Workflow for a broken Asset coming to the counter: scan it, Check it in from its User, mark it Damaged and record what happened, both on the Checkin and in the User's notes.
+The Workflow for a broken Asset coming to the counter: scan it, write what happened to the Asset (required), then Check it in as Damaged (or just mark it Damaged if it isn't checked out) and open a Maintenance for the repair. When a User held it, a User notes line is added to that User's notes.
 _Avoid_: drop-off, break/fix
 
 **Damaged**:
-An Asset between Repair intake and Incoming repair: broken, waiting for or away at repair.
+An Asset between Repair intake and Incoming repair: broken, waiting for or away at repair. It's the Status Label named 'Damaged' in Snipe-IT, which the app finds by name. A Damaged Asset normally has an open Maintenance.
 _Avoid_: broken, in repair (one state covers both)
+
+**User notes line**:
+The one dated line Repair intake adds to a User's notes about an Asset they returned damaged, naming the Asset Tag and the Operator. It says what happened to the Asset, never anything about the User. If Snipe-IT refuses the write, the Operator can copy the line and add it by hand.
+_Avoid_: incident note, damage report
+
+**Maintenance**:
+Snipe-IT's record of a repair on one Asset. Repair intake opens it; Incoming repair closes it, adding the Supplier and Repair cost if given.
+_Avoid_: ticket, work order, RMA
 
 **Incoming repair**:
 The Workflow for Assets coming back from repair: scan each, make it ready to deploy again, and note that it returned from repair, optionally with the vendor.

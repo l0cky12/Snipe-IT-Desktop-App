@@ -63,10 +63,10 @@ export type UserCard = { id: number; name: string; username: string; employeeNum
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
 
-/** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
- *  must be deployable). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
 /** A Maintenance to open on one Asset. startDate: YYYY-MM-DD. */
 export type MaintenanceInput = { assetId: number; typeId: number; name: string; startDate: string; notes: string }
+/** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
+ *  must be deployable). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
 export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; expectedCheckin?: string; note?: string }
 const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
@@ -1166,7 +1166,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async operatorName(): Promise<string> {
       const me = await request<{ display_name?: string | null; name?: string | null; username?: string | null }>('/users/me')
       if (isError(me)) throw new Error(reason(me.messages))
-      return me.display_name?.trim() || me.name?.trim() || String(me.username ?? '')
+      const name = me.display_name?.trim() || me.name?.trim() || me.username?.trim()
+      if (!name) throw new Error("couldn't read your name from Snipe-IT")
+      return name
     },
     // The Maintenance type for repairs (#59 §3), tried in order: Snipe-IT's type list (admin keys only), the type of any
     // existing Repair Maintenance, then the Settings id (fallback). null when none of them works.
@@ -1175,6 +1177,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const types = await request<{ rows: Named[] }>('/maintenance-types?search=Repair').catch(() => null)
       const listed = types && !isError(types) ? types.rows.find(isRepair)?.id : undefined
       if (listed) return listed
+      // Search matches the type's name too. ponytail: first 50 hits; any Repair one gives the type away.
       const found = await request<{ rows: RawMaintenance[] }>('/maintenances?search=Repair&limit=50').catch(() => null)
       const used = found && !isError(found) ? found.rows.map((m) => m.maintenance_type_details).find(isRepair)?.id : undefined
       if (used) return used
@@ -1223,7 +1226,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         throw /HTTP 403\b/.test((e as Error).message) ? new Error("your Snipe-IT account can't edit Users") : e
       }
       const now = await notes()
-      if (!now.startsWith(old) || !now.replace(/\s+$/, '').endsWith(line)) throw new Error("someone else changed the User's notes at the same time")
+      // The line may or may not be there now, so the Operator checks before adding it by hand.
+      if (!now.startsWith(old) || !now.replace(/\s+$/, '').endsWith(line)) throw new Error("someone else changed the User's notes at the same time; check them for the line")
     },
 
     // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent

@@ -932,7 +932,7 @@ describe('Repair intake', () => {
     await flow.open(null)
     await flow.open(12)
     await flow.open(12)
-    expect(calls).toEqual(['statusLabels', 'me', 'repair type null', 'repair type 12'])
+    expect(calls).toEqual(['me', 'statusLabels', 'repair type null', 'repair type 12'])
   })
 
   it('with no Status Label named Damaged, opens to a blocking message and takes no scans', async () => {
@@ -959,7 +959,7 @@ describe('Repair intake', () => {
     expect(await flow.runner.submitText('  ', null)).toBe('Say what happened')
     await flush()
     expect(flow.runner.open).not.toBeNull()
-    expect(calls).toEqual(['statusLabels', 'me', 'repair type null', 'bytag NOMMA-1'])
+    expect(calls).toEqual(['me', 'statusLabels', 'repair type null', 'bytag NOMMA-1'])
   })
 
   it('refuses without a confirm: already Damaged and not checked out, or a key that can\'t check it in', async () => {
@@ -1047,6 +1047,19 @@ describe('Repair intake', () => {
     bridge.addAssetNote.mockRejectedValueOnce(new Error('Snipe-IT returned HTTP 500'))
     bridge.openMaintenances.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
     expect((await intake(flow, 'NOMMA-2')).sub).toEqual(['Asset note not added: Snipe-IT returned HTTP 500', "Maintenance not opened: Can't reach Snipe-IT", 'User note: no User'])
+  })
+
+  it("the Operator's name failing to load never blocks scans: it's read again for the User notes line", async () => {
+    const fake = withDamaged([asset('NOMMA-1'), asset('NOMMA-2')])
+    fake.bridge.operatorName.mockRejectedValueOnce(new Error("Can't reach Snipe-IT")).mockRejectedValueOnce(new Error("couldn't read your name from Snipe-IT"))
+    const flow = createRepairIntake(fake.bridge, { changed: () => {} }, clock, 0)
+    await flow.open(null)
+    expect(flow.blocked).toBe('')
+    const row = await intake(flow, 'NOMMA-1')
+    expect(row).toMatchObject({ result: { state: 'done' }, sub: ['Maintenance opened', "User note skipped: couldn't read your name from Snipe-IT"] })
+    expect(row.copy).toBeUndefined()
+    expect((await intake(flow, 'NOMMA-2')).sub).toEqual(['Maintenance opened', 'User note added'])
+    expect(fake.calls.filter((c) => c.startsWith('user notes'))).toEqual([`user notes 7 ${LINE.replace('NOMMA-1', 'NOMMA-2')}`])
   })
 
   it('a first step that fails stops there: a red row, nothing else written', async () => {

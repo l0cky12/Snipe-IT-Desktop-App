@@ -1421,6 +1421,7 @@ describe('Repair intake', () => {
     expect(await me({ display_name: 'D. Tech', name: 'Demo Tech' })).toBe('D. Tech')
     expect(await me({ display_name: null, name: 'Demo Tech' })).toBe('Demo Tech')
     expect(await me({ display_name: '', name: '' })).toBe('dtech')
+    await expect(me({ display_name: null, name: '', username: '' })).rejects.toThrow("couldn't read your name from Snipe-IT")
   })
 
   describe('the Maintenance type for repairs', () => {
@@ -1512,7 +1513,7 @@ describe('Repair intake', () => {
     it('a re-read that no longer starts with the old notes and ends with the line is reported, never retried', async () => {
       for (const other of [(sent: string) => sent.replace('Loaner', 'Returned'), (sent: string) => `${sent}\nCalled home`]) {
         const { fetch, requests } = user('Loaner agreement on file.', other)
-        await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("someone else changed the User's notes at the same time")
+        await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("someone else changed the User's notes at the same time; check them for the line")
         expect(requests.map((r) => r.method)).toEqual(['GET', 'PATCH', 'GET'])
       }
     })
