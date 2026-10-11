@@ -233,6 +233,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
     if (!mine?.deletes) return
     const gone = new Set(mine?.records.filter((r) => r.outcome?.state === 'done').map((r) => r.id))
     if (gone.size) setSelection((s) => ([...gone].some((id) => s.has(id)) ? new Map([...s].filter(([id]) => !gone.has(id))) : s))
+    // A deleted Asset can't stay in the Asset panel.
+    if (panel && gone.has(panel.sheet.asset.id)) onClosePanel()
   }, [mine])
   // The List refreshes when its run ends (finished or stopped).
   const running = !!mine?.busy
@@ -392,8 +394,8 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   }
   // Ticks or unticks one row; false when there's none to tick.
   const tickRow = (row?: Row) => !!row && (setSelection((s) => tick(s, [row])), true)
-  // The focused row follows the panel when it opens on a row of this page.
-  useEffect(() => { if (panelAsset && rows.some((r) => r.id === panelAsset.id)) setCursor(panelAsset.id) }, [panel?.n])
+  // The focused row follows the panel: its row when it opens on one of this page, else none (so Space ticks the panel's Asset).
+  useEffect(() => { if (panelAsset) setCursor(rows.some((r) => r.id === panelAsset.id) ? panelAsset.id : null) }, [panel?.n])
   // The panel's Asset is outside the View when it's not among the rows and searching the View for its Asset Tag doesn't find it;
   // the List's own search and filter boxes don't count. ponytail: one search per check; a tag that matches 50+ others reads as outside.
   useEffect(() => {
@@ -413,13 +415,14 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       const next = moveCursor(ids, cursor, k === 'up' ? -1 : 1)
       if (next === null) return
       setCursor(next)
-      if (panel && panelAsset?.id !== next) onOpenAsset(next)
+      // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
+      if (panel) onOpenAsset(next)
     } else if (k === 'open') {
       if (cursor === null || !ids.includes(cursor)) return
       onOpenAsset(cursor)
     } else if (k === 'tick') {
-      // The panel's Asset when the panel is open (a scan, then Space), else the focused row.
-      if (!tickRow(panel ? panelRow() : rows.find((r) => r.id === cursor))) return
+      // The focused row, which the panel follows (and which ↑/↓ move before the panel catches up); with none, the panel's Asset (a scan, then Space).
+      if (!tickRow(rows.find((r) => r.id === cursor) ?? panelRow())) return
     } else if (k === 'close') {
       if (!panel) return
       onClosePanel()
