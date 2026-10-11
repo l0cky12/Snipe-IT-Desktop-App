@@ -936,8 +936,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
-  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only tagged Checkouts are
-  // asked for, newest first, until past the oldest candidate's last Checkout: usually one request.
+  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
+  // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
   // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
   // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
   // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
@@ -947,7 +947,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (!since.size) return temp
     const oldest = [...since.values()].sort()[0]
     for (let offset = 0; ; ) {
-      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp checkout', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
+      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
       const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
       if (isError(page)) throw new Error(reason(page.messages))
       for (const r of page.rows) {

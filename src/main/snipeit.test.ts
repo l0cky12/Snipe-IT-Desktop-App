@@ -584,6 +584,7 @@ describe('dashboard (today is 2026-09-24)', () => {
   // A fake Snipe-IT that pages each list (hardware, licenses, users, …) by limit/offset, capped at pageMax.
   // A list given as { status, body } answers that instead, e.g. a permission error. Records every URL it was asked for.
   // A status filter is its own list, e.g. 'hardware?status=Archived'; the fake answers it with nothing unless given.
+  // A search keeps the rows that mention it anywhere, as Snipe-IT's does across a row's fields.
   type Refusal = { status?: number; body: unknown }
   function fleet(lists: Record<string, object[] | Refusal>, pageMax = 500) {
     const urls: URL[] = []
@@ -595,9 +596,11 @@ describe('dashboard (today is 2026-09-24)', () => {
       const list = status ? lists[`${path}?status=${status}`] ?? [] : lists[path]
       if (!list) return new Response(JSON.stringify(notFound), { status: 404 })
       if (!Array.isArray(list)) return new Response(JSON.stringify(list.body), { status: list.status ?? 200 })
+      const search = url.searchParams.get('search')?.toLowerCase()
+      const rows = search ? list.filter((r) => JSON.stringify(r).toLowerCase().includes(search)) : list
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), pageMax)
       const offset = Number(url.searchParams.get('offset') ?? 0)
-      return new Response(JSON.stringify({ total: list.length, rows: list.slice(offset, offset + limit) }))
+      return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(offset, offset + limit) }))
     }) as typeof globalThis.fetch
     const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}` && !u.searchParams.has('status')).map((u) => Number(u.searchParams.get('offset')))
     const listsAsked = () => [...new Set(urls.map((u) => u.pathname.replace('/api/v1/', '')))].sort()
@@ -732,10 +735,10 @@ describe('dashboard (today is 2026-09-24)', () => {
       checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
       checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
     ],
-    // Newest first, as asked for. The fake ignores the search, so it also sends a Checkout the search would leave out.
+    // Newest first, as asked for.
     'reports/activity': [
       logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
-      logged(15, 1, '2026-09-23 09:05:13', '[Temp checkout | due: 2026-09-23 14:50] Charger included'),
+      logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
       logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
       logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
       logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
@@ -753,7 +756,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     // One request: only tagged Checkouts, newest first, and the first page already reaches back past the oldest candidate.
     const asked = urls.filter((u) => u.pathname === '/api/v1/reports/activity')
     expect(asked.map((u) => Object.fromEntries(u.searchParams))).toEqual([
-      { action_type: 'checkout', item_type: 'asset', search: 'Temp checkout', sort: 'created_at', order: 'desc', limit: '500', offset: '0' },
+      { action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: '500', offset: '0' },
     ])
   })
 

@@ -908,6 +908,9 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
     )
   }
 
+  // Lines show as they're known; "All clear" waits for the Overdue list too, so it never shows before the Temp checkouts line can.
+  const lines = health && !('error' in health) ? healthLines(health, data.overdue) : []
+  const strip = !health || 'error' in health ? health : lines.length || data.overdue ? { lines, at: health.at } : null
   const bars = layout.filter((p) => p.show && isBar(p.piece)).flatMap(({ piece }) => {
     const entry = segments(piece)
     return entry ? [<BarRow key={piece} name={pieceName[piece]} entry={entry} />] : []
@@ -923,8 +926,7 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings, statusLabel
         </div>
       </header>
       <HealthStrip
-        // Checking until the Overdue list is in too, so "All clear" never shows before the Temp checkouts line can.
-        health={!health || !data.overdue ? null : 'error' in health ? health : { lines: healthLines(health, data.overdue), at: health.at }}
+        health={strip}
         onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onTempOnly={openTempOnly}
       />
       {customizing && (
