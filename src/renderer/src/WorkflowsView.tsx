@@ -3,7 +3,7 @@ import { ArchiveRestore, PackageCheck, type LucideIcon } from 'lucide-react'
 import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import { cleanTag, type BulkCheckout, type BulkReturn, type Row } from './workflows'
+import { assigneeName, cleanTag, type BulkCheckout, type BulkReturn, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return']
@@ -102,6 +102,7 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
               <td>
                 {r.result.state === 'waiting' ? <span className="dim">Waiting…</span>
                   : r.result.state === 'confirm' ? <span className="dim">Waiting for confirm</span>
+                  : r.result.state === 'choice' ? <span className="dim">Waiting for a choice</span>
                   : r.result.state === 'undone' ? <span className="dim">Undone</span>
                   : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
                   : <OutcomeText outcome={r.result} />}
@@ -242,7 +243,8 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
 }
 
 // Bulk checkout (#57). Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
-// step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost.
+// step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost. Someone
+// else's Asset opens a choice there instead: Move to this User (a click, or Tab then Enter) or Stop (Esc).
 export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   flow: BulkCheckout
   field: RefObject<HTMLInputElement | null>
@@ -308,6 +310,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
     flow.runner.cancelOpen()
     field.current?.focus()
   }
+  function fix() {
+    setStatus(flow.runner.fixOpen())
+    field.current?.focus()
+  }
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('')
@@ -333,10 +339,15 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const open = user ? flow.runner.open : null
   const undoConfirm = flow.runner.confirm
   const o = flow.options
-  const who = (u: { username: string; employeeNum: string }) => [u.username, u.employeeNum && `#${u.employeeNum}`].filter(Boolean).join(', ')
+  const who = (u: { username?: string; employeeNum?: string }) => [u.username, u.employeeNum && `#${u.employeeNum}`].filter(Boolean).join(', ')
   const a = open?.row.before
   const ctx = open?.row.ctx
-  const said = open && `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}? Enter or rescan to confirm, Esc to cancel.`
+  const choice = open?.choice
+  // Who has it: a User with their username and employee number, or the Location or Asset.
+  const has = a?.assignee && <>{a.assetTag} is checked out to <strong>{assigneeName(a.assignee)}</strong>{who(a.assignee) && ` (${who(a.assignee)})`}</>
+  const said = open && (choice
+    ? `${open.row.tag} is checked out to ${a?.assignee ? assigneeName(a.assignee) : 'someone else'}. ${choice.fix}: click it, or Tab then Enter. Esc to Stop.`
+    : `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}? Enter or rescan to confirm, Esc to cancel.`)
   return (
     <div className="workflow">
       <div className="workflow-main">
@@ -362,20 +373,30 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           />
           <p className="message" role="status">{status}</p>
           {open && a && (
-            // The buttons don't take focus either, so the next scan still lands in the field.
-            <div className="scan-confirm" role="group" aria-label="Confirm checkout">
+            // The buttons don't take focus when clicked either, so the next scan still lands in the field. A choice's
+            // fix-it button is reached with Tab (Enter on the field never picks it); Esc there stops it too.
+            <div className="scan-confirm" role="group" aria-label={choice ? 'Checked out to someone else' : 'Confirm checkout'} onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), cancel())}>
+              {choice && <p>{has}</p>}
               <div className="confirm-tag mono">{a.assetTag}</div>
               <dl className="confirm-facts">
                 {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
               </dl>
-              <p>→ Checkout to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
+              <p>→ {choice ? 'Move' : 'Checkout'} to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
               {(ctx!.expectedCheckin || ctx!.note) && (
                 <p className="dim">{[ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote('Bulk checkout', { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
               )}
-              <div className="actions">
-                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={confirm}>Confirm</button>
-                <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
-              </div>
+              {choice ? (
+                <div className="actions">
+                  <button type="button" disabled={!!choice.blocked} title={choice.blocked || undefined} onMouseDown={(e) => e.preventDefault()} onClick={fix}>{choice.fix}</button>
+                  <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Stop</button>
+                  {choice.blocked && <span className="dim">{choice.blocked}</span>}
+                </div>
+              ) : (
+                <div className="actions">
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={confirm}>Confirm</button>
+                  <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
+                </div>
+              )}
             </div>
           )}
           {undoConfirm && (
@@ -407,7 +428,9 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what || `To ${r.ctx.user.name}`)} />
         <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
       </div>
-      {open
+      {choice
+        ? <KeysPanel keys={[['Tab Enter', choice.fix], ['Esc', 'Stop']]} hint="Enter on the field and rescanning never move it. Scanning a different Asset Tag stops this one; nothing is written." />
+        : open
         ? <KeysPanel keys={[['Enter', 'Confirm (or rescan the same tag)'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
         : undoConfirm
         ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />

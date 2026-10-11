@@ -130,7 +130,7 @@ describe('lookup', () => {
         name: 'CB-LIB-012',
         status: 'Deployed',
         statusMeta: 'deployed',
-        assignee: { type: 'user', id: 311, name: 'Jordan Reyes' },
+        assignee: { type: 'user', id: 311, name: 'Jordan Reyes', username: 'jreyes' },
         can: { checkout: true, checkin: true, update: true, delete: true },
         matched: 'Assignee',
       },
@@ -274,6 +274,13 @@ describe('getAsset', () => {
     const asset = await snipeItWith(escaped).getAsset(4812)
     expect(asset.name).toBe('Cart "B" & charger')
     expect(asset.model).toBe("Dell 3100 '2-in-1'")
+  })
+
+  it("a User Assignee carries their username and employee number, when Snipe-IT sends them (the key may view Users)", async () => {
+    const withNumber = { ...chromebook, assigned_to: { ...chromebook.assigned_to, employee_number: '20417' } }
+    expect((await snipeItWith(withNumber).getAsset(4812)).assignee).toEqual({ type: 'user', id: 311, name: 'Jordan Reyes', username: 'jreyes', employeeNum: '20417' })
+    const denied = { ...chromebook, assigned_to: { id: 311, name: 'Jordan Reyes', type: 'user' } }
+    expect((await snipeItWith(denied).getAsset(4812)).assignee).toEqual({ type: 'user', id: 311, name: 'Jordan Reyes' })
   })
 
   it('Assignee keeps its kind: a Location Assignee is a Location', async () => {
