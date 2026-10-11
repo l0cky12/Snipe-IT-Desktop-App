@@ -87,8 +87,10 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 
 /** What a List is showing: its View (Assets only; All elsewhere), search, filter boxes and sort. */
 export type ListState = { view: AssetView; search: string; filters: Record<string, string>; sort: SavedReport['sort'] }
-/** Where a List opens: on All, with a Drill's filters, or a Saved Report's search and sort (App passes its filters as the Drill). */
-export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? null })
+/** Where a List opens: on All, with a Drill's filters, or a Saved Report's View, search and sort (its filters come as the Drill). */
+export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: report?.view ?? 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? null })
+/** A Saved Report's filters as the Drill it opens with, so a filter with no box shows as its chip. */
+export const reportDrill = (r: SavedReport): Drill => ({ filters: r.filters, label: r.label })
 /** Where picking an Assets View starts: no search or filters, and the View's own sort, as if another List were opened. */
 export const picking = (view: AssetView): ListState => ({ view, search: '', filters: {}, sort: ASSET_VIEWS[view].sort ?? null })
 /** What a List asks Snipe-IT for; only Assets have Views. */
@@ -160,7 +162,7 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-// report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
+// report: the Saved Report it was opened from; its View, search, sort and Columns start the List (App passes its filters as drill).
 export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
   onNew: (kind: EditKind) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
@@ -183,6 +185,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
   const [start] = useState(() => (assetView ? picking(assetView) : opening(drill, report)))
+  // The Drill in force: App's, or that of a Saved Report opened from the tab bar.
+  const [drilled, setDrilled] = useState(drill)
   const [view, setView] = useState(start.view)
   const [text, setText] = useState(start.search)
   const [search, setSearch] = useState(start.search)
@@ -197,6 +201,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // The Saved Report this List is (once opened from or saved as one), so Save writes over it; and the name being typed.
   const [saved, setSaved] = useState(report ?? null)
   const [naming, setNaming] = useState<string | null>(null)
+  // The Operator's Saved Reports of Assets, shown in the tab bar after the Views.
+  const [tabReports, setTabReports] = useState<SavedReport[]>([])
   const [customizing, setCustomizing] = useState(false)
   const [quick, setQuick] = useState<Quick | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
@@ -250,6 +256,12 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     ).finally(() => !stale && setLoading(false))
     return () => { stale = true }
   }, [kind, view, search, filters, sort, offset, reloads])
+  // A tab bar without them still has the Views.
+  useEffect(() => {
+    let stale = false
+    if (kind === 'assets') window.settings.savedReports().then((all) => !stale && setTabReports(all.filter((r) => r.kind === 'assets')), () => {})
+    return () => { stale = true }
+  }, [kind])
   // A filter whose names don't load just has fewer choices.
   useEffect(() => {
     let stale = false
@@ -260,7 +272,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const pickColumn = (key: string) => {
     const next = shown.includes(key) ? shown.filter((k) => k !== key) : [...shown, key]
     setShown(next)
-    if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(next))
+    if (!saved) localStorage.setItem(columnsKey(kind), JSON.stringify(next))
   }
 
   const all: AnyColumn[] = LIST_COLUMNS[kind]
@@ -271,10 +283,17 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const columns = all.filter((c) => showing.includes(c.key))
   const sortable: Record<string, string> = LIST_SORTS[kind]
   const setFilter = (key: string, value: string) => (setFilters((f) => ({ ...f, [key]: value })), setOffset(0))
-  // Picking a View keeps the Selection; the search, filter boxes and sort start again.
+  // Picking a View or a Saved Report's tab keeps the Selection; the rest starts again as that View or Saved Report.
+  const show = (next: ListState) => (setView(next.view), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null))
   const pickView = (v: AssetView) => {
-    const next = picking(v)
-    setView(v), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null), setNaming(null)
+    // Leaving a Saved Report: the List's usual Columns come back, and Save report… makes a new one.
+    if (saved) setSaved(null), setDrilled(undefined), setShown(readColumns(kind))
+    show(picking(v))
+  }
+  const openReport = (r: SavedReport) => {
+    const d = reportDrill(r)
+    setSaved(r), setDrilled(d), setShown(shownColumns(kind, r.columns)), setNaming(null)
+    show(opening(d, r))
   }
   const toggleSort = (key: string) => (setSort((s) => (s?.key === key && s.order === 'asc' ? { key, order: 'desc' } : { key, order: 'asc' })), setOffset(0))
 
@@ -326,10 +345,12 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // The List as it is now, under the typed name: over the Saved Report it is (asNew: as another), or as a new one.
   // The search as typed, even if the List hasn't caught up with the last keystrokes; the label while its chip shows.
   async function saveReport(asNew: boolean) {
-    const drilled = Object.keys(drill?.filters ?? {}).some((k) => filters[k] && !filterBar.some((f) => f.key === k))
+    const chip = Object.keys(drilled?.filters ?? {}).some((k) => filters[k] && !filterBar.some((f) => f.key === k))
     try {
-      const r = await window.settings.saveReport({ id: asNew ? undefined : saved?.id, name: naming ?? '', kind, search: text, filters, label: drilled ? drill?.label : undefined, sort, columns: shown })
+      const r = await window.settings.saveReport({ id: asNew ? undefined : saved?.id, name: naming ?? '', kind, search: text, filters, label: chip ? drilled?.label : undefined, sort, columns: shown,
+        ...(kind === 'assets' && { view }) })
       setSaved(r)
+      setTabReports((all) => (r.kind !== 'assets' ? all : all.some((x) => x.id === r.id) ? all.map((x) => (x.id === r.id ? r : x)) : [...all, r]))
       setNaming(null)
       setMessage({ text: `Saved report "${r.name}"` })
     } catch (e) {
@@ -376,6 +397,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
   // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
   const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== viewSpec?.filter?.[0])
+  const count = page && !loading && <span className="count">{total.toLocaleString()}</span>
   return (
     <>
       {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
@@ -384,9 +406,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
         <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
-          {/* ponytail: a Saved Report can't remember its View yet, so only All can be saved; #107 adds the View. */}
-          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
-            disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
+          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
           <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
             onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
             {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
@@ -397,15 +417,28 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       </header>
       {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
       <div className="list-top">
-        {/* The Assets Views; only the open one shows its count. */}
+        {/* The Assets Views, then the Operator's Saved Reports of Assets, which open in place; only the open tab shows its count. */}
         {kind === 'assets' && (
           <div className="view-tabs" role="tablist" aria-label="Views">
-            {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => (
-              <button key={v} role="tab" aria-selected={v === view} className={v === view ? 'on' : undefined} onClick={() => v !== view && pickView(v)}>
-                {ASSET_VIEWS[v].name}
-                {v === view && page && !loading && <span className="count">{total.toLocaleString()}</span>}
-              </button>
-            ))}
+            {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => {
+              const on = !saved && v === view
+              return (
+                <button key={v} role="tab" aria-selected={on} className={on ? 'on' : undefined} onClick={() => !on && pickView(v)}>
+                  {ASSET_VIEWS[v].name}
+                  {on && count}
+                </button>
+              )
+            })}
+            {tabReports.length > 0 && <span className="tab-sep" aria-hidden="true" />}
+            {tabReports.map((r) => {
+              const on = saved?.id === r.id
+              return (
+                <button key={r.id} role="tab" aria-selected={on} className={on ? 'on' : undefined} onClick={() => !on && openReport(r)} title={`Saved Report: ${ASSET_VIEWS[r.view ?? 'all'].name}`}>
+                  {r.name}
+                  {on && count}
+                </button>
+              )
+            })}
           </div>
         )}
         {customizing && (
@@ -429,7 +462,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
             <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
             {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
             <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
-            <span className="dim">Saves this List's search, filters, sort and Columns.</span>
+            <span className="dim">Saves this List's {kind === 'assets' && 'View, '}search, filters, sort and Columns.</span>
           </form>
         )}
         {/* The toolbar: search and filters, then the Selection bar at its right end while rows are ticked. */}
@@ -437,9 +470,9 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
           {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
           {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
-          {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
-            <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
-              {drill?.label ?? 'Filtered'} ×
+          {Object.keys(drilled?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
+            <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drilled?.label ?? k}`}>
+              {drilled?.label ?? 'Filtered'} ×
             </button>
           ))}
           {selectable && (selection.size > 0 || selectingAll) && (
