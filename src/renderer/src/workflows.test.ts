@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Asset, CheckinOptions, CheckoutOptions, StatusLabel, UserCard } from '../../main/snipeit'
-import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, NOT_ALLOWED } from './workflows'
+import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, fieldKey, NOT_ALLOWED } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
@@ -851,6 +851,17 @@ describe('Bulk checkout', () => {
       flow.runner.askUndo()
       await flow.runner.undo()
       expect(flow.step).toMatchObject({ user: { assets: AVERY.assets } })
+    })
+
+    it("keeps the field's key through the count changing, so a tag being typed isn't cleared, and changes it on Done", async () => {
+      const { flow, bridge } = await checkedOut()
+      const key = fieldKey(flow.step)
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(fieldKey(flow.step)).toBe(key)
+      flow.done()
+      expect(fieldKey(flow.step)).not.toBe(key)
     })
 
     it('refuses when it is no longer checked out to this User, or its Status Label changed, and writes nothing', async () => {

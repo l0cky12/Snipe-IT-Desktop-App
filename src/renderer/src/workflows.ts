@@ -380,6 +380,8 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
 export type BulkReturn = ReturnType<typeof createBulkReturn>
 
 export type BulkCheckoutStep = { step: 'user' } | { step: 'scan'; user: UserCard; round: number }
+// Changes on a new step or round only, not when the User's Asset count does, so the view's field clears on a real change.
+export const fieldKey = (s: BulkCheckoutStep) => (s.step === 'scan' ? `scan ${s.round}` : s.step)
 /** Bulk checkout's Options: a date-only Expected Checkin and a note, each '' when not set. */
 export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
