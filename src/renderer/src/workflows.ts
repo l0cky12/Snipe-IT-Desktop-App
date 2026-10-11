@@ -395,13 +395,15 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
 
-  const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, expectedCheckin, note }) => {
+  const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
     // ponytail: someone else's Asset is refused for now; the choice step (Move to this User / Stop) is #91.
     if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}`)
     if (a.statusType !== 'deployable') throw new Error(`"${a.assetTag}" is "${a.status}", which can't be checked out`)
     if (!a.can.checkout) throw new Error(NOT_ALLOWED)
+    // Scanned for a User who's since been Done: no confirm opens for a round that's over.
+    if (step.step !== 'scan' || step.round !== round) return { neutral: SKIPPED, what }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
       await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
@@ -456,6 +458,10 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       // A tag scanned here by mistake just finds no User; no request is spent finding out it was a tag.
       const tagLike = !/\s/.test(q) && /\d/.test(q) && /\p{L}/u.test(q)
       return { users: [], status: `No User matches '${q}'${tagLike ? '. Find the User first, then scan Assets.' : ''}` }
+    },
+    /** The text changed: a find still waiting never lands. */
+    stopFinding() {
+      attempt++
     },
     /** Picks a User from the list: their header is read, then step 2. */
     async pick(id: number, mine = ++attempt): Promise<{ status: string }> {

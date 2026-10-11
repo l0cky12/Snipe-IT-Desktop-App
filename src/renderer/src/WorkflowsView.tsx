@@ -311,26 +311,27 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('')
-    if (!user) return void find()
     // Enter on the empty field confirms an open confirm (or Undo); a scan confirms its own tag, or skips the waiting one.
-    if (!cleanTag(text)) return flow.runner.open ? confirm() : flow.runner.confirm ? undo() : undefined
+    if (!cleanTag(text) && (flow.runner.open || flow.runner.confirm)) return flow.runner.open ? confirm() : undo()
+    if (!user) return void find()
+    if (!cleanTag(text)) return
     setStatus(flow.scan(text))
     setText('')
   }
   function onKeyDown(e: React.KeyboardEvent) {
-    if (user && e.key === 'Escape') {
+    if (e.key === 'Escape' && (user || flow.runner.confirm)) {
       e.preventDefault()
       // One level back: the open confirm, then the Undo confirm, then Done for this User.
       return flow.runner.open ? cancel() : flow.runner.confirm ? flow.runner.cancelUndo() : (flow.done(), setStatus(''))
     }
-    if (user && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
     if (user || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !shown.length) return
     e.preventDefault()
     setMoved({ q, i: e.key === 'ArrowDown' ? Math.min(hi + 1, shown.length - 1) : Math.max(hi - 1, 0) })
   }
 
   const open = user ? flow.runner.open : null
-  const undoConfirm = user ? flow.runner.confirm : null
+  const undoConfirm = flow.runner.confirm
   const o = flow.options
   const who = (u: { username: string; employeeNum: string }) => [u.username, u.employeeNum && `#${u.employeeNum}`].filter(Boolean).join(', ')
   const a = open?.row.before
@@ -353,7 +354,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             autoFocus
             className="search"
             value={text}
-            onChange={(e) => { setText(e.target.value); setStatus('') }}
+            onChange={(e) => { setText(e.target.value); setStatus(''); if (!user) flow.stopFinding() }}
             onKeyDown={onKeyDown}
             placeholder={user ? `Scan an Asset Tag for ${user.name}` : 'Find a User by name, email or employee number'}
             aria-label={user ? 'Asset Tag' : 'Find a User'}
@@ -412,7 +413,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
         ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
         : user
         ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}.`} />
-        : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight']]} hint="Type a name, email or employee number, or scan an ID card." />}
+        : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight'], [UNDO_KEY, 'Undo last']]} hint="Type a name, email or employee number, or scan an ID card." />}
     </div>
   )
 }

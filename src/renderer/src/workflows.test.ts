@@ -688,6 +688,17 @@ describe('Bulk checkout', () => {
       expect(flow.scan('NOMMA-001234')).toBe('Find the User first')
     })
 
+    it('a find still waiting when the text changes never lands', async () => {
+      const { flow, bridge } = await finding([])
+      let release = () => {}
+      bridge.exactUsers.mockImplementationOnce(() => new Promise((r) => { release = () => r([AVERY]) }))
+      const slow = flow.find('atestwell')
+      flow.stopFinding()
+      release()
+      await slow
+      expect(flow.step).toEqual({ step: 'user' })
+    })
+
     it('a slower find never lands after Done or a newer pick', async () => {
       const { flow, bridge } = await finding([])
       let release = () => {}
@@ -765,6 +776,26 @@ describe('Bulk checkout', () => {
       flow.runner.confirmOpen()
       await settled(flow)
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
+      expect(checkouts).toEqual([])
+    })
+
+    it('a lookup that lands after Done never opens a confirm for the ended round', async () => {
+      const { flow, bridge, checkouts } = await scanning([ready('NOMMA-1')])
+      let release = () => {}
+      bridge.assetByTag.mockImplementationOnce((tag) => new Promise((r) => { release = () => r(ready(tag)) }))
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.rows[0].result.state).toBe('working'))
+      flow.done()
+      bridge.exactUsers.mockResolvedValueOnce([{ ...AVERY, id: 8, name: 'Blake Sampleton' }])
+      await flow.find('bsampleton')
+      release()
+      await settled(flow)
+      expect(flow.runner.open).toBeNull()
+      expect(flow.runner.rows.find((r) => r.tag === 'NOMMA-1')!.result).toEqual({ state: 'neutral', text: 'Skipped: not confirmed' })
+      // Rescanning it now is a new scan for the new User.
+      flow.scan('NOMMA-1')
+      await opened(flow)
+      expect(flow.runner.open!.row.ctx.user.name).toBe('Blake Sampleton')
       expect(checkouts).toEqual([])
     })
 
