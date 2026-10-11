@@ -22,12 +22,18 @@ export type Asset = {
   location: string
   /** The Location's id, so an undo can put it back */
   locationId: number | null
+  /** Where Snipe-IT puts the Asset on a Checkin with no Location (its rtd_location); '' when it has none */
+  defaultLocation: string
   category: string
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
   /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
+  /** The date of the Asset's last Audit, or null when it has never been Audited */
+  lastAudited: string | null
+  /** The date Snipe-IT expects its next Audit, or null when it has none */
+  nextAudit: string | null
   /** How late, or null when not Overdue */
   overdue: Lateness | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
@@ -173,16 +179,28 @@ export type Dashboard = {
   }[K]
 }
 
-/** The Reports: the Activity Report over a date range, and the Overdue and Warranty expiring lists in full. */
-export const REPORTS = ['activity', 'overdue', 'expiring'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, and the audit Reports. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited'] as const
 export type ReportKind = (typeof REPORTS)[number]
-export const REPORT_NAMES: Record<ReportKind, string> = { activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring' }
+export const REPORT_NAMES: Record<ReportKind, string> = {
+  activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited',
+}
+/** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
+export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited']
+/** Whether a Schedule's Report (a { builtIn } or { saved } key, from the screen) takes a date range: a Saved Report's List has no dates. */
+export const takesRange = (report: unknown) =>
+  !!report && typeof report === 'object' && 'builtIn' in report && RANGED_REPORTS.includes(report.builtIn as ReportKind)
+/** The Reports narrowed to a Location and a Category. */
+export const AUDIT_REPORTS: readonly ReportKind[] = ['auditDue', 'auditLate', 'lastAudited']
 /** Kinds of thing the Activity Report can be narrowed to (Snipe-IT's item types). */
 export const ACTIVITY_ITEM_TYPES = ['asset', 'license', 'accessory', 'consumable', 'component', 'user'] as const
 /** Glossary name for each Record type, for the Activity Report's filter and column. */
 export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> = { asset: 'Assets', license: 'Licenses', accessory: 'Accessories', consumable: 'Consumables', component: 'Components', user: 'Users' }
-/** from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty end). */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string }
+/**
+ * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
+ * end, next audit, last audit). locationId/categoryId: Snipe-IT ids, for the audit Reports.
+ */
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
@@ -254,6 +272,28 @@ export type ImportFile = { id: number; name: string; size: string; uploaded: str
 /** Imported, or Snipe-IT's errors for each row that failed, keyed by the row's name, exactly as Snipe-IT sent them. */
 export type ImportResult = { ok: true } | { ok: false; errors: Record<string, unknown> }
 
+/**
+ * What kind of failure a call hit, so the window can tell one every following request would hit too (Snipe-IT
+ * unreachable or too slow, the API key rejected, a refusal, or a request limit) from one about this request alone (refused).
+ */
+export type FailureKind = 'unreachable' | 'timeout' | 'key' | 'forbidden' | 'rateLimited' | 'refused'
+/**
+ * A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait.
+ * A plain object, not an Error: the bridge to the window copies an Error's message only, but an object's every field.
+ */
+export type Failure = { message: string; kind: FailureKind; retryAfter?: number }
+
+// Electron passes only an error's message from the main process, so it writes the kind into it ("[rateLimited 23] …")
+// and the preload reads it back out. An error with no kind is about this request alone.
+export function toWire(e: unknown): Error {
+  const { kind = 'refused', retryAfter } = e as Partial<Failure>
+  return new Error(`[${kind}${retryAfter === undefined ? '' : ` ${retryAfter}`}] ${e instanceof Error ? e.message : String(e)}`)
+}
+export function fromWire(message: string): Failure {
+  const [, kind = 'refused', seconds, text = message] = /^\[(\w+)(?: (\d+))?\] ([\s\S]*)$/.exec(message) ?? []
+  return { message: text, kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) }
+}
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 /** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
@@ -269,11 +309,15 @@ type RawAsset = {
   status_label: { id: number; name: string; status_meta: string; status_type?: string } | null
   category: Named
   location: Named
+  rtd_location: Named
   assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
   // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
   expected_checkin: { date?: string; datetime?: string } | null
+  // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
+  last_audit_date?: { date?: string; datetime?: string } | null
+  next_audit_date?: { date?: string; datetime?: string } | null
   available_actions?: unknown
 }
 type RawActivity = {
@@ -415,6 +459,9 @@ function overdueOf(now: Date, due: string): Lateness | null {
   return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.max(1, Math.floor(ms / 6e4)) } // || 0: not -0
 }
 
+// A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
+const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
+
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
@@ -435,11 +482,14 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
     locationId: raw.location?.id ?? null,
+    defaultLocation: raw.rtd_location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
     warrantyEnd,
     expectedCheckin,
+    lastAudited: dayOf(raw.last_audit_date),
+    nextAudit: dayOf(raw.next_audit_date),
     overdue: expectedCheckin && raw.assigned_to ? overdueOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
@@ -665,11 +715,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
+  // Each thrown Error carries its FailureKind, and an HTTP error its status.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+    const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
+    const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
-      ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
-      : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+      ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
+      : unreachable()
     let res: Response, text: string
     try {
       res = await fetch(api + path, {
@@ -681,8 +734,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } catch (e) {
       throw failed(e)
     }
+    // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
-      throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
+      throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
+    // Over Snipe-IT's requests a minute. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    if (res.status === 429) {
+      const header = res.headers.get('Retry-After')?.trim() ?? ''
+      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
+    }
+    // The proxy in front of Snipe-IT can't reach it.
+    if ([502, 503, 504].includes(res.status)) throw unreachable({ status: res.status })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     // The timeout covers the body too: a slow server can stall after the headers.
     try {
@@ -702,9 +764,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // An Import with rows that failed answers 500 with each row's errors; processImport, the only caller it reaches, reads them.
     if ((body as { status?: unknown } | undefined)?.status === 'import-errors') return body as T
     if (!res.ok) {
-      const failure = body as { messages?: unknown; message?: unknown } | undefined
-      const snipeItReason = reason(failure?.messages ?? failure?.message)
-      throw Object.assign(new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`), { status: res.status })
+      const answer = body as { messages?: unknown; message?: unknown } | undefined
+      const snipeItReason = reason(answer?.messages ?? answer?.message)
+      throw failure(res.status === 403 ? 'forbidden' : 'refused', `Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`, { status: res.status })
     }
     if (body === undefined)
       throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
@@ -781,8 +843,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return true
     } catch (e) {
-      // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
-      if (/HTTP 403\b/.test((e as Error).message)) return false
+      // A refusal is the answer; anything else (offline…) is an error.
+      if ((e as Partial<Failure>).kind === 'forbidden') return false
       throw e
     }
   }
@@ -921,12 +983,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
-    async report(kind: ReportKind, { from, to, itemType, actionType }: ReportQuery = {}): Promise<Report> {
+    // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited is every Asset.
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
+      for (const [id, what] of [[locationId, 'Location'], [categoryId, 'Category']]) if (id !== undefined && id !== '' && !/^[1-9]\d*$/.test(String(id))) throw new Error(`Invalid ${what} id: ${id}`)
       const inRange = (day: string) => (!from || day >= from) && (!to || day <= to)
       if (kind === 'activity') {
         const rows: string[][] = []
@@ -950,6 +1014,32 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const now = today()
+      if (AUDIT_REPORTS.includes(kind)) {
+        const params = new URLSearchParams({ ...(locationId && { location_id: locationId }), ...(categoryId && { category_id: categoryId }) })
+        const path = kind === 'auditDue' ? '/hardware/audit/due' : kind === 'auditLate' ? '/hardware/audit/overdue' : '/hardware'
+        // Paged in id order (see allRows) and sorted here, so a row added mid-load can't shift a page.
+        const assets = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+        // Every audit Report starts with these columns; the to-do ones add the Assignee before the audit dates.
+        const assetColumns = ['Asset Tag', 'Name', 'Asset Model', 'Category', 'Location']
+        const assetCells = (a: Asset) => [a.assetTag, a.name, a.model, a.category, a.location]
+        const auditCells = (a: Asset) => [a.lastAudited ?? 'Never', a.nextAudit ?? '']
+        if (kind === 'lastAudited')
+          return {
+            columns: [...assetColumns, 'Last audited', 'Next audit'],
+            // A blank From includes Assets never Audited; they're the oldest, so they come first.
+            rows: assets.filter((a) => (a.lastAudited ? inRange(a.lastAudited) : !from)).sort((a, b) => (a.lastAudited ?? '').localeCompare(b.lastAudited ?? ''))
+              .map((a) => [...assetCells(a), ...auditCells(a)]),
+            capped: false,
+          }
+        // Soonest first is most days late first too.
+        const listed = assets.filter((a) => a.nextAudit && inRange(a.nextAudit)).sort((a, b) => a.nextAudit!.localeCompare(b.nextAudit!))
+        const due = kind === 'auditDue'
+        return {
+          columns: [...assetColumns, 'Assignee', 'Last audited', 'Next audit', due ? 'Days left' : 'Days late'],
+          rows: listed.map((a) => [...assetCells(a), a.assignee?.name ?? '', ...auditCells(a), String(due ? daysFrom(now, a.nextAudit!) : -daysFrom(now, a.nextAudit!))]),
+          capped: false,
+        }
+      }
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {
