@@ -556,6 +556,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
       if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
       // A label someone set since the Checkout isn't overwritten with the old one.
       if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
+      // Another Expected Checkin means a newer Checkout to the same User; that one isn't undone.
+      if ((now.expectedCheckin ?? '') !== expectedCheckin) throw new Error(`${a.assetTag} is due back ${now.expectedCheckin || 'never'} now`)
       await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
     }
     // Snipe-IT can't check in to no Location (it uses the Default Location instead), so that undo is by hand.

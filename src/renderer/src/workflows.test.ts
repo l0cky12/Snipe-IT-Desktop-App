@@ -845,6 +845,15 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
 
+    it('refuses a newer Checkout to the same User (another Expected Checkin), and writes nothing', async () => {
+      const { flow, bridge, checkins } = await checkedOut()
+      bridge.assetByTag.mockResolvedValueOnce(now({ expectedCheckin: '2026-11-02' }))
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(checkins).toEqual([])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'NOMMA-1 is due back 2026-11-02 now' })
+    })
+
     it("is by hand for an Asset that had no Location but has a Default Location: Snipe-IT's Checkin would send it there", async () => {
       const f = await scanning([ready('NOMMA-1', { location: '', locationId: null, defaultLocation: 'IT Office' })])
       f.flow.scan('NOMMA-1')
