@@ -1095,6 +1095,15 @@ describe('Pause (#73)', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "Changed while paused: checked out to Blake Sampleton, 'Deployed', at Library" })
     })
 
+    it('on Resume, a new Expected Checkin counts as changed too: the retry would clear it', async () => {
+      const { flow, assets, checkins } = await cutOff()
+      assets[0] = { ...assets[0], expectedCheckin: '2026-10-20' }
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(checkins).toHaveLength(1)
+      expect(flow.runner.rows[0].result).toMatchObject({ state: 'failed', reason: expect.stringMatching(/^Changed while paused/) })
+    })
+
     it("Bulk checkout: a confirmed Checkout that timed out and went through is done on Resume, without a second confirm", async () => {
       const fake = fakeBridge([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusMeta: 'deployable', checkoutAllowed: true })])
       const flow = createBulkCheckout(fake.bridge, { changed: () => {} }, undefined, 0)

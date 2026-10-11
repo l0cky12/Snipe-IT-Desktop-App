@@ -172,11 +172,10 @@ app.whenReady().then(() => {
   // tray quits. Logging out of Windows ends the app without asking.
   let tray: Tray | null = null
   let quitting = false
-  app.on('before-quit', () => { quitting = true })
   // Windows logging out or shutting down: never held up by the prompt below.
   win.on('session-end', () => { quitting = true })
-  // Quitting (from the tray, or closing the window out of tray mode) while a Paused Workflow holds scans asks first (#73);
-  // a moving queue quits without asking. In memory only, so quitting loses them.
+  // Quitting (the tray's Quit, Ctrl+Q, or closing the window out of tray mode) while a Paused Workflow holds scans asks
+  // first (#73); a moving queue quits without asking. In memory only, so quitting loses them.
   let unsent = 0
   handle('workflows:unsent', (_e, count: unknown) => { unsent = Number.isSafeInteger(count) && (count as number) > 0 ? count as number : 0 })
   const quitAnyway = () => {
@@ -184,9 +183,14 @@ app.whenReady().then(() => {
     const ask = { type: 'warning' as const, buttons: ['Quit', 'Cancel'], defaultId: 1, cancelId: 1, message: `${unsent} scan${unsent === 1 ? " wasn't" : "s weren't"} sent to Snipe-IT. Quit anyway?` }
     return (win.isVisible() ? dialog.showMessageBoxSync(win, ask) : dialog.showMessageBoxSync(ask)) === 0
   }
+  app.on('before-quit', (e) => {
+    if (!quitting && !quitAnyway()) return e.preventDefault()
+    quitting = true
+  })
   win.on('close', (e) => {
     if (quitting) return
-    if (!tray) return void (quitAnyway() || e.preventDefault())
+    // Closing the last window quits: asked here, while the window is still there to cancel.
+    if (!tray) return void (quitAnyway() ? (quitting = true) : e.preventDefault())
     e.preventDefault()
     win.getChildWindows().forEach((w) => w.close())
     win.hide()
@@ -195,7 +199,7 @@ app.whenReady().then(() => {
     if (inTray && !tray) {
       tray = new Tray(nativeImage.createFromPath(trayIcon))
       tray.setToolTip('Snipe-IT Desktop')
-      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => quitAnyway() && app.quit() }]))
+      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => app.quit() }]))
       tray.on('click', show)
     } else if (!inTray && tray) {
       tray.destroy()

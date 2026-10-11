@@ -56,9 +56,9 @@ const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 // What a scanner or a stray key adds around an Asset Tag: control characters anywhere, whitespace at the ends.
 export const cleanTag = (raw: string) => raw.replace(/\p{Cc}/gu, '').trim()
 const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working' || r.result.state === 'unsure'
-// The fields a Workflow's write changes; an Asset whose fields all match its lookup is as it was when scanned.
+// The fields a Workflow's write changes (or its undo puts back); an Asset whose fields all match its lookup is as it was when scanned.
 const same = (a: Asset, b: Asset) =>
-  a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId
+  a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId && a.expectedCheckin === b.expectedCheckin
 const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 const found = (a: Asset) => `${a.assignee ? `checked out to ${assigneeName(a.assignee)}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
 
@@ -483,7 +483,10 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'key
     }
   }, events, now, pace, async () => {
     // Resume: found again, in case it's another key now. ponytail: kept as it was if it's gone; the next Checkin says why.
-    ready = (await findReady()) ?? ready
+    // Not after Done or another server meanwhile (attempt moved): reset() forgets it, and the next start finds it.
+    const mine = attempt
+    const id = await findReady()
+    if (mine === attempt) ready = id ?? ready
   })
 
   return {

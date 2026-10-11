@@ -18,6 +18,7 @@ let dir: string
 const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
 // The main window's event handlers, the tray menu, and the quit prompt (which answers Cancel unless told otherwise).
 const windowEvents = new Map<string, (e: { preventDefault(): void }) => void>()
+const appEvents = new Map<string, (e: { preventDefault(): void }) => void>()
 let trayMenu: { label: string; click: () => void }[] = []
 const ask = vi.fn<(...args: unknown[]) => number>()
 const quit = vi.fn()
@@ -33,6 +34,7 @@ beforeEach(async () => {
   vi.useFakeTimers()
   handlers.clear()
   windowEvents.clear()
+  appEvents.clear()
   ask.mockReset().mockReturnValue(1)
   quit.mockClear()
   send.mockClear()
@@ -43,7 +45,7 @@ beforeEach(async () => {
   nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
-    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: () => {}, setAppUserModelId: () => {}, quit, isPackaged: false },
+    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: (name: string, handler: (e: { preventDefault(): void }) => void) => appEvents.set(name, handler), setAppUserModelId: () => {}, quit, isPackaged: false },
     BrowserWindow: class {
       setMenuBarVisibility() {}
       loadFile() {}
@@ -182,40 +184,57 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
 })
 
 describe('quitting while a Paused Workflow holds scans (#73)', () => {
-  const close = () => {
+  // Whether the window close, or app.quit()'s before-quit, was cancelled.
+  const cancelled = (handler: (e: { preventDefault(): void }) => void) => {
     const e = { preventDefault: vi.fn() }
-    windowEvents.get('close')!(e)
+    handler(e)
     return e.preventDefault.mock.calls.length > 0
   }
+  const close = () => cancelled(windowEvents.get('close')!)
+  const beforeQuit = () => cancelled(appEvents.get('before-quit')!)
 
   it('closing the window out of tray mode asks only when scans are waiting, and Cancel keeps the app open', async () => {
-    expect(close()).toBe(false)
     await call('workflows:unsent', 3)
     expect(close()).toBe(true)
     expect(ask).toHaveBeenCalledTimes(1)
     expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "3 scans weren't sent to Snipe-IT. Quit anyway?", buttons: ['Quit', 'Cancel'] })
     ask.mockReturnValue(0)
     expect(close()).toBe(false)
-    // A moving queue (or none) quits without asking.
-    await call('workflows:unsent', 0)
-    expect(close()).toBe(false)
+    // Quit was chosen: the app.quit() that follows the last window closing doesn't ask again.
+    expect(beforeQuit()).toBe(false)
     expect(ask).toHaveBeenCalledTimes(2)
   })
 
-  it("the tray's Quit asks too; closing to the tray keeps the scans without asking", async () => {
+  it('a moving queue (or none) quits without asking', async () => {
+    await call('workflows:unsent', 0)
+    expect(close()).toBe(false)
+    expect(beforeQuit()).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('Windows logging out never waits on the prompt', async () => {
+    await call('workflows:unsent', 2)
+    windowEvents.get('session-end')!({ preventDefault() {} })
+    expect(beforeQuit()).toBe(false)
+    expect(close()).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it("quitting the app (the tray's Quit, Ctrl+Q) asks too; closing to the tray keeps the scans without asking", async () => {
     await call('settings:saveBackground', { tray: true, startAtLogin: false })
-    const quitItem = trayMenu.find((i) => i.label === 'Quit')!
-    quitItem.click()
+    trayMenu.find((i) => i.label === 'Quit')!.click()
     expect(quit).toHaveBeenCalledTimes(1)
     await call('workflows:unsent', 1)
     expect(close()).toBe(true)
     expect(ask).not.toHaveBeenCalled()
-    quitItem.click()
+    expect(beforeQuit()).toBe(true)
     expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "1 scan wasn't sent to Snipe-IT. Quit anyway?" })
-    expect(quit).toHaveBeenCalledTimes(1)
+    // Still running in the tray, so closing hides the window again.
+    expect(close()).toBe(true)
     ask.mockReturnValue(0)
-    quitItem.click()
-    expect(quit).toHaveBeenCalledTimes(2)
+    expect(beforeQuit()).toBe(false)
+    // Quitting now: the window closes for good.
+    expect(close()).toBe(false)
   })
 
   it('only takes a whole number of scans from the window', async () => {
