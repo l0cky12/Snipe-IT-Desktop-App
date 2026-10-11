@@ -219,8 +219,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       try {
         await refresh()
       } catch (e) {
+        const p = await pauseFor(e)
+        // Drop waiting or another server while the lookups ran: that pause is over.
         if (mine !== generation || paused !== was) return
-        return pause((await pauseFor(e)) ?? { ...was, message: (e as Error).message } as Pause)
+        return pause(p ?? { ...was, message: (e as Error).message } as Pause)
       }
       if (mine !== generation || paused !== was) return
     }
@@ -556,13 +558,17 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
       if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
       await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
     }
-    const done: Done = { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }
+    // Snipe-IT can't check in to no Location (it uses the Default Location instead), so that undo is by hand.
+    const byHand = a.locationId === null && a.defaultLocation
+    const done: Done = { text: 'Checked out', undo: byHand ? `Snipe-IT would check ${a.assetTag} in to its Default Location, ${a.defaultLocation}, not back to no Location. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} → ${user.name}`, run } }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
       await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
       return done
     }
-    return { what, confirm: { write, left: (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id ? done : null) } }
+    // As this Checkout leaves it: to this User, the Status Label kept, and the Expected Checkin it set (or none).
+    const left = (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === expectedCheckin ? done : null)
+    return { what, confirm: { write, left } }
   }, events, now, pace)
 
   function choose(user: UserCard) {

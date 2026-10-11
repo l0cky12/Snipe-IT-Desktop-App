@@ -845,6 +845,15 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
 
+    it("is by hand for an Asset that had no Location but has a Default Location: Snipe-IT's Checkin would send it there", async () => {
+      const f = await scanning([ready('NOMMA-1', { location: '', locationId: null, defaultLocation: 'IT Office' })])
+      f.flow.scan('NOMMA-1')
+      await opened(f.flow)
+      f.flow.runner.confirmOpen()
+      await settled(f.flow)
+      expect(f.flow.runner.undoBlocked).toMatch(/^Snipe-IT would check NOMMA-1 in to its Default Location, IT Office/)
+    })
+
     it('refuses when it is no longer checked out to this User, or its Status Label changed, and writes nothing', async () => {
       const { flow, bridge, checkins } = await checkedOut()
       bridge.assetByTag.mockResolvedValueOnce(now({ assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } }))
@@ -1114,12 +1123,29 @@ describe('Pause (#73)', () => {
       failOnce(fake.bridge.checkout, failure('timeout'))
       flow.runner.confirmOpen()
       await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
-      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1'))
+      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { status: 'Ready to Deploy', statusId: 1 }))
       await flow.runner.resume()
       await settled(flow.runner)
       expect(flow.runner.open).toBeNull()
       expect(fake.checkouts).toHaveLength(1)
       expect(flow.runner.rows[0].result).toEqual({ state: 'done', text: 'Checked out: went through before the connection dropped' })
+    })
+
+    it("Bulk checkout: someone else's Checkout to the same User (another Expected Checkin) isn't taken for this one", async () => {
+      const fake = fakeBridge([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusMeta: 'deployable', checkoutAllowed: true })])
+      const flow = createBulkCheckout(fake.bridge, { changed: () => {} }, undefined, 0)
+      fake.bridge.exactUsers.mockResolvedValueOnce([AVERY])
+      await flow.find('atestwell')
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+      fake.bridge.checkout.mockRejectedValueOnce(failure('timeout'))
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { status: 'Ready to Deploy', statusId: 1, expectedCheckin: '2026-10-30' }))
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(flow.runner.rows[0].result).toMatchObject({ state: 'failed', reason: expect.stringMatching(/^Changed while paused: checked out to Avery Testwell/) })
+      expect(flow.runner.undoBlocked).toBe('Nothing to undo')
     })
   })
 
@@ -1143,6 +1169,24 @@ describe('Pause (#73)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('Drop waiting while Resume is still checking a 403 keeps the pause lifted', async () => {
+    const fake = fakeBridge([asset('NOMMA-1')])
+    const flow = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
+    await flow.start(ITOFFICE)
+    failOnce(fake.bridge.assetByTag, failure('key'))
+    flow.scan('NOMMA-1')
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    let answer!: (refused: boolean) => void
+    fake.bridge.statusLabels.mockRejectedValueOnce(failure('forbidden'))
+    fake.bridge.keyRefused.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    const resumed = flow.runner.resume()
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    flow.runner.dropWaiting()
+    answer(true)
+    await resumed
+    expect(flow.runner.paused).toBeNull()
   })
 
   it('each Workflow pauses on its own', async () => {
