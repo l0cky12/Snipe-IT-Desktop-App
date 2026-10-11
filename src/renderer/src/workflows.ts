@@ -15,14 +15,15 @@ export type Result = { state: 'waiting' } | { state: 'undone' } | Outcome
  *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. */
 export type Undo = { says: string; run: (now: Asset) => Promise<void> }
 /** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
- *  before: the Asset as the lookup found it, before the Workflow acted. undoFailed: why the last Undo of it didn't happen. */
+ *  before: the Asset as the lookup found it, before the Workflow acted. undo: how to put it back, or why it can't be.
+ *  undoFailed: why the last Undo of it didn't happen. */
 export type Row<C = unknown> = {
   key: number; time: string; tag: string; assetId: number | null; name: string; what: string; ctx: C; result: Result
-  before: Asset | null; undo?: Undo; undoFailed?: string
+  before: Asset | null; undo?: Undo | string; undoFailed?: string
 }
 export type Events = { changed: () => void; failed?: () => void }
 /** What a Workflow's step does to one scanned Asset: the done text, "what" cell and how to undo it, or a throw with the refusal. */
-export type Act<C> = (asset: Asset, ctx: C) => Promise<{ text: string; what?: string; undo?: Undo }>
+export type Act<C> = (asset: Asset, ctx: C) => Promise<{ text: string; what?: string; undo?: Undo | string }>
 
 const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 // What a scanner or a stray key adds around an Asset Tag: control characters anywhere, whitespace at the ends.
@@ -96,8 +97,14 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     const r = rows.find((r) => r.result.state === 'done' || r.result.state === 'undone')
     return r?.result.state === 'done' && r.undo ? r : null
   }
-  // Why Undo last is off ('' when it isn't): it waits for the queue, so "last" is well defined.
-  const undoBlocked = () => (rows.some(busy) || undoing ? 'Undo waits until nothing is waiting or working' : undoTarget() ? '' : 'Nothing to undo')
+  const waits = () => rows.some(busy) || !!undoing
+  // Why Undo last is off ('' when it isn't): it waits for the queue and any open confirm, so "last" is well defined.
+  const undoBlocked = () => {
+    if (waits()) return 'Undo waits until nothing is waiting or working'
+    if (confirming) return 'Undo is waiting for Enter or Esc'
+    const undo = undoTarget()?.undo
+    return typeof undo === 'string' ? undo : undo ? '' : 'Nothing to undo'
+  }
 
   return {
     get rows() { return rows },
@@ -107,8 +114,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     get announce() { return announce },
     /** Why Undo last is off, or '' when it can be asked for. */
     get undoBlocked() { return undoBlocked() },
+    /** Why Clear is off, or '' when it isn't. */
+    get clearBlocked() { return waits() ? 'Waits until nothing is waiting or working' : '' },
     /** The open Undo last confirm's text, or null. */
-    get confirm() { return confirming && `Undo: ${confirming.undo!.says}? Enter to undo, Esc to cancel.` },
+    get confirm() { return confirming && `Undo: ${(confirming.undo as Undo).says}? Enter to undo, Esc to cancel.` },
     /** Opens Undo last's confirm for the newest done row; returns why it can't ('' when it did). */
     askUndo(): string {
       const why = undoBlocked()
@@ -127,6 +136,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       const row = confirming
       confirming = null
       if (!row || undoBlocked() || undoTarget() !== row) return events.changed()
+      const { run } = row.undo as Undo
       const mine = generation
       let release = () => {}
       undoing = new Promise((r) => { release = r })
@@ -135,7 +145,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         const now = await bridge.assetByTag(row.tag)
         if (mine !== generation) return
         if (!now) throw new Error(`No Asset with tag ${row.tag}`)
-        await row.undo!.run(now)
+        await run(now)
         if (mine !== generation) return
         announce = `${row.tag}: Undone`
         update(row.key, { result: { state: 'undone' }, undoFailed: undefined })
@@ -168,7 +178,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       return ''
     },
     clear() {
-      if (rows.some(busy) || undoing) return
+      if (waits()) return
       confirming = null
       rows = []
       announce = ''
@@ -221,7 +231,9 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
       const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
       await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
-    return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo: { says: `${a.assetTag} checked in from ${from}`, run } }
+    // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.
+    const undo = keep ? `Snipe-IT can't check out an Asset with status '${a.status}'. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} checked in from ${from}`, run }
+    return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo }
   }, events, now, pace)
 
   return {

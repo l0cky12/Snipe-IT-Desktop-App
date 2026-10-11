@@ -60,30 +60,29 @@ function KeysPanel({ keys, hint }: { keys: [key: string, does: string][]; hint: 
   )
 }
 
-const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working'
 export const UNDO_KEY = 'Ctrl Z'
-const UNDO_TIP = `${UNDO_KEY}: puts the newest done row back. Snipe-IT's History keeps both entries, and emails Snipe-IT already sent stay sent.`
+const UNDO_TIP = `${UNDO_KEY}: puts the newest done row back. Snipe-IT's History keeps both entries, emails it already sent stay sent, and the undo may send another.`
 
 // One Workflow's Running list, newest first, with Undo last and Clear. what: the Workflow's "what" cell for a row.
-// undoBlocked: why Undo last is off ('' when it isn't).
-export function RunningList<C>({ rows, doneLabel, what, undoBlocked, onUndo, onOpenAsset, onClear }: {
+// undoBlocked, clearBlocked: why each button is off ('' when it isn't).
+export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocked, onUndo, onOpenAsset, onClear }: {
   rows: Row<C>[]
   doneLabel: string
   what: (r: Row<C>) => ReactNode
   undoBlocked: string
+  clearBlocked: string
   onUndo: () => void
   onOpenAsset: (id: number) => void
   onClear: () => void
 }) {
   const done = rows.filter((r) => r.result.state === 'done').length
-  const working = rows.some(busy)
   return (
     <>
       <div className="section running-head">
         <span>{done} {doneLabel}</span>
         <div className="actions">
           <button className="quiet" disabled={!!undoBlocked} title={undoBlocked ? `${undoBlocked}. ${UNDO_TIP}` : UNDO_TIP} onClick={onUndo}>Undo last</button>
-          <button className="quiet" disabled={working || rows.length === 0} title={working ? 'Waits until nothing is waiting or working' : undefined} onClick={onClear}>Clear</button>
+          <button className="quiet" disabled={!!clearBlocked || rows.length === 0} title={clearBlocked || undefined} onClick={onClear}>Clear</button>
         </div>
       </div>
       <table className="history running">
@@ -202,13 +201,13 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
           )}
         </form>
         {here ? (
-          <RunningList rows={flow.runner.rows} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+          <RunningList rows={flow.runner.rows} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
             what={(r) => (
               <>
                 {/* A row's Location shows only when it differs from the current one (after Change Location). */}
                 {r.ctx.id === here.id ? r.what : [r.what, `to ${r.ctx.name}`].filter(Boolean).join(', ')}
-                {/* Came back after its Expected Checkin, from the lookup answer. */}
-                {r.before?.overdueDays != null && <> <span className="chip c-red">Overdue</span></>}
+                {/* Came back after its Expected Checkin, from the lookup answer; a refused Asset didn't come back. */}
+                {r.before?.overdueDays != null && (r.result.state === 'done' || r.result.state === 'undone') && <> <span className="chip c-red">Overdue</span></>}
               </>
             )} />
         ) : (

@@ -175,6 +175,7 @@ describe('Undo last', () => {
     runner.scan('NOMMA-1', null)
     await settled(runner)
     runner.askUndo()
+    expect(runner.undoBlocked).toBe('Undo is waiting for Enter or Esc')
     runner.cancelUndo()
     expect(runner.confirm).toBeNull()
     await runner.undo()
@@ -220,6 +221,7 @@ describe('Undo last', () => {
     runner.askUndo()
     const undoing = runner.undo()
     await vi.waitFor(() => expect(bridge.assetByTag).toHaveBeenCalledTimes(2))
+    expect(runner.clearBlocked).toBe('Waits until nothing is waiting or working')
     runner.scan('NOMMA-2', null)
     await flush()
     expect(order).toEqual(['act NOMMA-1'])
@@ -381,6 +383,16 @@ describe('Bulk return', () => {
       const { flow, checkouts } = await returned(asset('NOMMA-1'))
       await flow.runner.undo()
       expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk return' })
+    })
+
+    it("offers no undo for a kept Status Label, which Snipe-IT won't check out, and says why", async () => {
+      const fake = await started([asset('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
+      fake.flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(fake.flow.runner.pending).toBe(0))
+      const why = "Snipe-IT can't check out an Asset with status 'Pending'. Open NOMMA-1 to put it back by hand."
+      expect(fake.flow.runner.undoBlocked).toBe(why)
+      expect(fake.flow.runner.askUndo()).toBe(why)
+      expect(fake.flow.runner.confirm).toBeNull()
     })
 
     it('refuses when the Asset is checked out again, and writes nothing', async () => {
