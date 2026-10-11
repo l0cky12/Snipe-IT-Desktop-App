@@ -996,6 +996,34 @@ describe('Bulk checkout', () => {
       expect(checkouts).toEqual([])
     })
 
+    it("Move refuses when the Status Label changed, or the key may no longer check it in or out, and writes nothing", async () => {
+      const { flow, bridge, checkins } = await choosing([blakes('NOMMA-1'), blakes('NOMMA-2')])
+      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' }))
+      flow.runner.fixOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
+      flow.scan('NOMMA-2')
+      await opened(flow)
+      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-2', { can: { checkout: false, checkin: true, update: true, delete: true } }))
+      flow.runner.fixOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: NOT_ALLOWED })
+      expect(checkins).toEqual([])
+    })
+
+    it('Move stops between its Checkin and Checkout when Settings point at another server meanwhile', async () => {
+      const { flow, bridge, checkouts } = await choosing([blakes('NOMMA-1')])
+      let release = () => {}
+      bridge.checkin.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+      flow.runner.fixOpen()
+      await vi.waitFor(() => expect(bridge.checkin).toHaveBeenCalled())
+      flow.reset()
+      release()
+      await flush()
+      await flush()
+      expect(checkouts).toEqual([])
+    })
+
     it('a Checkin that works then a Checkout that fails is a red row with both facts; the Asset stays checked in', async () => {
       const { flow, bridge, checkins, failed } = await choosing([blakes('NOMMA-1')])
       bridge.checkout.mockRejectedValueOnce(new Error('The selected status id is invalid.'))
@@ -1051,6 +1079,22 @@ describe('Bulk checkout', () => {
         expect(f.flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'Checked in from Avery Testwell, but checkout back to Blake Sampleton failed: User does not exist.' })
         expect(f.checkins).toHaveLength(2)
         expect(f.failed).toHaveBeenCalled()
+      })
+
+      it('stops between its Checkin and Checkout when Settings point at another server meanwhile', async () => {
+        const f = await choosing([blakes('NOMMA-1')])
+        f.flow.runner.fixOpen()
+        await settled(f.flow)
+        f.bridge.assetByTag.mockResolvedValueOnce(moved(blakes('NOMMA-1')))
+        let release = () => {}
+        f.bridge.checkin.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+        f.flow.runner.askUndo()
+        const undo = f.flow.runner.undo()
+        await vi.waitFor(() => expect(f.bridge.checkin).toHaveBeenCalledTimes(2))
+        f.flow.reset()
+        release()
+        await undo
+        expect(f.checkouts).toHaveLength(1)
       })
 
       it('refuses when it is no longer checked out to this User, and writes nothing', async () => {

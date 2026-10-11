@@ -418,6 +418,12 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
+  // Bumped by reset (Settings pointing at another server): a two-call write stops before its second call, which would
+  // otherwise go to the new server with the old server's ids.
+  let session = 0
+  const sameSession = (mine: number) => {
+    if (mine !== session) throw new Error('Stopped: Settings changed')
+  }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
@@ -441,8 +447,12 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
       const from = assigneeName(was)
       const move = async (now: Asset): Promise<Done> => {
-        if (now.assignee?.type !== was.type || now.assignee.id !== was.id) throw new Error(`${a.assetTag} changed since it was scanned`)
+        // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
+        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+        if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
+        const mine = session
         await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }) })
+        sameSession(mine)
         // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
         await checkout().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
@@ -451,7 +461,9 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
           stillTheirs(now)
           if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
           const { expectedCheckin: due } = a
+          const mine = session
           await bridge.checkin(a.id, { note: undoNote('Bulk checkout') })
+          sameSession(mine)
           await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote('Bulk checkout', due && due.length > 10 ? due : undefined) })
             .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
         }
@@ -541,6 +553,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     },
     reset() {
       attempt++
+      session++
       step = { step: 'user' }
       options = NO_OPTIONS
       runner.reset()
