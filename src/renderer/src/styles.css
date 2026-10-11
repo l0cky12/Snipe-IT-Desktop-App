@@ -65,6 +65,8 @@ button, input, select { font-family: inherit; }
 .nav.sub { padding-left: 20px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
+/* Red, nudged toward the text colour so the page colour reads on it at 4.5:1 in either theme. */
+.badge.paused { background: color-mix(in srgb, var(--red), var(--text) 10%); color: var(--bg); }
 .settings-nav { margin-top: auto; }
 .panel { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
 .panel form { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px; }
@@ -317,6 +319,8 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .workflow-field .search { width: 100%; padding-left: 12px; }
 .workflow-field .message { min-height: 1.4em; }
 .undo-confirm { margin: 4px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--mark); }
+.pause-bar { margin: 4px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--red); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-weight: 500; }
+.pause-bar .actions { margin-left: auto; }
 .pick-list { list-style: none; margin: 8px 28px; padding: 0; max-width: 480px; }
 .pick-list li { display: flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 6px; cursor: pointer; }
 .pick-list li:hover { background: var(--hover); }

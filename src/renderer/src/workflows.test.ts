@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 import type { Asset, CheckinOptions, CheckoutOptions, StatusLabel, UserCard } from '../../main/snipeit'
-import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, NOT_ALLOWED } from './workflows'
+import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, NOT_ALLOWED, NOT_SENT, pauseSays } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
@@ -20,6 +20,7 @@ function fakeBridge(assets: Asset[]) {
   const checkouts: [number, CheckoutOptions][] = []
   const bridge = {
     assetByTag: vi.fn(async (tag: string) => (calls.push(`bytag ${tag}`), assets.find((a) => a.assetTag === tag) ?? null)),
+    keyRefused: vi.fn(async () => (calls.push('version'), false)),
     checkin: vi.fn(async (id: number, o: CheckinOptions) => { calls.push(`checkin ${id}`); checkins.push([id, o]) }),
     checkout: vi.fn(async (id: number, o: CheckoutOptions) => { calls.push(`checkout ${id}`); checkouts.push([id, o]) }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
@@ -871,5 +872,253 @@ describe('Bulk checkout', () => {
     expect(flow.step).toEqual({ step: 'user' })
     expect(flow.options).toEqual({ expectedCheckin: '', note: '' })
     expect(flow.runner.rows).toEqual([])
+  })
+})
+
+describe('Pause (#73)', () => {
+  // A failure as the window receives it from the bridge (Failure), by kind.
+  const failure = (kind: string, more: object = {}) => ({ message: `Snipe-IT failed: ${kind}`, kind, ...more })
+  const settled = async (runner: { pending: number }) => vi.waitFor(() => expect(runner.pending).toBe(0))
+  // The fake's call is recorded (and a write counted as sent) as usual, then it fails with e.
+  function failOnce<A extends unknown[], R>(fn: Mock<(...args: A) => Promise<R>>, e: unknown) {
+    const usual = fn.getMockImplementation()!
+    fn.mockImplementationOnce(async (...args: A) => { await usual(...args); throw e })
+  }
+  // A Workflow whose step writes at once (like Bulk return), recording each write.
+  function direct(assets: Asset[]) {
+    const fake = fakeBridge(assets)
+    const failed = vi.fn()
+    const written: string[] = []
+    const runner = createRunner<null>(fake.bridge, async (a) => ({ send: { write: async () => (written.push(a.assetTag), { text: 'Done' }) } }), { changed: () => {}, failed }, undefined, 0)
+    return { ...fake, runner, failed, written }
+  }
+
+  it.each([
+    ['unreachable', failure('unreachable'), 'unreachable'],
+    ['timeout', failure('timeout'), 'unreachable'],
+    ['key (401)', failure('key'), 'key'],
+    ['rateLimited (429)', failure('rateLimited', { retryAfter: 23 }), 'rateLimited'],
+    ['forbidden (403) when /version is refused too', failure('forbidden'), 'key'],
+  ])('%s pauses: the scan goes back to the front, later scans wait unlooked-up, one error sound', async (_name, e, kind) => {
+    const { runner, bridge, calls, failed, written } = direct([asset('NOMMA-1'), asset('NOMMA-2')])
+    bridge.keyRefused.mockResolvedValueOnce(true)
+    failOnce(bridge.assetByTag, e)
+    runner.scan('NOMMA-1', null)
+    runner.scan('NOMMA-2', null)
+    await vi.waitFor(() => expect(runner.paused).toMatchObject({ kind, message: e.message }))
+    expect(runner.rows.map((r) => [r.tag, r.result.state, r.held])).toEqual([['NOMMA-2', 'waiting', true], ['NOMMA-1', 'waiting', true]])
+    expect(failed).toHaveBeenCalledTimes(1)
+    // Scanning carries on: a new scan joins with no lookup, and a double read is still one.
+    expect(runner.scan('NOMMA-3', null)).toBe('')
+    expect(runner.scan('NOMMA-1', null)).toBe('NOMMA-1 is already scanned')
+    await flush()
+    expect(calls.filter((c) => c.startsWith('bytag'))).toEqual(['bytag NOMMA-1'])
+    expect(runner.unsent).toBe(3)
+    expect(runner.undoBlocked).toBe('Undo waits until the Workflow resumes')
+    expect(runner.announce).toMatch(kind === 'rateLimited' ? /^Snipe-IT asked the app to slow down\. Carrying on in 23 s\. 2 scans are waiting\.$/ : /2 scans are waiting; nothing more is sent until you resume\.$/)
+    runner.reset()
+    expect(written).toEqual([])
+  })
+
+  it('a refusal, a 500 or a 403 that /version answers is a red row for that Asset; the queue moves on', async () => {
+    const { runner, bridge, failed, written } = direct([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-3'), asset('NOMMA-4')])
+    const errors: Record<string, unknown> = { 'NOMMA-1': failure('refused'), 'NOMMA-2': new Error('Snipe-IT returned HTTP 500'), 'NOMMA-3': failure('forbidden') }
+    const usual = bridge.assetByTag.getMockImplementation()!
+    bridge.assetByTag.mockImplementation(async (tag) => { if (errors[tag]) throw errors[tag]; return usual(tag) })
+    for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-3', 'NOMMA-4']) runner.scan(tag, null)
+    await settled(runner)
+    expect(runner.paused).toBeNull()
+    expect(bridge.keyRefused).toHaveBeenCalledTimes(1)
+    expect(runner.rows.map((r) => r.result.state)).toEqual(['done', 'failed', 'failed', 'failed'])
+    expect(failed).toHaveBeenCalledTimes(3)
+    expect(written).toEqual(['NOMMA-4'])
+  })
+
+  it('Resume sends the front scan first, then the rest in order; failing the same way, the bar stays', async () => {
+    const { runner, bridge, written, failed } = direct([asset('NOMMA-1'), asset('NOMMA-2')])
+    failOnce(bridge.assetByTag, failure('unreachable'))
+    runner.scan('NOMMA-1', null)
+    await vi.waitFor(() => expect(runner.paused).not.toBeNull())
+    runner.scan('NOMMA-2', null)
+    failOnce(bridge.assetByTag, failure('unreachable'))
+    await runner.resume()
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(2))
+    expect(runner.paused).toMatchObject({ kind: 'unreachable' })
+    expect(written).toEqual([])
+    await runner.resume()
+    await settled(runner)
+    expect(runner.paused).toBeNull()
+    expect(written).toEqual(['NOMMA-1', 'NOMMA-2'])
+    expect(runner.unsent).toBe(0)
+  })
+
+  it('Drop waiting marks every waiting scan "Skipped: not sent", writes nothing and lifts the pause', async () => {
+    const { runner, bridge, written } = direct([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-3')])
+    failOnce(bridge.assetByTag, failure('key'))
+    runner.scan('NOMMA-1', null)
+    runner.scan('NOMMA-2', null)
+    await vi.waitFor(() => expect(runner.paused).not.toBeNull())
+    runner.dropWaiting()
+    expect(runner.paused).toBeNull()
+    expect(runner.rows.map((r) => r.result)).toEqual([{ state: 'neutral', text: NOT_SENT }, { state: 'neutral', text: NOT_SENT }])
+    expect(runner.pending).toBe(0)
+    runner.scan('NOMMA-3', null)
+    await settled(runner)
+    expect(written).toEqual(['NOMMA-3'])
+  })
+
+  it('a 429 carries on by itself after Retry-After (60 s without one), with no Operator action', async () => {
+    vi.useFakeTimers()
+    try {
+      const { runner, bridge, written } = direct([asset('NOMMA-1')])
+      failOnce(bridge.assetByTag, failure('rateLimited', { retryAfter: 23 }))
+      runner.scan('NOMMA-1', null)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(runner.paused).toMatchObject({ kind: 'rateLimited' })
+      await vi.advanceTimersByTimeAsync(22_900)
+      expect(runner.paused).not.toBeNull()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(runner.paused).toBeNull()
+      expect(written).toEqual(['NOMMA-1'])
+
+      failOnce(bridge.assetByTag, failure('rateLimited'))
+      runner.scan('NOMMA-1', null)
+      await vi.advanceTimersByTimeAsync(59_900)
+      expect(runner.paused).not.toBeNull()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(written).toEqual(['NOMMA-1', 'NOMMA-1'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the pause bar says why and how many wait', () => {
+    expect(pauseSays({ kind: 'unreachable', message: "Can't reach Snipe-IT." }, 4)).toBe("Can't reach Snipe-IT. 4 scans are waiting; nothing more is sent until you resume.")
+    expect(pauseSays({ kind: 'rateLimited', message: '', until: 0 }, 1, 23)).toBe('Snipe-IT asked the app to slow down. Carrying on in 23 s. 1 scan is waiting.')
+  })
+
+  it("scans held by a pause bring up their confirms on Resume one at a time; a confirmed write isn't confirmed again", async () => {
+    const fake = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2'), asset('NOMMA-3')])
+    const written: string[] = []
+    const runner = createRunner<null>(fake.bridge, async () => ({ confirm: { write: async (now: Asset) => (written.push(now.assetTag), { text: 'Checked out' }) } }), { changed: () => {} }, undefined, 0)
+    runner.scan('NOMMA-1', null)
+    await vi.waitFor(() => expect(runner.open).not.toBeNull())
+    // Confirmed, then its write hits a 401: it waits through the pause with its confirm kept.
+    failOnce(fake.bridge.assetByTag, failure('key'))
+    runner.confirmOpen()
+    await vi.waitFor(() => expect(runner.paused).not.toBeNull())
+    runner.scan('NOMMA-2', null)
+    runner.scan('NOMMA-3', null)
+    await runner.resume()
+    await vi.waitFor(() => expect(runner.open?.row.tag).toBe('NOMMA-2'))
+    expect(written).toEqual(['NOMMA-1'])
+    await flush()
+    // NOMMA-3 waits for NOMMA-2's confirm instead of skipping it.
+    expect(fake.calls.filter((c) => c === 'bytag NOMMA-3')).toEqual([])
+    runner.confirmOpen()
+    await vi.waitFor(() => expect(runner.open?.row.tag).toBe('NOMMA-3'))
+    runner.cancelOpen()
+    await settled(runner)
+    expect(written).toEqual(['NOMMA-1', 'NOMMA-2'])
+  })
+
+  describe('a write that may have gone through', () => {
+    // Bulk return, whose Checkin loses the connection once.
+    async function cutOff() {
+      const assets = [asset('NOMMA-1')]
+      const fake = fakeBridge(assets)
+      const flow = createBulkReturn(fake.bridge, { changed: () => {} }, undefined, 0)
+      await flow.start(ITOFFICE)
+      failOnce(fake.bridge.checkin, failure('unreachable'))
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+      return { ...fake, flow, assets }
+    }
+
+    it('says "Not sure it went through" while paused; Drop waiting leaves it red, for the Operator to check', async () => {
+      const { flow } = await cutOff()
+      expect(flow.runner.rows[0].result).toEqual({ state: 'unsure', reason: 'Snipe-IT failed: unreachable' })
+      expect(flow.runner.unsent).toBe(1)
+      flow.runner.dropWaiting()
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'Not sure it went through: Snipe-IT failed: unreachable' })
+    })
+
+    it('on Resume, already as the Workflow leaves it: done, nothing sent again, and Undo last works', async () => {
+      const { flow, assets, checkins } = await cutOff()
+      assets[0] = { ...assets[0], assignee: null, status: 'Ready to Deploy', statusId: 1, location: 'IT Office', locationId: 8 }
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(checkins).toHaveLength(1)
+      expect(flow.runner.rows[0]).toMatchObject({ what: 'From Avery Testwell', result: { state: 'done', text: 'Checked in: went through before the connection dropped' } })
+      expect(flow.runner.undoBlocked).toBe('')
+    })
+
+    it('on Resume, still as it was: sent again', async () => {
+      const { flow, checkins } = await cutOff()
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(checkins).toHaveLength(2)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'done', text: 'Checked in' })
+    })
+
+    it('on Resume, anything else: "Changed while paused", nothing written', async () => {
+      const { flow, assets, checkins } = await cutOff()
+      assets[0] = { ...assets[0], assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } }
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(checkins).toHaveLength(1)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "Changed while paused: checked out to Blake Sampleton, 'Deployed', at Library" })
+    })
+
+    it("Bulk checkout: a confirmed Checkout that timed out and went through is done on Resume, without a second confirm", async () => {
+      const fake = fakeBridge([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusMeta: 'deployable', checkoutAllowed: true })])
+      const flow = createBulkCheckout(fake.bridge, { changed: () => {} }, undefined, 0)
+      fake.bridge.exactUsers.mockResolvedValueOnce([AVERY])
+      await flow.find('atestwell')
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+      failOnce(fake.bridge.checkout, failure('timeout'))
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1'))
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(flow.runner.open).toBeNull()
+      expect(fake.checkouts).toHaveLength(1)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'done', text: 'Checked out: went through before the connection dropped' })
+    })
+  })
+
+  it('Resume by hand repeats the once-per-session lookups (the key may be new); a slow-down ending does not', async () => {
+    vi.useFakeTimers()
+    try {
+      const { bridge, calls } = fakeBridge([asset('NOMMA-1'), asset('NOMMA-2')])
+      const flow = createBulkReturn(bridge, { changed: () => {} }, undefined, 0)
+      await flow.start(ITOFFICE)
+      failOnce(bridge.assetByTag, failure('key'))
+      flow.scan('NOMMA-1')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(flow.runner.paused).toMatchObject({ kind: 'key' })
+      await flow.runner.resume()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toEqual(['statusLabels', 'bytag NOMMA-1', 'statusLabels', 'bytag NOMMA-1', 'checkin 1'])
+      failOnce(bridge.assetByTag, failure('rateLimited', { retryAfter: 1 }))
+      flow.scan('NOMMA-2')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(calls.slice(5)).toEqual(['bytag NOMMA-2', 'bytag NOMMA-2', 'checkin 2'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('each Workflow pauses on its own', async () => {
+    const one = direct([asset('NOMMA-1')])
+    const two = direct([asset('NOMMA-1')])
+    failOnce(one.bridge.assetByTag, failure('unreachable'))
+    one.runner.scan('NOMMA-1', null)
+    two.runner.scan('NOMMA-1', null)
+    await settled(two.runner)
+    expect(one.runner.paused).not.toBeNull()
+    expect(two.runner.paused).toBeNull()
   })
 })

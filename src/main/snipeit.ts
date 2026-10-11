@@ -876,6 +876,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const version = await request<{ version: string }>('/version').catch(() => null)
       return { version: version && !isError(version) && typeof version.version === 'string' ? version.version : 'Unavailable' }
     },
+    // Whether a 403 is about the whole key (since v8.8: 2FA not enrolled, or the User-Agent blocked) rather than one
+    // permission: /version needs none, so the key is refused only if it's refused too. Anything else says no.
+    async keyRefused(): Promise<boolean> {
+      return request('/version').then(() => false, (e: Partial<Failure>) => e.kind === 'key' || e.kind === 'forbidden')
+    },
     // Where Reports and the test email go: only ever the Operator's own address.
     async operatorEmail(): Promise<string> {
       const user = await request<{ email?: string | null }>('/users/me')

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailInput, SavedReport } from './config'
 import type { Mail } from './mail'
 import type { SnipeItBridge } from './snipeit'
@@ -16,6 +16,11 @@ const send = vi.fn<(server: MailInput, mail: Mail) => Promise<void>>(async () =>
 const request = vi.fn<typeof fetch>()
 let dir: string
 const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
+// The main window's event handlers, the tray menu, and the quit prompt (which answers Cancel unless told otherwise).
+const windowEvents = new Map<string, (e: { preventDefault(): void }) => void>()
+let trayMenu: { label: string; click: () => void }[] = []
+const ask = vi.fn<(...args: unknown[]) => number>()
+const quit = vi.fn()
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -27,6 +32,9 @@ beforeEach(async () => {
   vi.resetModules()
   vi.useFakeTimers()
   handlers.clear()
+  windowEvents.clear()
+  ask.mockReset().mockReturnValue(1)
+  quit.mockClear()
   send.mockClear()
   request.mockReset().mockImplementation(async (url) => new Response(JSON.stringify(
     String(url).endsWith('/users/me') ? { email: 'operator@nomma.net' } : { total: 0, rows: [] },
@@ -35,14 +43,20 @@ beforeEach(async () => {
   nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
-    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: () => {}, setAppUserModelId: () => {} },
+    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: () => {}, setAppUserModelId: () => {}, quit, isPackaged: false },
     BrowserWindow: class {
       setMenuBarVisibility() {}
       loadFile() {}
       loadURL() {}
-      on() {}
+      on(name: string, handler: (e: { preventDefault(): void }) => void) { windowEvents.set(name, handler) }
       isVisible() { return true }
+      getChildWindows() { return [] }
+      hide() {}
     },
+    dialog: { showMessageBoxSync: ask },
+    Tray: class { setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
+    Menu: { buildFromTemplate: (template: typeof trayMenu) => template },
+    nativeImage: { createFromPath: () => ({}) },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
     nativeTheme,
     // The window's side, for the preload: Electron passes on only a rejection's text, wrapped like this.
@@ -165,4 +179,50 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: expect.stringMatching(/^Snipe-IT rejected your API key\./), kind: 'key' })
   request.mockImplementation(async () => new Response(JSON.stringify({ status: 'error', messages: 'No Status Labels for you.' })))
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'No Status Labels for you.', kind: 'refused' })
+})
+
+describe('quitting while a Paused Workflow holds scans (#73)', () => {
+  const close = () => {
+    const e = { preventDefault: vi.fn() }
+    windowEvents.get('close')!(e)
+    return e.preventDefault.mock.calls.length > 0
+  }
+
+  it('closing the window out of tray mode asks only when scans are waiting, and Cancel keeps the app open', async () => {
+    expect(close()).toBe(false)
+    await call('workflows:unsent', 3)
+    expect(close()).toBe(true)
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "3 scans weren't sent to Snipe-IT. Quit anyway?", buttons: ['Quit', 'Cancel'] })
+    ask.mockReturnValue(0)
+    expect(close()).toBe(false)
+    // A moving queue (or none) quits without asking.
+    await call('workflows:unsent', 0)
+    expect(close()).toBe(false)
+    expect(ask).toHaveBeenCalledTimes(2)
+  })
+
+  it("the tray's Quit asks too; closing to the tray keeps the scans without asking", async () => {
+    await call('settings:saveBackground', { tray: true, startAtLogin: false })
+    const quitItem = trayMenu.find((i) => i.label === 'Quit')!
+    quitItem.click()
+    expect(quit).toHaveBeenCalledTimes(1)
+    await call('workflows:unsent', 1)
+    expect(close()).toBe(true)
+    expect(ask).not.toHaveBeenCalled()
+    quitItem.click()
+    expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "1 scan wasn't sent to Snipe-IT. Quit anyway?" })
+    expect(quit).toHaveBeenCalledTimes(1)
+    ask.mockReturnValue(0)
+    quitItem.click()
+    expect(quit).toHaveBeenCalledTimes(2)
+  })
+
+  it('only takes a whole number of scans from the window', async () => {
+    for (const bad of [-2, 1.5, '4', null]) {
+      await call('workflows:unsent', bad)
+      expect(close()).toBe(false)
+    }
+    expect(ask).not.toHaveBeenCalled()
+  })
 })

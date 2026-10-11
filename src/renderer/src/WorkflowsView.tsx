@@ -3,7 +3,7 @@ import { ArchiveRestore, PackageCheck, type LucideIcon } from 'lucide-react'
 import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import { cleanTag, type BulkCheckout, type BulkReturn, type Row } from './workflows'
+import { cleanTag, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type Row, type Runner } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return']
@@ -68,8 +68,9 @@ const UNDO_TIP = `${UNDO_KEY}: puts the newest done row back. Snipe-IT's History
 
 // One Workflow's Running list, newest first, with Undo last and Clear. what: the Workflow's "what" cell for a row.
 // undoBlocked, clearBlocked: why each button is off ('' when it isn't).
-export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocked, onUndo, onOpenAsset, onClear }: {
+export function RunningList<C>({ rows, paused, doneLabel, what, undoBlocked, clearBlocked, onUndo, onOpenAsset, onClear }: {
   rows: Row<C>[]
+  paused: boolean
   doneLabel: string
   what: (r: Row<C>) => ReactNode
   undoBlocked: string
@@ -100,7 +101,8 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
               <td>{r.name || '—'}</td>
               <td>{what(r)}</td>
               <td>
-                {r.result.state === 'waiting' ? <span className="dim">Waiting…</span>
+                {r.result.state === 'waiting' ? <span className="dim">{paused ? 'Waiting (paused)' : 'Waiting…'}</span>
+                  : r.result.state === 'unsure' ? <span className="late">{NOT_SURE}: {r.result.reason}</span>
                   : r.result.state === 'confirm' ? <span className="dim">Waiting for confirm</span>
                   : r.result.state === 'undone' ? <span className="dim">Undone</span>
                   : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
@@ -116,14 +118,39 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
   )
 }
 
+// Under the field while the queue is Paused (#73): why, what's waiting, and how to carry on. The buttons don't take focus,
+// so scanning carries on into the field. A slow-down counts down and carries on by itself.
+function PauseBar({ runner, onSettings }: { runner: Pick<Runner, 'paused' | 'pending' | 'resume' | 'dropWaiting'>; onSettings: () => void }) {
+  const p = runner.paused
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (p?.kind !== 'rateLimited') return
+    const timer = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(timer)
+  }, [p])
+  if (!p) return null
+  const button = (label: string, onClick: () => void, quiet = true) =>
+    <button key={label} type="button" className={quiet ? 'quiet' : undefined} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{label}</button>
+  const resume = button('Resume', () => runner.resume(), false)
+  const drop = button('Drop waiting', () => runner.dropWaiting())
+  const settings = button('Settings', onSettings)
+  return (
+    <div className="pause-bar" role="group" aria-label="Paused">
+      <span>{pauseSays(p, runner.pending, p.kind === 'rateLimited' ? Math.max(0, Math.ceil((p.until - Date.now()) / 1000)) : 0)}</span>
+      <div className="actions">{p.kind === 'rateLimited' ? [drop] : p.kind === 'key' ? [settings, resume, drop] : [resume, drop, settings]}</div>
+    </div>
+  )
+}
+
 // Bulk return (#58). The field is never disabled and takes focus on every step change and when the window comes back,
 // so the scanner's next keystrokes always land in it.
-export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: {
+export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone, onSettings }: {
   flow: BulkReturn
   locations: StatusLabel[]
   field: RefObject<HTMLInputElement | null>
   onOpenAsset: (id: number) => void
   onDone: () => void
+  onSettings: () => void
 }) {
   const [text, setText] = useState('')
   const [status, setStatus] = useState('')
@@ -200,6 +227,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
             {...(!here && { role: 'combobox', 'aria-expanded': true, 'aria-controls': 'return-locations', 'aria-activedescendant': shown[hi] ? `return-location-${shown[hi].id}` : undefined })}
           />
           <p className="message" role="status">{status}</p>
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
           {confirm && (
             // In place under the field, which keeps focus so no scan is lost; the buttons don't take it either.
             <div className="actions undo-confirm" role="group" aria-label="Undo last">
@@ -210,7 +238,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
           )}
         </form>
         {here ? (
-          <RunningList rows={flow.runner.rows} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+          <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
             what={(r) => (
               <>
                 {/* A row's Location shows only when it differs from the current one (after Change Location). */}
@@ -243,10 +271,11 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
 
 // Bulk checkout (#57). Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
 // step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost.
-export function BulkCheckoutView({ flow, field, onOpenAsset }: {
+export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   flow: BulkCheckout
   field: RefObject<HTMLInputElement | null>
   onOpenAsset: (id: number) => void
+  onSettings: () => void
 }) {
   const [text, setText] = useState('')
   const [status, setStatus] = useState('')
@@ -361,6 +390,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             {...(!user && { role: 'combobox', 'aria-expanded': shown.length > 0, 'aria-controls': 'checkout-users', 'aria-activedescendant': shown[hi] ? `checkout-user-${shown[hi].id}` : undefined })}
           />
           <p className="message" role="status">{status}</p>
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
           {open && a && (
             // The buttons don't take focus either, so the next scan still lands in the field.
             <div className="scan-confirm" role="group" aria-label="Confirm checkout">
@@ -403,7 +433,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             </details>
           </>
         )}
-        <RunningList rows={flow.runner.rows} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+        <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
           what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what || `To ${r.ctx.user.name}`)} />
         <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
       </div>

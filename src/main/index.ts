@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,6 +15,8 @@ const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
+/** unsent: how many scans Paused Workflows are keeping from Snipe-IT, so quitting can ask first. */
+export type WorkflowsApi = { unsent(count: number): Promise<void> }
 
 // A Label PDF in its own window, in Chromium's PDF viewer: its Print button opens the system print dialog, which can also
 // save it as a PDF, as can its Download button. ponytail: Electron 44 can't open that dialog for a PDF by itself
@@ -150,7 +152,7 @@ app.whenReady().then(() => {
   })
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
@@ -171,8 +173,19 @@ app.whenReady().then(() => {
   let tray: Tray | null = null
   let quitting = false
   app.on('before-quit', () => { quitting = true })
+  win.on('session-end', () => { quitting = true })
+  // Quitting (from the tray, or closing the window out of tray mode) while a Paused Workflow holds scans asks first (#73);
+  // a moving queue quits without asking. In memory only, so quitting loses them.
+  let unsent = 0
+  handle('workflows:unsent', (_e, count: unknown) => { unsent = Number.isSafeInteger(count) && (count as number) > 0 ? count as number : 0 })
+  const quitAnyway = () => {
+    if (!unsent) return true
+    const ask = { type: 'warning' as const, buttons: ['Quit', 'Cancel'], defaultId: 1, cancelId: 1, message: `${unsent} scan${unsent === 1 ? " wasn't" : "s weren't"} sent to Snipe-IT. Quit anyway?` }
+    return (win.isVisible() ? dialog.showMessageBoxSync(win, ask) : dialog.showMessageBoxSync(ask)) === 0
+  }
   win.on('close', (e) => {
-    if (!tray || quitting) return
+    if (quitting) return
+    if (!tray) return void (quitAnyway() || e.preventDefault())
     e.preventDefault()
     win.getChildWindows().forEach((w) => w.close())
     win.hide()
@@ -181,7 +194,7 @@ app.whenReady().then(() => {
     if (inTray && !tray) {
       tray = new Tray(nativeImage.createFromPath(trayIcon))
       tray.setToolTip('Snipe-IT Desktop')
-      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => app.quit() }]))
+      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => quitAnyway() && app.quit() }]))
       tray.on('click', show)
     } else if (!inTray && tray) {
       tray.destroy()

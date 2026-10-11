@@ -4,7 +4,8 @@
 // MOCK_LATENCY_MS=150 (every request) and MOCK_ROW_MS=5 (each row a list returns).
 // To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
 // 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
-// 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
+// 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires). With MOCK_FAIL_ON set to an
+// Asset Tag, it answers normally until that tag is looked up, then fails from that request on (a mid-session outage).
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -14,6 +15,8 @@ const scale = Number(process.env.MOCK_SCALE ?? 1)
 const latency = Number(process.env.MOCK_LATENCY_MS ?? 0)
 const rowCost = Number(process.env.MOCK_ROW_MS ?? 0)
 const failAll = process.env.MOCK_FAIL
+const failOn = process.env.MOCK_FAIL_ON
+let failing = !failOn
 const retryAfter = process.env.MOCK_RETRY_AFTER ?? '23'
 const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
@@ -220,8 +223,9 @@ const routes = [
 const noEndpoint = { status: 'error', message: '404 endpoint not found. Please check the API reference at https://snipe-it.readme.io/reference to find a valid API endpoint.', payload: null }
 
 createServer(async (req, res) => {
-  if (failAll === 'hang') return
-  if (failAll) {
+  if (failAll && !failing && req.url.endsWith(`/hardware/bytag/${encodeURIComponent(failOn)}`)) failing = true
+  if (failAll && failing && failAll === 'hang') return
+  if (failAll && failing) {
     const [status, body, headers] = {
       401: [401, { message: 'Unauthenticated.' }],
       403: [403, refused],

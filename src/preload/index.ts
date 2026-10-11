@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
-import type { LabelApi } from '../main/index'
+import type { LabelApi, WorkflowsApi } from '../main/index'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -14,6 +14,7 @@ const call = (name: string) => (...args: unknown[]) =>
 
 const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
+  keyRefused: call('snipeit:keyRefused'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
   assetByTag: call('snipeit:assetByTag'),
@@ -64,3 +65,6 @@ contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const workflows: WorkflowsApi = { unsent: call('workflows:unsent') }
+contextBridge.exposeInMainWorld('workflows', workflows)

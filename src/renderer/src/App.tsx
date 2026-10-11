@@ -315,6 +315,12 @@ export function App() {
 
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
   const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending
+  // The badge turns red while any Workflow is Paused, for an Operator who left it.
+  const workflowsPaused = !!(bulkCheckout.runner.paused || bulkReturn.runner.paused)
+  // Scans a pause keeps from Snipe-IT; quitting with any asks first (main process).
+  const unsent = bulkCheckout.runner.unsent + bulkReturn.runner.unsent
+  useEffect(() => void window.workflows.unsent(unsent), [unsent])
+  const openSettings = () => (cancel(), setShowSettings(true))
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -356,15 +362,15 @@ export function App() {
             <ListChecks size={18} />Batch
             {batch.length > 0 && <span className="badge">{batch.length}</span>}
           </button>
-          <button aria-label={`Workflows${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
+          <button aria-label={`Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
             <WorkflowsIcon size={18} />Workflows
-            {workflowsBusy > 0 && <span className="badge">{workflowsBusy}</span>}
+            {workflowsBusy > 0 && <span className={`badge${workflowsPaused ? ' paused' : ''}`}>{workflowsBusy}</span>}
           </button>
           {BUILT.map((w) => {
             const Icon = workflowIcon[w]!
             return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
           })}
-          <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
+          <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
           <form onSubmit={onSubmit}>
@@ -407,8 +413,8 @@ export function App() {
       </aside>
       <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
-        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
-        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
+        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} onSettings={openSettings} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
