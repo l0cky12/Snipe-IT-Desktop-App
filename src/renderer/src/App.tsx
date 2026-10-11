@@ -469,6 +469,9 @@ function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+// A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
+export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
+
 export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
@@ -499,7 +502,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         ))}
       </select>
       <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-        <option value="">Keep current Location</option>
+        <option value="">{defaultLocationChoice(a.defaultLocation)}</option>
         {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>

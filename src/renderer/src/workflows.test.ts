@@ -6,7 +6,7 @@ import { cleanTag, createBulkCheckout, createBulkReturn, createIncomingRepair, c
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
   id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed', statusType: 'deployable',
   assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', locationId: 3, category: 'Chromebook', serial: '', purchaseDate: null,
-  warrantyEnd: null, expectedCheckin: null, overdueDays: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
+  warrantyEnd: null, expectedCheckin: null, defaultLocation: '', lastAudited: null, nextAudit: null, overdueDays: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
 })
 const flush = () => new Promise((r) => setTimeout(r, 0))
 // An open Repair Maintenance as the client gives it back.
