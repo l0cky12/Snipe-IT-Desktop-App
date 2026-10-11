@@ -20,13 +20,14 @@ export type Asset = {
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
   /** The date of the Asset's last Audit, or null when it has never been Audited */
   lastAudited: string | null
   /** The date Snipe-IT expects its next Audit, or null when it has none */
   nextAudit: string | null
-  /** Days past the Expected Checkin, or null when not Overdue */
-  overdueDays: number | null
+  /** How late, or null when not Overdue */
+  overdue: Lateness | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
   /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
@@ -57,6 +58,16 @@ export type CheckinOptions = { statusId?: number; locationId?: number; note?: st
 
 /** A User or Location to check an Asset out to. detail tells namesakes apart (a User's username). */
 export type CheckoutTarget = { id: number; name: string; detail: string }
+
+/**
+ * How late an Overdue Asset is: whole days past its Expected Checkin's date (0 on the due day, once its time of day has
+ * passed), and minutes past the moment it became Overdue, which lists sort by.
+ */
+export type Lateness = { days: number; minutes: number }
+
+/** How late, for display: "40 min" or "2 h" on the due day, "3d" after it. */
+export const lateness = ({ days, minutes }: Lateness) =>
+  days ? `${days}d` : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
 
 /** Checkout targets are Users and Locations only; Asset-to-Asset isn't supported. expectedCheckin is "YYYY-MM-DD". */
 export type CheckoutOptions = { targetType: 'user' | 'location'; targetId: number; expectedCheckin?: string; note?: string }
@@ -165,7 +176,7 @@ export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
     assets: AssetSegment[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
-    overdue: (AssetSummary & { overdueDays: number })[]
+    overdue: (AssetSummary & { expectedCheckin: string; overdue: Lateness })[]
     expiring: (AssetSummary & { daysLeft: number })[]
   }[K]
 }
@@ -335,7 +346,8 @@ type RawAsset = {
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
-  expected_checkin: { date: string } | null
+  // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
+  expected_checkin: { date?: string; datetime?: string } | null
   // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
   last_audit_date?: { date?: string; datetime?: string } | null
   next_audit_date?: { date?: string; datetime?: string } | null
@@ -463,11 +475,28 @@ export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, ca
 
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day.
+// ponytail: 00:00 means date-only, so a real midnight due time is Overdue only from the next day; no Workflow sets one.
+function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
+  const when = v?.datetime ?? v?.date
+  if (!when) return null
+  const time = when.slice(11, 16)
+  return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
+}
+
+// How late an Expected Checkin is, or null until it has passed: its time of day when it has one, else the last moment of its date.
+// A started minute counts as 1, so an Asset just past due reads "1 min", never "0 min".
+function overdueOf(now: Date, due: string): Lateness | null {
+  const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
+  const at = due.length > 10 ? new Date(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d + 1, 0, 0, 0, -1)
+  const ms = now.getTime() - at.getTime()
+  if (ms <= 0) return null
+  return { days: -daysFrom(now, due.slice(0, 10)) || 0, minutes: Math.max(1, Math.floor(ms / 6e4)) } // || 0: not -0
+}
 
 function toAsset(raw: RawAsset, today: Date): Asset {
-  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
-  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
   const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
@@ -487,7 +516,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     expectedCheckin,
     lastAudited: dayOf(raw.last_audit_date),
     nextAudit: dayOf(raw.next_audit_date),
-    overdueDays: overdue > 0 ? overdue : null,
+    overdue: expectedCheckin && raw.assigned_to ? overdueOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
@@ -655,11 +684,14 @@ export const markdownOf = (html: string) => html
   .replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**').replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*').replace(/<code>(.*?)<\/code>/gi, '`$1`')
   .replace(/<[^>]*>/g, '')
 
-// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
-  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
+  if (typeof v === 'object') {
+    const o = v as { id?: unknown; date?: unknown; datetime?: unknown }
+    return String(o.id ?? o.date ?? (typeof o.datetime === 'string' ? o.datetime.slice(0, 10) : ''))
+  }
   // Snipe-IT formats costs with thousands separators ("1,200.50") and a warranty as "36 months"; only the number is kept.
   // Only a note is Markdown Snipe-IT rendered; a Name or Serial is kept as it is (request() already decoded its entities).
   if (f.type === 'number') return String(v).replace(/[^\d.-]/g, '')
@@ -1042,9 +1074,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'overdue')
         return {
-          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
-            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
+          columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],
+          rows: assets.filter((a) => a.overdue !== null && inRange(a.expectedCheckin!.slice(0, 10))).sort((a, b) => b.overdue!.minutes - a.overdue!.minutes)
+            .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, lateness(a.overdue!)]),
           capped: false,
         }
       return {
@@ -1321,8 +1353,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           return [...segments.values()].sort((a, b) => b.count - a.count)
         }),
         entry('overdue', async () => (await assets!)
-          .flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
-          .sort((a, b) => b.overdueDays - a.overdueDays)),
+          .flatMap((a) => (a.overdue === null ? [] : [{ ...toSummary(a), expectedCheckin: a.expectedCheckin!, overdue: a.overdue }]))
+          .sort((a, b) => b.overdue.minutes - a.overdue.minutes)),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),
