@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opensPanel } from './App'
+import { defaultLocationChoice, opensPanel } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -23,5 +23,16 @@ describe('keys that open the Scan/Search panel', () => {
       expect(opensPanel(key(k), false)).toBe(false)
     expect(opensPanel(key('c', { ctrlKey: true }), false)).toBe(false)
     expect(opensPanel(key('k', { altKey: true }), false)).toBe(false)
+  })
+})
+
+describe("the Checkin form's empty Location choice", () => {
+  // Snipe-IT moves an Asset checked in with no Location to its Default Location, or to none.
+  it("names the Asset's Default Location when it has one", () => {
+    expect(defaultLocationChoice('IT Office')).toBe('Default Location (IT Office)')
+  })
+
+  it('says No Location when the Asset has no Default Location', () => {
+    expect(defaultLocationChoice('')).toBe('No Location')
   })
 })
