@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
@@ -12,6 +12,7 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
+import { Bars, ChartCard, Donut, chartRows, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -69,7 +70,7 @@ export function App() {
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [view, setView] = useState<View | null>(null)
-  // Search Matches, or the Assets of a clicked Inventory Chart segment; both list the same way.
+  // Search Matches.
   const [matches, setMatches] = useState<{ label: string; assets: (AssetSummary | AssetMatch)[] }>({ label: '', assets: [] })
   // Lookup's matches of the other kinds; Users, Locations and Asset Models open the Assets List filtered to them, the stocked kinds are listed only (until #1).
   const [others, setOthers] = useState<Matches[]>([])
@@ -254,8 +255,6 @@ export function App() {
   }
 
   const selected = view ? undefined : asset?.id
-  // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the panel, so it opens.
-  const showSegment = (s: AssetSegment) => (setPanelOpen(true), setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   const go = (page: ListKind, drill?: Drill, report?: SavedReport, assetView?: AssetView) => (setShowSettings(false), setView({ page, drill, report, assetView, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -356,7 +355,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -627,7 +626,8 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
 
 
 const pieceName: Record<DashboardPiece, string> = {
-  assets: 'Assets', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
+  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location',
+  licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
   overdue: 'Overdue', expiring: 'Warranty expiring',
 }
 // Segment names for the kinds counted by quantity: used side, available side.
@@ -635,25 +635,32 @@ const splitNames = {
   licenses: ['In use', 'Free'], accessories: ['Checked out', 'Available'], consumables: ['Used', 'Remaining'],
   components: ['In use', 'Available'], users: ['Holding', 'Holding nothing'],
 } as const
-const isBar = (p: DashboardPiece) => p !== 'overdue' && p !== 'expiring'
+// Customize's groups, in screen order; a piece moves only within its own.
+const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
+const pieceGroup: Record<DashboardPiece, number> = {
+  assets: 0, categories: 0, locations: 0, licenses: 1, accessories: 1, consumables: 1, components: 1, users: 1, overdue: 2, expiring: 2,
+}
+const chartColumn: Record<ChartPiece, string> = { assets: 'Status Label', categories: 'Category', locations: 'Location' }
 
-// Stored per computer: which pieces show, in what order (bars first, then tables).
+// Stored per computer: which pieces show, in what order (by group).
 type Layout = { piece: DashboardPiece; show: boolean }[]
 const LAYOUT_KEY = 'dashboardLayout'
-function readLayout(): Layout {
+/** The layout from what's stored (or null). The assets piece was the Inventory Chart's Assets bar and is now the Status Label
+ * chart, so hiding one hid the other. */
+export function layoutFrom(saved: string | null): Layout {
   let stored: Layout = []
   try {
-    stored = (JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '[]') as Layout)
+    stored = (JSON.parse(saved ?? '[]') as Layout)
       .filter((p, i, list) => DASHBOARD_PIECES.includes(p?.piece) && list.findIndex((q) => q.piece === p.piece) === i)
       .map(({ piece, show }) => ({ piece, show: show !== false }))
   } catch {}
   // A piece missing from the stored layout (e.g. new in this version) shows, right after the piece before it by default.
   for (const [i, piece] of DASHBOARD_PIECES.entries())
     if (!stored.some((p) => p.piece === piece)) stored.splice(stored.findIndex((p) => p.piece === DASHBOARD_PIECES[i - 1]) + 1, 0, { piece, show: true })
-  return [...stored.filter((p) => isBar(p.piece)), ...stored.filter((p) => !isBar(p.piece))]
+  return stored.sort((a, b) => pieceGroup[a.piece] - pieceGroup[b.piece])
 }
 
-type Segment = { name: string; count: number; color: string; onClick?: () => void }
+type Segment = { name: string; count: number; color: string }
 
 function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
   if (!Array.isArray(entry))
@@ -669,18 +676,11 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
     <div className="bar-row">
       <span className="bar-name">{name}</span>
       <div className="bar">
-        {entry.filter((s) => s.count).map((s) =>
-          s.onClick
-            // Mouse only; the labelled button in the key underneath is the keyboard's way in, so Tab stops once per segment.
-            ? <button key={s.name} style={{ flexGrow: s.count, background: s.color }} onClick={s.onClick} title={`${s.name} ${s.count}`} tabIndex={-1} aria-hidden />
-            : <span key={s.name} style={{ flexGrow: s.count, background: s.color }} title={`${s.name} ${s.count}`} />)}
+        {entry.filter((s) => s.count).map((s) => <span key={s.name} style={{ flexGrow: s.count, background: s.color }} title={`${s.name} ${s.count}`} />)}
       </div>
       <span className="bar-total">{total.toLocaleString()}</span>
       <div className="bar-key">
-        {entry.map((s) => {
-          const text = <><i style={{ background: s.color }} />{s.name} <b>{s.count.toLocaleString()}</b></>
-          return s.onClick ? <button key={s.name} onClick={s.onClick}>{text}</button> : <span key={s.name}>{text}</span>
-        })}
+        {entry.map((s) => <span key={s.name}><i style={{ background: s.color }} />{s.name} <b>{s.count.toLocaleString()}</b></span>)}
       </div>
     </div>
   )
@@ -725,13 +725,13 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
 }
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
+function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
   onPick: (id: number) => void
-  onSegment: (s: AssetSegment) => void
+  onDrill: (d: Drill) => void
   onAssetView: (v: AssetView) => void
   onSettings: () => void
 }) {
-  const [layout, setLayout] = useState(readLayout)
+  const [layout, setLayout] = useState(() => layoutFrom(localStorage.getItem(LAYOUT_KEY)))
   const [customizing, setCustomizing] = useState(false)
   const [data, setData] = useState<Dashboard>({})
   const [loadedAt, setLoadedAt] = useState('')
@@ -768,28 +768,31 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
   useEffect(load, [[...shown].sort().join()])
   useEffect(() => localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)), [layout])
 
-  // Moves a piece within its group (bars or tables) only.
+  // Moves a piece within its group only; the layout is kept in group order, so its neighbours in the group are beside it.
   const move = (piece: DashboardPiece, by: -1 | 1) => setLayout((layout) => {
-    const group = layout.filter((p) => isBar(p.piece) === isBar(piece))
-    const i = group.findIndex((p) => p.piece === piece)
-    if (!group[i + by]) return layout
-    ;[group[i], group[i + by]] = [group[i + by], group[i]]
-    return isBar(piece) ? [...group, ...layout.filter((p) => !isBar(p.piece))] : [...layout.filter((p) => isBar(p.piece)), ...group]
+    const i = layout.findIndex((p) => p.piece === piece)
+    if (pieceGroup[layout[i + by]?.piece] !== pieceGroup[piece]) return layout
+    const next = [...layout]
+    ;[next[i], next[i + by]] = [next[i + by], next[i]]
+    return next
   })
   const toggle = (piece: DashboardPiece) => setLayout((layout) => layout.map((p) => (p.piece === piece ? { ...p, show: !p.show } : p)))
 
   function segments(piece: DashboardPiece): Segment[] | Failed | undefined {
     const entry = data[piece]
     if (!entry || 'error' in entry) return entry
-    if (piece === 'assets')
-      return (entry as AssetSegment[]).map((s) => ({
-        name: s.status || 'No status', count: s.count,
-        // Snipe-IT's label color as-is; a label without one gets the app's usual color for its kind of status.
-        color: s.color ?? `var(--${statusColor[s.statusMeta] ?? 'grey'})`, onClick: () => onSegment(s),
-      }))
     const { used, available } = entry as { used: number; available: number }
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
+  }
+  function chart(piece: ChartPiece) {
+    const entry = data[piece]
+    const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
+    return (
+      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} rows={rows} onDrill={onDrill}>
+        {(rows) => (piece === 'assets' ? <Donut rows={rows} onDrill={onDrill} /> : <Bars rows={rows} onDrill={onDrill} />)}
+      </ChartCard>
+    )
   }
 
   const tag = (a: AssetSummary) => (
@@ -855,7 +858,8 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
     )
   }
 
-  const bars = layout.filter((p) => p.show && isBar(p.piece)).flatMap(({ piece }) => {
+  const showing = (group: number) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
+  const bars = showing(1).flatMap((piece) => {
     const entry = segments(piece)
     return entry ? [<BarRow key={piece} name={pieceName[piece]} entry={entry} />] : []
   })
@@ -872,10 +876,10 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
       <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} />
       {customizing && (
         <div className="customize">
-          {(['Chart', 'Tables'] as const).map((group) => (
+          {GROUPS.map((group, g) => (
             <ol key={group} aria-label={group}>
               <li className="k">{group}</li>
-              {layout.filter((p) => isBar(p.piece) === (group === 'Chart')).map((p, i, list) => (
+              {layout.filter((p) => pieceGroup[p.piece] === g).map((p, i, list) => (
                 <li key={p.piece}>
                   <label>
                     <input type="checkbox" checked={p.show} onChange={() => toggle(p.piece)} />
@@ -889,13 +893,14 @@ function DashboardView({ onPick, onSegment, onAssetView, onSettings }: {
           ))}
         </div>
       )}
+      {showing(0).length > 0 && <div className="charts">{showing(0).map((piece) => chart(piece as ChartPiece))}</div>}
       {bars.length > 0 && (
-        <>
-          <div className="section">Inventory Chart</div>
+        <section className="card inventory" aria-label="Inventory Chart">
+          <header><h2>Inventory Chart</h2></header>
           <div className="chart">{bars}</div>
-        </>
+        </section>
       )}
-      {layout.filter((p) => p.show && !isBar(p.piece)).map(({ piece }) => table(piece))}
+      {showing(2).map((piece) => table(piece))}
     </>
   )
 }

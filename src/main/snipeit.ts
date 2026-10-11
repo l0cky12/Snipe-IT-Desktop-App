@@ -144,14 +144,16 @@ export type ListQuery = { search?: string; filters?: Record<string, string>; sor
  * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged). */
 export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string }
 
-/** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
-export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+/** The dashboard pieces: the charts (assets is Assets by Status Label), the five Inventory Chart bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
-export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'overdue', 'expiring']
+export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'overdue', 'expiring']
 
-/** One Asset status segment of the Inventory Chart. color is Snipe-IT's status label color, or null when it has none. */
-export type AssetSegment = { status: string; statusMeta: string; color: string | null; count: number; assets: AssetSummary[] }
+/** How many Assets have one Status Label, Category or Location. id is null for the Assets with none (e.g. No Location). */
+export type Tally = { id: number | null; name: string; count: number }
+/** type: the Status Label's kind (deployable, pending, undeployable, archived); color: Snipe-IT's color for it, or null. */
+export type StatusTally = Tally & { type: string; color: string | null }
 /** Why a dashboard piece couldn't load: Snipe-IT's reason, or the app's connection message. */
 export type Failed = { error: string }
 /** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
@@ -159,11 +161,11 @@ export type Split = { used: number; available: number }
 
 /**
  * One entry per requested piece: its data, or { error } with the reason it couldn't load.
- * Asset segments most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
+ * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
  */
 export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
-    assets: AssetSegment[]
+    assets: StatusTally[]; categories: Tally[]; locations: Tally[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: (AssetSummary & { overdueDays: number })[]
     expiring: (AssetSummary & { daysLeft: number })[]
@@ -1291,35 +1293,49 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
-    // ponytail: each Asset segment carries its Assets' summaries over IPC (the whole fleet); fine at the same ~5k ceiling.
     async dashboard(requested: DashboardPiece[]): Promise<Dashboard> {
       // The list arrives from the screen over IPC; keep only pieces this module knows.
       const pieces = DASHBOARD_PIECES.filter((p) => Array.isArray(requested) && requested.includes(p))
       const now = today()
       const wants = (...p: DashboardPiece[]) => p.some((x) => pieces.includes(x))
-      // Overdue and Warranty expiring come from the Asset list too, so it's fetched once for all three.
-      const assets = wants(...ASSET_PIECES) ? allRows<RawAsset>('/hardware').then((rows) => rows.map((r) => toAsset(r, now))) : undefined
-      // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the bar asks for them too.
-      // Only the bar: Overdue and Warranty expiring stay as they were. If they can't load, the bar shows without them.
-      const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').then((rows) => rows.map((r) => toAsset(r, now)), () => []) : undefined
-      // Without status labels the segments just have no color.
-      const colors = wants('assets')
-        ? allRows<{ id: number; color: string | null }>('/statuslabels').then((rows) => new Map<number | null, string>(rows.flatMap((l) => (l.color ? [[l.id, l.color]] : []))), () => new Map())
+      // The charts and tables all come from the Asset list, so it's fetched once for them all.
+      const raw = wants(...ASSET_PIECES) ? allRows<RawAsset>('/hardware') : undefined
+      const assets = wants('overdue', 'expiring') ? raw!.then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the Status Label chart
+      // asks for them too. Only that chart: the Category and Location bars match the Assets List they open, which leaves
+      // them out the same way. If they can't load, the chart shows without them.
+      const archived = wants('assets') ? allRows<RawAsset>('/hardware?status=Archived').catch((): RawAsset[] => []) : undefined
+      // Without Status Labels, each label has no color and takes its kind from its Assets.
+      const statusLabels = wants('assets')
+        ? allRows<{ id: number; type?: string; color: string | null }>('/statuslabels').then((rows) => new Map(rows.map((l) => [l.id, l])), () => new Map())
         : undefined
       const entry = async <T>(piece: DashboardPiece, work: () => Promise<T>): Promise<[DashboardPiece, T | Failed] | []> =>
         !pieces.includes(piece) ? [] : [piece, await work().catch((e: Error) => ({ error: e.message }))]
+      // Most first; ties by name, so the order holds from one load to the next.
+      const tally = <T extends Tally = Tally>(rows: RawAsset[], of: (r: RawAsset) => Omit<T, 'count'>): T[] => {
+        const counts = new Map<number | null, T>()
+        for (const r of rows) {
+          const t = of(r)
+          const seen = counts.get(t.id)
+          if (seen) seen.count++
+          else counts.set(t.id, { ...t, count: 1 } as T)
+        }
+        return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      }
+      const named = (n: Named, none: string) => (n ? { id: n.id, name: n.name } : { id: null, name: none })
       const entries = await Promise.all([
         entry('assets', async () => {
-          const [list, shelved, color] = await Promise.all([assets!, archived!, colors!])
+          const [list, shelved, labels] = await Promise.all([raw!, archived!, statusLabels!])
           const listed = new Set(list.map((a) => a.id))
-          const segments = new Map<string, AssetSegment>()
-          for (const a of [...list, ...shelved.filter((a) => !listed.has(a.id))]) {
-            const s = segments.get(a.status)
-            if (s) s.count++, s.assets.push(toSummary(a))
-            else segments.set(a.status, { status: a.status, statusMeta: a.statusMeta, color: color.get(a.statusId) ?? null, count: 1, assets: [toSummary(a)] })
-          }
-          return [...segments.values()].sort((a, b) => b.count - a.count)
+          return tally<StatusTally>([...list, ...shelved.filter((a) => !listed.has(a.id))], ({ status_label: s }) => {
+            const label = s && labels.get(s.id)
+            // An Asset's status_meta says "deployed" for a checked-out Asset whose label is deployable.
+            const type = label?.type ?? (s?.status_meta === 'deployed' ? 'deployable' : s?.status_meta ?? '')
+            return s ? { id: s.id, name: s.name, type, color: label?.color ?? null } : { id: null, name: 'No Status Label', type, color: null }
+          })
         }),
+        entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
+        entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
         entry('overdue', async () => (await assets!)
           .flatMap((a) => (a.overdueDays === null ? [] : [{ ...toSummary(a), overdueDays: a.overdueDays }]))
           .sort((a, b) => b.overdueDays - a.overdueDays)),
