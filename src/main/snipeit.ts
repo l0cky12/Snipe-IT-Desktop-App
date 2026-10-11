@@ -16,16 +16,19 @@ export type Asset = {
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
   location: string
+  /** Where Snipe-IT puts the Asset on a Checkin with no Location (its rtd_location); '' when it has none */
+  defaultLocation: string
   category: string
   serial: string
   purchaseDate: string | null
   warrantyEnd: string | null
+  /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
   /** The date of the Asset's last Audit, or null when it has never been Audited */
   lastAudited: string | null
   /** The date Snipe-IT expects its next Audit, or null when it has none */
   nextAudit: string | null
-  /** Days past the Expected Checkin, or null when not Overdue */
+  /** Whole days past the Expected Checkin (0 on the day, once its time of day has passed), or null when not Overdue */
   overdueDays: number | null
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
@@ -248,6 +251,28 @@ export type ImportFile = { id: number; name: string; size: string; uploaded: str
 /** Imported, or Snipe-IT's errors for each row that failed, keyed by the row's name, exactly as Snipe-IT sent them. */
 export type ImportResult = { ok: true } | { ok: false; errors: Record<string, unknown> }
 
+/**
+ * What kind of failure a call hit, so the window can tell one every following request would hit too (Snipe-IT
+ * unreachable or too slow, the API key rejected, a refusal, or a request limit) from one about this request alone (refused).
+ */
+export type FailureKind = 'unreachable' | 'timeout' | 'key' | 'forbidden' | 'rateLimited' | 'refused'
+/**
+ * A failed call as the window receives it: the message for the Operator, its kind, and for rateLimited the seconds to wait.
+ * A plain object, not an Error: the bridge to the window copies an Error's message only, but an object's every field.
+ */
+export type Failure = { message: string; kind: FailureKind; retryAfter?: number }
+
+// Electron passes only an error's message from the main process, so it writes the kind into it ("[rateLimited 23] …")
+// and the preload reads it back out. An error with no kind is about this request alone.
+export function toWire(e: unknown): Error {
+  const { kind = 'refused', retryAfter } = e as Partial<Failure>
+  return new Error(`[${kind}${retryAfter === undefined ? '' : ` ${retryAfter}`}] ${e instanceof Error ? e.message : String(e)}`)
+}
+export function fromWire(message: string): Failure {
+  const [, kind = 'refused', seconds, text = message] = /^\[(\w+)(?: (\d+))?\] ([\s\S]*)$/.exec(message) ?? []
+  return { message: text, kind: kind as FailureKind, ...(seconds !== undefined && { retryAfter: Number(seconds) }) }
+}
+
 export type SnipeIt = ReturnType<typeof createSnipeIt>
 /** What the screen can call: labelPdf only the main process uses, to print Labels. */
 export type SnipeItBridge = Omit<SnipeIt, 'labelPdf'>
@@ -263,10 +288,12 @@ type RawAsset = {
   status_label: { id: number; name: string; status_meta: string } | null
   category: Named
   location: Named
+  rtd_location: Named
   assigned_to: { id: number; name: string; type: Assignee['type'] } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
-  expected_checkin: { date: string } | null
+  // Snipe-IT v8.7+ sends { datetime } (a date-only one at 00:00); older servers send { date }.
+  expected_checkin: { date?: string; datetime?: string } | null
   // Snipe-IT (to v8.8 at least) sends last_audit_date as {datetime} and next_audit_date as {date}; either is read.
   last_audit_date?: { date?: string; datetime?: string } | null
   next_audit_date?: { date?: string; datetime?: string } | null
@@ -411,13 +438,29 @@ function toHistoryEntry(raw: RawActivity): HistoryEntry {
 export const toSummary = ({ id, assetTag, name, status, statusMeta, assignee, can }: Asset): AssetSummary =>
   ({ id, assetTag, name, status, statusMeta, assignee, can })
 
+// Expected Checkin as "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when it has a time of day.
+// ponytail: 00:00 means date-only, so a real midnight due time is Overdue only from the next day; no Workflow sets one.
+function expectedCheckinOf(v: RawAsset['expected_checkin']): string | null {
+  const when = v?.datetime ?? v?.date
+  if (!when) return null
+  const time = when.slice(11, 16)
+  return time && time !== '00:00' ? `${when.slice(0, 10)} ${time}` : when.slice(0, 10)
+}
+
+// Whole days an Expected Checkin is late, or null when it isn't yet: from its time of day when it has one, else from the next day.
+function overdueDaysOf(today: Date, due: string): number | null {
+  const late = -daysFrom(today, due.slice(0, 10)) || 0 // not -0
+  const [y, mo, d, h, mi] = due.split(/[- :]/).map(Number)
+  const past = due.length > 10 ? new Date(y, mo - 1, d, h, mi) < today : late > 0
+  return past ? late : null
+}
+
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
 
 function toAsset(raw: RawAsset, today: Date): Asset {
-  const expectedCheckin = raw.expected_checkin?.date ?? null
+  const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
-  const overdue = expectedCheckin && raw.assigned_to ? -daysFrom(today, expectedCheckin) : 0
   const warrantyLeft = warrantyEnd === null ? null : daysFrom(today, warrantyEnd)
   return {
     id: raw.id,
@@ -430,6 +473,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
+    defaultLocation: raw.rtd_location?.name ?? '',
     category: raw.category?.name ?? '',
     serial: raw.serial ?? '',
     purchaseDate: raw.purchase_date?.date ?? null,
@@ -437,7 +481,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     expectedCheckin,
     lastAudited: dayOf(raw.last_audit_date),
     nextAudit: dayOf(raw.next_audit_date),
-    overdueDays: overdue > 0 ? overdue : null,
+    overdueDays: expectedCheckin && raw.assigned_to ? overdueDaysOf(today, expectedCheckin) : null,
     warranty:
       warrantyLeft === null || warrantyLeft > EXPIRING_DAYS ? null
       : warrantyLeft < 0 ? { expired: true }
@@ -499,8 +543,8 @@ export const LIST_SORTS = {
 } satisfies { [K in ListKind]: Partial<Record<keyof ListRows[K], string>> }
 
 // Snipe-IT action_type values the Activity Report can be filtered by.
-// Not item_type: Snipe-IT only applies it together with one item_id.
-export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit'] as const
+// Not item_type: Snipe-IT only applies it together with one item_id. Repair intake and Incoming repair write `note added` on an Asset.
+export const ACTIVITY_ACTIONS = ['checkout', 'checkin from', 'update', 'create', 'delete', 'audit', 'note added'] as const
 const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', 'Detail', 'Note']
 
 // Each List's Snipe-IT path, the filters it accepts ('id' = a positive whole number), and its row shape.
@@ -606,11 +650,14 @@ export const markdownOf = (html: string) => html
 // 1,234.56 formatting, which NOMMA uses; a server set to 1.234,56 would be misread.
 const amount = (v: unknown) => String(v).replace(/[^\d.-]/g, '')
 
-// A form value from a record as Snipe-IT sends it: an id from its object, a date's day, a number or text as it is.
+// A form value from a record as Snipe-IT sends it: an id from its object, a date's (or datetime's) day, a number or text as it is.
 function formValue(raw: RawRow, f: FormField): string {
   const v = raw[f.from ?? (f.type === 'choice' ? f.key.replace(/_id$/, '') : f.key)]
   if (v === null || v === undefined) return ''
-  if (typeof v === 'object') return String((v as { id?: unknown; date?: unknown }).id ?? (v as { date?: unknown }).date ?? '')
+  if (typeof v === 'object') {
+    const o = v as { id?: unknown; date?: unknown; datetime?: unknown }
+    return String(o.id ?? o.date ?? (typeof o.datetime === 'string' ? o.datetime.slice(0, 10) : ''))
+  }
   // A warranty comes as "36 months"; only the number is kept. Only a note is Markdown Snipe-IT rendered; a Name or Serial
   // is kept as it is (request() already decoded its entities).
   if (f.type === 'number') return amount(v)
@@ -662,11 +709,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
+  // Each thrown Error carries its FailureKind, and an HTTP error its status.
   async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+    const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
+    const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
     const failed = (e: unknown) => (e as Error).name === 'TimeoutError'
-      ? new Error(`Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
-      : new Error(`Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`)
+      ? failure('timeout', `Snipe-IT at ${config.baseUrl} took longer than ${timeout / 1000} seconds to answer. It may be busy; try again.`)
+      : unreachable()
     let res: Response, text: string
     try {
       res = await fetch(api + path, {
@@ -678,8 +728,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } catch (e) {
       throw failed(e)
     }
+    // Snipe-IT answers a wrong, revoked or expired key and a deactivated account alike, on purpose; the app doesn't guess.
     if (res.status === 401)
-      throw new Error('Snipe-IT rejected your API key. Check the API token in Settings, or generate a new personal API key in Snipe-IT.')
+      throw failure('key', 'Snipe-IT rejected your API key. It may be wrong or revoked, or your Snipe-IT account may have been deactivated. Check the token in Settings, or ask a Superuser to check your account.')
+    // Over Snipe-IT's requests a minute. Retry-After is in seconds; without one, Snipe-IT's throttle window is a minute.
+    if (res.status === 429) {
+      const header = res.headers.get('Retry-After')?.trim() ?? ''
+      const wait = /^\d+$/.test(header) ? Number(header) : 60
+      throw failure('rateLimited', `Snipe-IT is limiting requests; try again in ${wait} second${wait === 1 ? '' : 's'}.`, { status: 429, retryAfter: wait })
+    }
+    // The proxy in front of Snipe-IT can't reach it.
+    if ([502, 503, 504].includes(res.status)) throw unreachable({ status: res.status })
     if (res.status === 404) return { status: 'error', messages: 'Not found' }
     // The timeout covers the body too: a slow server can stall after the headers.
     try {
@@ -699,9 +758,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // An Import with rows that failed answers 500 with each row's errors; processImport, the only caller it reaches, reads them.
     if ((body as { status?: unknown } | undefined)?.status === 'import-errors') return body as T
     if (!res.ok) {
-      const failure = body as { messages?: unknown; message?: unknown } | undefined
-      const snipeItReason = reason(failure?.messages ?? failure?.message)
-      throw Object.assign(new Error(`Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`), { status: res.status })
+      const answer = body as { messages?: unknown; message?: unknown } | undefined
+      const snipeItReason = reason(answer?.messages ?? answer?.message)
+      throw failure(res.status === 403 ? 'forbidden' : 'refused', `Snipe-IT returned HTTP ${res.status}${snipeItReason ? `: ${snipeItReason}` : ''}`, { status: res.status })
     }
     if (body === undefined)
       throw new Error(`${config.baseUrl} did not answer like Snipe-IT. Check the server URL in Settings.`)
@@ -770,8 +829,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return true
     } catch (e) {
-      // ponytail: matches request()'s "HTTP 403" wording; a refusal is the answer, anything else (offline…) is an error.
-      if (/HTTP 403\b/.test((e as Error).message)) return false
+      // A refusal is the answer; anything else (offline…) is an error.
+      if ((e as Partial<Failure>).kind === 'forbidden') return false
       throw e
     }
   }
@@ -990,7 +1049,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (kind === 'overdue')
         return {
           columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'Days late'],
-          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!)).sort((a, b) => b.overdueDays! - a.overdueDays!)
+          rows: assets.filter((a) => a.overdueDays !== null && inRange(a.expectedCheckin!.slice(0, 10))).sort((a, b) => b.overdueDays! - a.overdueDays!)
             .map((a) => [a.assetTag, a.name, a.assignee?.name ?? '', a.expectedCheckin!, String(a.overdueDays)]),
           capped: false,
         }

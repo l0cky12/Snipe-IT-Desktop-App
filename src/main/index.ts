@@ -1,13 +1,17 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
 import { sendMail } from './mail'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt } from './snipeit'
+import { createSnipeIt, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
+
+// The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
+// ponytail: copies --bg from styles.css; change both together.
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#ffffff')
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
@@ -18,7 +22,7 @@ export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promi
 async function showLabel(parent: BrowserWindow | null, dir: string, name: string, pdf: Buffer) {
   const file = join(dir, `${name.replace(/[^\w.-]+/g, '_')}.pdf`)
   await writeFile(file, pdf)
-  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: '#0d1117', webPreferences: { plugins: true } })
+  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: windowBackground(), webPreferences: { plugins: true } })
   win.setMenuBarVisibility(false)
   win.on('closed', () => rm(dir, { recursive: true, force: true }))
   await win.loadFile(file, { hash: 'navpanes=0' })
@@ -49,12 +53,15 @@ app.whenReady().then(() => {
   const client = (input?: SettingsInput) => createSnipeIt(store.credentials(input), fetch)
   // A corrupt settings file shouldn't keep the window from opening to say so.
   let background = BACKGROUND_OFF
-  try { background = store.get().background } catch {}
+  let appearance: Appearance = 'system'
+  try { ({ background, appearance } = store.get()) } catch {}
+  // Also switches the window's prefers-color-scheme, so the stylesheet's one dark token block follows the setting.
+  nativeTheme.themeSource = appearance
   const win = new BrowserWindow({
     show: !(background.tray && process.argv.includes(HIDDEN_ARG)),
     width: 1280,
     height: 800,
-    backgroundColor: '#0d1117',
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -67,32 +74,42 @@ app.whenReady().then(() => {
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   const show = () => { if (win.isMinimized()) win.restore(); win.show(); win.focus() }
   app.on('second-instance', show)
+  nativeTheme.on('updated', () => win.setBackgroundColor(windowBackground()))
 
-  ipcMain.handle('settings:get', () => store.get())
-  ipcMain.handle('settings:save', (_e, input: SettingsInput) => {
+  // Every call from the window, with any failure's kind written into the message for the preload to read back (toWire).
+  const handle = (channel: string, listener: Parameters<typeof ipcMain.handle>[1]) =>
+    ipcMain.handle(channel, async (e, ...args) => {
+      try {
+        return await listener(e, ...args)
+      } catch (err) {
+        throw toWire(err)
+      }
+    })
+  handle('settings:get', () => store.get())
+  handle('settings:save', (_e, input: SettingsInput) => {
     const saved = store.save(input)
     scheduler.cancelPending()
     return saved
   })
-  ipcMain.handle('settings:clearToken', () => {
+  handle('settings:clearToken', () => {
     const saved = store.clearToken()
     scheduler.cancelPending()
     return saved
   })
-  ipcMain.handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
-  ipcMain.handle('settings:testMail', async (_e, input: MailInput) => {
+  handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
+  handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()
     await sendMail(server, { to, subject: 'Snipe-IT Desktop test email', text: 'This is a test email from Snipe-IT Desktop. Your email settings work, so Reports can be emailed to you here.' })
     return to
   })
   // Kept here, not in the window's storage, so the Report scheduler can read them with the window closed.
-  ipcMain.handle('settings:savedReports', () => store.savedReports())
-  ipcMain.handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
-  ipcMain.handle('settings:renameReport', (_e, id: string, name: string) => store.renameReport(id, name))
-  ipcMain.handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
-  ipcMain.handle('settings:schedules', () => store.schedules())
-  ipcMain.handle('settings:setSchedule', (_e, report: ScheduleKey, schedule: Schedule | null) => store.setSchedule(report, schedule, new Date()))
+  handle('settings:savedReports', () => store.savedReports())
+  handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
+  handle('settings:renameReport', (_e, id: string, name: string) => store.renameReport(id, name))
+  handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
+  handle('settings:schedules', () => store.schedules())
+  handle('settings:setSchedule', (_e, report: ScheduleKey, schedule: Schedule | null) => store.setSchedule(report, schedule, new Date()))
   const scheduler = createReportScheduler({
     now: () => new Date(),
     session: () => {
@@ -116,22 +133,27 @@ app.whenReady().then(() => {
       note.show()
     },
   })
-  ipcMain.handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
+  handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
   // At launch, sending what came due while the app was closed, then every minute.
   const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
   tick()
   setInterval(tick, 60_000)
-  ipcMain.handle('settings:saveBackground', (_e, input: Background) => {
+  handle('settings:saveBackground', (_e, input: Background) => {
     const saved = store.saveBackground(input)
     applyBackground(saved.background)
     return saved
   })
-  ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
-  ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
+  handle('settings:saveAppearance', (_e, input: Appearance) => {
+    const saved = store.saveAppearance(input)
+    nativeTheme.themeSource = saved.appearance
+    return saved
+  })
+  handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
+  handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
   for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
-    ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
+    handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
-  ipcMain.handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
+  handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
     const pdf = await client().labelPdf(assetTags)
     const dir = await mkdtemp(join(tmpdir(), 'snipe-it-label-'))
     try {

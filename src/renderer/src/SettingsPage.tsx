@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { Background, MailInput, Settings, SettingsInput } from '../../main/config'
+import type { Appearance, Background, MailInput, Settings, SettingsInput } from '../../main/config'
 
-export function SettingsPage({ settings, onSaved }: { settings: Settings; onSaved: (value: Settings) => void }) {
+// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
+export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -11,18 +12,22 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
   // Which section's Save or test the message is about, so it shows there.
   const [place, setPlace] = useState<'connection' | 'mail' | 'background'>('connection')
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
+  const [appearanceError, setAppearanceError] = useState('')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
   // Default Location is no longer offered; saving clears any previously stored one.
   const input: SettingsInput = { baseUrl, apiKey, defaultLocation: null }
 
+  // Checked on opening and after each connection save, not when other settings (Appearance, Email) change, so a
+  // Test connection result stays put.
+  const [connectionSaves, setConnectionSaves] = useState(0)
   useEffect(() => {
     if (!settings.hasToken) return
     let stale = false
     window.settings.test({ ...settings, apiKey: '' }).then((r) => !stale && setVersion(r.version), () => !stale && setVersion('Unavailable'))
     window.snipeIt.operatorEmail().then((to) => !stale && setRecipient({ to }), (e: Error) => !stale && setRecipient({ error: e.message }))
     return () => { stale = true }
-  }, [settings])
+  }, [connectionSaves, settings.hasToken])
 
   async function run(work: () => Promise<void>, where: typeof place = 'connection') {
     setBusy(true); setMessage(''); setError(''); setPlace(where)
@@ -38,7 +43,7 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
     <header><h1>Settings</h1><p className="dim">Connect to Snipe-IT with your API token.</p></header>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
-      setApiKey(''); onSaved(saved); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
+      setApiKey(''); onSaved(saved); setConnectionSaves((n) => n + 1); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
     }) }}>
       <fieldset disabled={busy}>
         <section className="settings-section">
@@ -103,6 +108,17 @@ export function SettingsPage({ settings, onSaved }: { settings: Settings; onSave
       </section>
     </fieldset>
     {place === 'background' && notes}
+    <section className="settings-section settings-appearance">
+      <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
+      <label htmlFor="appearance">Theme</label>
+      <select id="appearance" value={settings.appearance} onChange={(e) => {
+        const appearance = e.target.value as Appearance
+        // Not through run(): it stays usable (and keeps focus) while a test or save runs, without ending that one's busy state.
+        setAppearanceError('')
+        window.settings.saveAppearance(appearance).then(onAppearance, (err: Error) => setAppearanceError(err.message))
+      }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </section>
+    {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}
     <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
       <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
     </section>

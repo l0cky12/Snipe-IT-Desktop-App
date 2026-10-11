@@ -231,3 +231,15 @@ it('keeps running in the tray and starting at login off until turned on, and kee
   expect(relaunched.saveBackground({ tray: false, startAtLogin: true }).background).toEqual({ tray: false, startAtLogin: true })
   expect(() => store.saveBackground({ tray: 'yes', startAtLogin: false } as never)).toThrow('Invalid')
 })
+
+it('follows the system appearance until one is chosen, and keeps the choice across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().appearance).toBe('system')
+  store.save(input)
+  expect(store.saveAppearance('dark').appearance).toBe('dark')
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, appearance: 'dark' })
+  expect(relaunched.saveAppearance('light').appearance).toBe('light')
+  expect(relaunched.saveAppearance('system').appearance).toBe('system')
+  expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
+})
