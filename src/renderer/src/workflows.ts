@@ -504,8 +504,9 @@ export type BulkCheckout = ReturnType<typeof createBulkCheckout>
 export const DAMAGED = 'Damaged'
 export const NO_DAMAGED = `No Status Label named '${DAMAGED}' in Snipe-IT; ask an admin to create one`
 const isRepair = (t: StatusLabel | null, typeId: number) => !!t && (t.id === typeId || t.name.trim().toLowerCase() === 'repair')
-/** What Repair intake needs from Snipe-IT before a scan: the Damaged label and the Maintenance type. */
-type RepairSetup = { damaged: number; typeId: number | null }
+/** What Repair intake needs from Snipe-IT before a scan: the Damaged label, and the Maintenance type with the Settings
+ *  id it was looked up with. */
+type RepairSetup = { damaged: number; typeId: number | null; fallback: number | null }
 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
@@ -540,7 +541,8 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   const runner = createRunner<null>(bridge, async (a) => {
     const { damaged, typeId } = await (setup ?? Promise.reject(new Error(NO_DAMAGED)))
     const held = a.assignee
-    if (!a.can.checkin || (!held && !a.can.update)) throw new Error(NOT_ALLOWED)
+    // Checked out, it's a Checkin; otherwise the Asset is edited (its Status Label and a note).
+    if (held ? !a.can.checkin : !a.can.update) throw new Error(NOT_ALLOWED)
     // No confirm, so a second intake can't stack another note or Maintenance.
     if (!held && a.statusId === damaged) throw new Error('Already Damaged: nothing to do')
     const from = held && assigneeName(held)
@@ -591,13 +593,15 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     /** Opening the Workflow: looks up what it doesn't have yet. fallback: Settings' Maintenance type for repairs. */
     async open(fallback: number | null): Promise<void> {
       operatorName().catch(() => {})
-      if (found.damaged !== undefined && found.typeId != null) return
+      // A type found is kept until the Settings id changes, which may be what the Operator just corrected.
+      const typeKept = found.typeId != null && found.fallback === fallback
+      if (found.damaged !== undefined && typeKept) return
       const mine = ++attempt
       const was = found
       const next = (async (): Promise<RepairSetup> => {
         const damaged = was.damaged ?? (await bridge.statusLabels()).find((l) => l.name.trim().toLowerCase() === DAMAGED.toLowerCase())?.id
         if (damaged === undefined) throw new Error(NO_DAMAGED)
-        return { damaged, typeId: was.typeId ?? await bridge.repairTypeId(fallback) }
+        return { damaged, typeId: typeKept ? was.typeId! : await bridge.repairTypeId(fallback), fallback }
       })()
       setup = next
       try {
@@ -612,6 +616,10 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       events.changed()
     },
     scan: (raw: string) => blocked || runner.scan(raw, null),
+    /** Settings were saved: a new API token on the same server may be another Operator, so "(by …)" is read again. */
+    forgetOperator() {
+      operator = null
+    },
     reset() {
       attempt++
       session++

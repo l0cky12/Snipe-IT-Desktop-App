@@ -944,6 +944,18 @@ describe('Repair intake', () => {
     await flow.open(12)
     await flow.open(12)
     expect(calls).toEqual(['me', 'statusLabels', 'repair type null', 'repair type 12'])
+    // A changed Settings id (say, a wrong one corrected) is looked up with again.
+    await flow.open(13)
+    expect(calls.slice(4)).toEqual(['repair type 13'])
+  })
+
+  it('after Settings are saved, "(by …)" is read again, since a new API token may be another Operator', async () => {
+    const { flow, calls } = await opened([])
+    await flow.open(null)
+    expect(calls.filter((c) => c === 'me')).toHaveLength(1)
+    flow.forgetOperator()
+    await flow.open(null)
+    expect(calls.filter((c) => c === 'me')).toHaveLength(2)
   })
 
   it('with no Status Label named Damaged, opens to a blocking message and takes no scans', async () => {
@@ -973,17 +985,19 @@ describe('Repair intake', () => {
     expect(calls).toEqual(['me', 'statusLabels', 'repair type null', 'bytag NOMMA-1'])
   })
 
-  it('refuses without a confirm: already Damaged and not checked out, or a key that can\'t check it in', async () => {
+  it('refuses without a confirm: already Damaged and not checked out, or a key that can\'t do the first step', async () => {
     const { flow, calls, failed } = await opened([
       asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }),
       asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true } }),
+      asset('NOMMA-3', { assignee: null, statusId: 1, can: { checkout: true, checkin: true, update: false, delete: true } }),
     ])
     flow.scan('NOMMA-1')
     flow.scan('NOMMA-2')
+    flow.scan('NOMMA-3')
     await settled(flow)
     expect(flow.runner.open).toBeNull()
-    expect(flow.runner.rows.map((r) => r.result)).toEqual([{ state: 'failed', reason: NOT_ALLOWED }, { state: 'failed', reason: 'Already Damaged: nothing to do' }])
-    expect(failed).toHaveBeenCalledTimes(2)
+    expect(flow.runner.rows.map((r) => r.result)).toEqual([{ state: 'failed', reason: NOT_ALLOWED }, { state: 'failed', reason: NOT_ALLOWED }, { state: 'failed', reason: 'Already Damaged: nothing to do' }])
+    expect(failed).toHaveBeenCalledTimes(3)
     expect(calls.filter((c) => !c.startsWith('bytag')).slice(3)).toEqual([])
   })
 
@@ -1013,7 +1027,9 @@ describe('Repair intake', () => {
   })
 
   it("not checked out: the Status Label, then the note in its History, then the Maintenance (already Damaged but checked out is checked in as normal)", async () => {
-    const { flow, calls, checkins } = await opened([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusType: 'deployable' }), asset('NOMMA-2', { status: 'damaged', statusId: 9 })])
+    // A key that can't check in can still take in an Asset that isn't checked out: that's an edit, not a Checkin.
+    const noCheckin = { checkout: true, checkin: false, update: true, delete: true }
+    const { flow, calls, checkins } = await opened([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusType: 'deployable', can: noCheckin }), asset('NOMMA-2', { status: 'damaged', statusId: 9 })])
     flow.scan('NOMMA-1')
     await confirming(flow)
     expect(flow.runner.open!.says).toBe('Mark Damaged, add the note to its History, open a repair Maintenance')

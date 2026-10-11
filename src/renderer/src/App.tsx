@@ -176,6 +176,7 @@ export function App() {
   function saved(value: Settings) {
     const over = startsOver(settings, value)
     setSettings(value)
+    repairIntake.forgetOperator()
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
