@@ -233,7 +233,7 @@ export function ReportsView({ onOpenSaved }: { onOpenSaved: (report: SavedReport
         </table>
       </section>
       <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} scheduleOf={scheduleOf} onScheduled={setSchedules} />
-      {report?.capped && <p className="message list-message" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
+      {report?.capped && <p className="message notice" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
           <thead><tr>{report.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
