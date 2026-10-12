@@ -8,7 +8,7 @@ import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, eachInTurn, listName, missingWhat, reportDrill, type BulkAction, type BulkRun, type Drill } from './ListView'
-import { ReportsView } from './ReportsView'
+import { automaticCheckins, ReportsView, type ReportStart } from './ReportsView'
 import { ImportView } from './ImportView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
@@ -106,7 +106,8 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 // What the main area shows besides an Asset: the dashboard, a Workflow, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
 // reminderClick: opened from the End-of-day reminder, to the Overdue list with Temp only on; a new one each click.
-type View = { page: 'dashboard'; reminderClick?: number } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+// start: Reports opened on a starting query (Automatic check-in's notification), a new one each click.
+type View = { page: 'dashboard'; reminderClick?: number } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports'; start?: ReportStart & { click: number } } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 type Panel = { asset: AssetWithHistory; form?: SheetForm; n: number }
 
@@ -194,6 +195,8 @@ export function App() {
   useEffect(() => search.current?.focus(), [])
   // The End-of-day reminder clicked: the dashboard's Overdue list with Temp only on, from wherever the Operator was.
   useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', reminderClick: Date.now() }))), [])
+  // Automatic check-in's notification clicked: the Activity Report of that day's automatic check-ins.
+  useEffect(() => window.reminder.onAutomatic((day) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...automaticCheckins(day), click: Date.now() } }))), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const to = routeKey(e, keyPlace(e.target) === 'field', onWorkflow)
@@ -464,7 +467,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />

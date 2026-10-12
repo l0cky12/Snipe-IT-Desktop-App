@@ -577,6 +577,28 @@ describe('checkin', () => {
     expect(posted(none.requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 2 } }])
   })
 
+  // Automatic check-in: only the tagged Checkout it looked up, still Overdue, and nothing but the note sent.
+  describe('of one Checkout only', () => {
+    const tempOut = { ...chromebook, expected_checkin: { datetime: '2026-09-24 14:50:00' }, last_checkout: { datetime: '2026-09-24 09:05:12' } }
+    const at = () => new Date(2026, 8, 24, 15, 50)
+    const note = '[Automatic check-in] Temp checkout not scanned back by 3:50 pm'
+
+    it('sends no Status Label and no Location, and says it checked it in', async () => {
+      const { fetch, requests } = checkinWith(tempOut)
+      expect(await createSnipeIt(config, fetch, at).automaticCheckin(4812, '2026-09-24 09:05', note)).toBe(true)
+      expect(posted(requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { note } }])
+    })
+
+    it('skips an Asset checked in since, checked out again since, or given a later due time, without an error', async () => {
+      for (const since of [{ ...tempOut, assigned_to: null }, { ...tempOut, last_checkout: { datetime: '2026-09-24 15:20:00' } },
+        { ...tempOut, expected_checkin: { datetime: '2026-09-25 14:50:00' } }]) {
+        const { fetch, requests } = checkinWith(since)
+        expect(await createSnipeIt(config, fetch, at).automaticCheckin(4812, '2026-09-24 09:05', note)).toBe(false)
+        expect(posted(requests)).toEqual([])
+      }
+    })
+  })
+
   it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
     const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
     const { fetch } = checkinWith(chromebook, { body: refused })
@@ -1761,6 +1783,15 @@ describe('report', () => {
     const r = await createSnipeIt(config, fetch).report('activity', { actionType: 'note added' })
     expect(queries[0]).toMatchObject({ action_type: 'note added' })
     expect(r.rows).toEqual([['2026-10-10 09:00', 'Note added', 'E. Caldwell', 'Assets', 'NOMMA-5', 'Jordan Reyes', '[Incoming repair] screen replaced']])
+  })
+
+  it("the Activity Report searches with Snipe-IT's own search, as Automatic check-in's notification opens it", async () => {
+    const { fetch, queries } = fakeFetch({ '/reports/activity': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).report('activity', { from: '2026-10-12', to: '2026-10-12', actionType: 'checkin from', search: ' Automatic check-in ' })
+    expect(queries[0]).toMatchObject({ action_type: 'checkin from', search: 'Automatic check-in' })
+    await createSnipeIt(config, fetch).report('activity', { search: '  ' })
+    expect(queries[1]).not.toHaveProperty('search')
+    await expect(createSnipeIt(config, fetch).report('activity', { search: 7 as never })).rejects.toThrow('Invalid search')
   })
 
   it('an unknown report, action, record type or a malformed date is refused without asking Snipe-IT', async () => {

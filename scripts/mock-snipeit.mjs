@@ -171,6 +171,13 @@ maintain(assets[4], -6, 'Upgrade')
     ['checkout', `[Undo] Bulk return [Temp checkout | due: ${stamp(due)}]`, at(1, '15:22')])
   out.expected_checkin = dueBack(local(due))
 }
+// Two Temp checkouts Automatic check-in checked in today at 3:50 pm, for the Activity Report its notification opens.
+for (const a of assets.filter((x) => !x.assigned_to && x.id > 100).slice(0, 2)) {
+  const at = (h, m) => new Date(new Date().setHours(h, m, 0, 0))
+  const to = assigneeOf(pick(users, a.id), 'user')
+  act('checkout', a, to, `[Temp checkout | due: ${day(0)} 14:50]`, at(8, 5 + a.id % 40))
+  act('checkin from', a, to, '[Automatic check-in] Temp checkout not scanned back by 3:50 pm', at(15, 50))
+}
 log.sort((x, y) => y.created_at.datetime.localeCompare(x.created_at.datetime))
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()

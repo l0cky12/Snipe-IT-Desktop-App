@@ -6,7 +6,7 @@ import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
-import { createEndOfDayReminder } from './reminder'
+import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
@@ -93,11 +93,13 @@ app.whenReady().then(() => {
   handle('settings:save', (_e, input: SettingsInput) => {
     const saved = store.save(input)
     scheduler.cancelPending()
+    automatic.cancel()
     return saved
   })
   handle('settings:clearToken', () => {
     const saved = store.clearToken()
     scheduler.cancelPending()
+    automatic.cancel()
     return saved
   })
   handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
@@ -140,32 +142,51 @@ app.whenReady().then(() => {
     },
   })
   handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
-  // Kept, so its click still opens the window after the notification would otherwise be garbage collected.
+  // Kept, so their clicks still open the window after the notifications would otherwise be garbage collected.
   let reminderNote: Notification | null = null
+  let automaticNote: Notification | null = null
+  // Even with the window open: at the end of the day it may be behind other windows.
+  const notify = ({ title, body }: { title: string; body: string }, click: () => void) => {
+    if (!Notification.isSupported()) return null
+    const note = new Notification({ title, body })
+    note.on('click', () => { show(); click() })
+    note.show()
+    return note
+  }
+  // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+  // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
+  const outstanding = async (connection: ReturnType<typeof client>) => {
+    const temp = overdueTemp((await connection.dashboard(['overdue'])).overdue)
+    if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+    return temp
+  }
   const reminder = createEndOfDayReminder({
     now: () => new Date(),
     settings: store.get,
     lastShown: store.lastReminder,
     recordShown: store.recordReminder,
-    // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
-    // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
-    outstanding: async () => {
-      const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
-      if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
-      return temp.map((a) => a.assetTag)
-    },
-    // Even with the window open: at the end of the day it may be behind other windows.
-    notify: ({ title, body }) => {
-      if (!Notification.isSupported()) return
-      reminderNote = new Notification({ title, body })
-      reminderNote.on('click', () => { show(); win.webContents.send('reminder:open') })
-      reminderNote.show()
-    },
+    outstanding: async () => (await outstanding(client())).map((a) => a.assetTag),
+    notify: (text) => { reminderNote = notify(text, () => win.webContents.send('reminder:open')) },
   })
-  // At launch, sending what came due while the app was closed (and today's End-of-day reminder if its time has passed), then every minute.
+  const automatic = createAutomaticCheckin({
+    now: () => new Date(),
+    settings: store.get,
+    lastRan: store.lastAutomatic,
+    recordRan: store.recordAutomatic,
+    connect: () => {
+      const connection = client()
+      return { outstanding: () => outstanding(connection), checkin: (id, checkout, note) => connection.automaticCheckin(id, checkout, note) }
+    },
+    // Opens the Activity Report on that day's automatic check-ins.
+    notify: (text, day) => { automaticNote = notify(text, () => win.webContents.send('automatic:open', day)) },
+    log: (message) => console.error('Automatic check-in:', message),
+  })
+  // At launch, sending what came due while the app was closed (and today's End-of-day reminder and Automatic check-in if
+  // their times have passed), then every minute.
   const tick = () => {
     scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
     reminder.tick().catch((e: Error) => console.error('End-of-day reminder:', e.message))
+    automatic.tick().catch((e: Error) => console.error('Automatic check-in:', e.message))
   }
   tick()
   setInterval(tick, 60_000)

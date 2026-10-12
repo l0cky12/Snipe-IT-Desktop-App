@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Appearance, Background, MailInput, Settings, SettingsInput } from '../../main/config'
+import type { Appearance, Background, MailInput, Settings, SettingsInput, TempCheckout } from '../../main/config'
 import { formatCalendar } from '../../main/calendar'
 
 // onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
@@ -13,6 +13,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   // Which section's Save or test the message is about, so it shows there.
   const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
   const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
+  const [automaticAt, setAutomaticAt] = useState(settings.tempCheckout.automaticAt)
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
@@ -38,6 +39,9 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     try { await work() } catch (e) { setError((e as Error).message) }
     finally { setBusy(false) }
   }
+
+  const toggle = (change: Partial<TempCheckout>) =>
+    run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, ...change })); setMessage('Saved.') }, 'temp')
 
   const notes = <>
     {message && <p className="settings-success" role="status">{message}</p>}
@@ -114,18 +118,20 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     </fieldset>
     {place === 'background' && notes}
     {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
-    <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, endOfDay })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, endOfDay, automaticAt })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
       <fieldset disabled={busy}>
         <section className="settings-section">
           <h2>Temp checkout</h2><p className="dim">When Temp checkouts are due back.</p>
           <label htmlFor="end-of-day">End-of-day time</label>
           <input id="end-of-day" type="time" required value={endOfDay} onChange={(e) => { setEndOfDay(e.target.value); setMessage('') }} />
           <p className="hint">A Temp checkout is due at this time on a School day, or on the next School day once it has passed. A half day in the School calendar ends at its own time.</p>
-          {/* Saves on change, with the end-of-day time as saved, not as typed. */}
-          <label className="check"><input type="checkbox" checked={settings.tempCheckout.reminder} onChange={(e) => {
-            const reminder = e.target.checked
-            run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, reminder })); setMessage('Saved.') }, 'temp')
-          }} /><span>End-of-day reminder<span className="hint">To get it with the window closed, turn on Keep running in the tray and Start at login.</span></span></label>
+          {/* The switches save on change, with the times as saved, not as typed. */}
+          <label className="check"><input type="checkbox" checked={settings.tempCheckout.reminder} onChange={(e) => toggle({ reminder: e.target.checked })} />
+            <span>End-of-day reminder<span className="hint">To get it with the window closed, turn on Keep running in the tray and Start at login.</span></span></label>
+          {/* The time saves with the section. Clicking it doesn't toggle the switch: a label toggles only its first control. */}
+          <label className="check"><input type="checkbox" checked={settings.tempCheckout.automatic} onChange={(e) => toggle({ automatic: e.target.checked })} />
+            <span>Check in Temp checkouts still out at <input className="inline-time" type="time" required value={automaticAt} aria-label="Automatic check-in time" onChange={(e) => { setAutomaticAt(e.target.value); setMessage('') }} />
+              <span className="hint">Once each School day, and on a half day the same gap after its end. Each is checked in as if it came back, with an [Automatic check-in] note and its Status Label unchanged, so it leaves the Overdue list.</span></span></label>
         </section>
         <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save Temp checkout settings'}</button></div>
       </fieldset>
