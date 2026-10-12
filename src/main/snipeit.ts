@@ -192,6 +192,38 @@ export type Dashboard = {
   }[K]
 }
 
+/**
+ * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
+ * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
+ * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
+ */
+export type Health = {
+  probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
+  auditLate: number | Failed
+  auditDue: number | Failed
+}
+/** One line of the Health warnings strip, or why its check couldn't run. */
+export type HealthLine =
+  | { warning: 'unreachable' | 'key'; message: string }
+  | { warning: 'tooOld'; version: string }
+  | { warning: 'auditLate' | 'auditDue'; count: number }
+  | { warning: 'tooOld' | 'auditLate' | 'auditDue'; error: string }
+/** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
+export const MIN_SNIPEIT = [8, 7] as const
+
+/** The strip's lines, in order: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
+export function healthLines({ probe, auditLate, auditDue }: Health): HealthLine[] {
+  if ('warning' in probe) return [probe]
+  const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
+  const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
+  const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
+    : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
+    : older ? [{ warning: 'tooOld', version: probe.version }] : []
+  const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
+    typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
+  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue)]
+}
+
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history and Damaged. */
 export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged'] as const
 export type ReportKind = (typeof REPORTS)[number]
@@ -1494,6 +1526,30 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         ...(note?.trim() && { note: note.trim() }),
       })
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // The Health warnings' checks: three small requests at once, each failing on its own. Runs on open and Refresh only.
+    async health(): Promise<Health> {
+      const failed = (e: Error): Failed => ({ error: e.message })
+      const total = async (path: string) => {
+        const body = await request<{ total?: unknown }>(`${path}?limit=1`)
+        if (isError(body)) throw new Error(reason(body.messages))
+        if (typeof body.total !== 'number') throw new Error(`Snipe-IT didn't send a total for ${path.slice(1)}.`)
+        return body.total
+      }
+      const [probe, auditLate, auditDue] = await Promise.all([
+        request<{ version?: unknown }>('/version').then(
+          (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
+            : typeof body.version === 'string' ? { version: body.version } : { error: "Snipe-IT didn't say which version it runs." },
+          (e: Error & Partial<Failure>): Health['probe'] =>
+            e.kind === 'unreachable' || e.kind === 'timeout' ? { warning: 'unreachable', message: e.message }
+            // /version needs no permission, so a 403 on it is about the whole key (since v8.8: 2FA not enrolled, or User-Agent blocked).
+            : e.kind === 'key' || e.kind === 'forbidden' ? { warning: 'key', message: e.message }
+            : failed(e)),
+        total('/hardware/audit/overdue').catch(failed),
+        total('/hardware/audit/due').catch(failed),
+      ])
+      return { probe, auditLate, auditDue }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.

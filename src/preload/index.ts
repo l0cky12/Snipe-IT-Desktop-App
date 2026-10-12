@@ -25,6 +25,7 @@ const snipeIt: SnipeItBridge = {
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
   dashboard: call('snipeit:dashboard'),
+  health: call('snipeit:health'),
   list: call('snipeit:list'),
   exportList: call('snipeit:exportList'),
   names: call('snipeit:names'),
