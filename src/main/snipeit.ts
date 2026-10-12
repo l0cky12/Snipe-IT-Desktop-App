@@ -1839,7 +1839,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           status_id: statusId ?? label.id,
           checkout_to_type: targetType,
           [`assigned_${targetType}`]: targetId,
-          ...(expectedCheckin && { expected_checkin: expectedCheckin }),
+          // A time of day goes as YYYY-MM-DD HH:MM:00, which Snipe-IT reads in the server's timezone (also Central, #61 §1).
+          ...(expectedCheckin && { expected_checkin: expectedCheckin.length > 10 ? `${expectedCheckin}:00` : expectedCheckin }),
           ...(note?.trim() && { note: note.trim() }),
         })
         if (isError(result)) throw new Error(reason(result.messages))
