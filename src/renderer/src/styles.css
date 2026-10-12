@@ -161,6 +161,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .section-bar { display: flex; align-items: baseline; gap: 16px; scroll-margin-top: 80px; }
 .section-bar label { display: inline-flex; align-items: center; gap: 6px; font: 400 13px var(--sans); cursor: pointer; }
 .history .flag { margin-left: 8px; }
+.history td > .flag:first-child { margin-left: 0; }
 
 /* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
 .history { border-collapse: collapse; width: 100%; }
