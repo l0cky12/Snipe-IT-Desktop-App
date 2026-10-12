@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CheckinOptions, CheckoutOptions } from '../../main/snipeit'
-import { allMatching, cantCheckin, cantCheckout, checkinAction, checkoutAction, eachInTurn, focusRow, openRow, panelLive, panelToRefresh, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun, type Outcome } from './ListView'
+import { auditAction, mayAudit, allMatching, cantCheckin, cantCheckout, checkinAction, checkoutAction, eachInTurn, focusRow, openRow, panelLive, panelToRefresh, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun, type Outcome } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -100,7 +100,7 @@ describe('Selection', () => {
 })
 
 describe('Bulk delete', () => {
-  const allowed = { checkout: true, checkin: true, update: true, delete: true }
+  const allowed = { checkout: true, checkin: true, update: true, delete: true, audit: true }
   const row = (id: number, del = true) => ({ id, can: { ...allowed, delete: del } })
 
   it('the confirmation names the count and kind', () => {
@@ -139,13 +139,41 @@ describe('Bulk delete', () => {
 })
 
 describe('Bulk edit', () => {
-  const row = (id: number, update = true) => ({ id, can: { checkout: true, checkin: true, update, delete: true } })
+  const row = (id: number, update = true) => ({ id, can: { checkout: true, checkin: true, update, delete: true, audit: true } })
 
   it("is offered on a Selection of Assets or Users when Snipe-IT lets the Operator edit what's selected", () => {
     expect(mayEdit('assets', [row(1), row(2)])).toBe(true)
     expect(mayEdit('users', [row(1)])).toBe(true)
     expect(mayEdit('assets', [row(1, false), row(2, false)])).toBe(false)
     expect(mayEdit('locations', [row(1)])).toBe(false)
+  })
+})
+
+describe('Bulk audit', () => {
+  const row = (id: number, audit = true) => ({ id, can: { checkout: true, checkin: true, update: true, delete: true, audit } })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('is offered on a Selection of Assets when Snipe-IT lets the Operator audit any of them', () => {
+    expect(mayAudit('assets', [row(1, false), row(2)])).toBe(true)
+    expect(mayAudit('assets', [row(1, false)])).toBe(false)
+    expect(mayAudit('users', [row(1)])).toBe(false)
+  })
+
+  it('sends one Audit per Asset, each with the same Next audit and note, and says what each did', async () => {
+    const audit = vi.fn(async (id: number) => {
+      if (id === 2) throw new Error('You do not have permission to audit this asset.')
+      return { was: id === 1 ? '2026-10-01' : null, next: id === 1 ? '2027-10-10' : null }
+    })
+    vi.stubGlobal('window', { snipeIt: { audit } })
+    const action = auditAction({ nextAudit: '2027-10-10', note: 'Room 204' })
+    const results: [number, Outcome][] = []
+    await eachInTurn([1, 2, 3], action.work, action.done, (id, o) => o.state !== 'working' && results.push([id, o]))
+    expect(audit.mock.calls).toEqual([[1, { nextAudit: '2027-10-10', note: 'Room 204' }], [2, { nextAudit: '2027-10-10', note: 'Room 204' }], [3, { nextAudit: '2027-10-10', note: 'Room 204' }]])
+    expect(results).toEqual([
+      [1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }],
+      [2, { state: 'failed', reason: 'You do not have permission to audit this asset.' }],
+      [3, { state: 'done', text: 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date (had none)' }],
+    ])
   })
 })
 
@@ -310,6 +338,12 @@ describe("a Bulk Action's run", () => {
     ])
   })
 
+  it("a run whose work answers with its own text (an Audit's dates) reports that instead of the run's", async () => {
+    const reports: [number, Outcome][] = []
+    await eachInTurn([1], async () => 'Audited, next 2027-10-10, was 2026-10-01', 'Audited', (id, o) => reports.push([id, o]))
+    expect(reports[1]).toEqual([1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }])
+  })
+
   it('stops before the next Record once told to, e.g. by Stop or when Settings point at another server', async () => {
     const asked: number[] = []
     let stopped = false
@@ -337,7 +371,7 @@ describe('Checkout… and Checkin… on a Selection of Assets', () => {
       },
     }
   }
-  const results = async (action: { work: (id: number) => Promise<void>; done: string }) => {
+  const results = async (action: { work: (id: number) => Promise<string | void>; done: string }) => {
     const out: [number, Outcome][] = []
     await eachInTurn([1, 2, 3], action.work, action.done, (id, o) => o.state !== 'working' && out.push([id, o]))
     return out
@@ -366,7 +400,7 @@ describe('Checkout… and Checkin… on a Selection of Assets', () => {
   })
 
   it("each is off when Snipe-IT says the Operator's key may not do it to any selected Asset", () => {
-    const can = (checkout: boolean, checkin: boolean) => ({ can: { checkout, checkin, update: true, delete: true } })
+    const can = (checkout: boolean, checkin: boolean) => ({ can: { checkout, checkin, update: true, delete: true, audit: true } })
     expect(cantCheckout([can(true, true), can(true, false)])).toBe(false)
     expect(cantCheckout([can(true, true), can(false, true)])).toBe(true)
     expect(cantCheckin([can(true, true), can(false, true)])).toBe(false)

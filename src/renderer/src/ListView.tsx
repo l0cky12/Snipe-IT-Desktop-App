@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, type Asset, type MissingField, type AssetView, type BulkKind, type Can, type DeleteKind, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type SnipeItBridge, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type SnipeItBridge, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
-import { AssetSheet, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
+import { AssetSheet, AuditForm, CheckoutForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
 import { FerpaConfirm, saveCsv } from './ReportsView'
@@ -177,15 +177,15 @@ export async function allMatching<T extends { id: number }>(page: (offset: numbe
 export type Outcome = { state: 'working' } | { state: 'done'; text: string } | { state: 'failed'; reason: string }
 
 // Runs the action on each Record in turn and reports each outcome as it lands; one failing doesn't stop the rest, stop() does.
-// Each is the usual single edit, delete, Checkout or Checkin, so History credits the Operator for every one.
-// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout is two requests); a Selection of 30 takes ~20s on a busy server.
-export async function eachInTurn(ids: number[], work: (id: number) => Promise<void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
+// Each is the usual single edit, delete, Checkout, Checkin or Audit, so History credits the Operator for every one. Work
+// that answers with text (an Audit's dates) is reported with it instead of `done`.
+// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout or an Audit is two requests); a Selection of 30 takes ~20s on a busy server.
+export async function eachInTurn(ids: number[], work: (id: number) => Promise<string | void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
   for (const id of ids) {
     if (stop()) return
     report(id, { state: 'working' })
     try {
-      await work(id)
-      report(id, { state: 'done', text: done })
+      report(id, { state: 'done', text: (await work(id)) || done })
     } catch (e) {
       report(id, { state: 'failed', reason: (e as Error).message })
     }
@@ -198,7 +198,7 @@ export function OutcomeText({ outcome: o }: { outcome: Outcome }) {
 }
 
 /** A Bulk Action: what it does to each Record of a List (done: what its result says), under a title. deletes: a Record it's done leaves the List. */
-export type BulkAction = { kind: ListKind; title: string; done: string; work: (id: number) => Promise<void>; deletes?: true }
+export type BulkAction = { kind: ListKind; title: string; done: string; work: (id: number) => Promise<string | void>; deletes?: true }
 // Checkout… and Checkin… on the Assets List: each selected Asset gets the usual single Checkout or Checkin with the form's options.
 export const checkoutAction = (bridge: Pick<SnipeItBridge, 'checkout'>, o: CheckoutOptions): BulkAction =>
   ({ kind: 'assets', title: MOVES.checkout.title, done: 'Checked out', work: (id) => bridge.checkout(id, o) })
@@ -236,6 +236,12 @@ export const mayDelete = (kind: ListKind, rows: { can: Can }[]) => deletable(kin
 const bulkEditable = (kind: ListKind): kind is BulkKind => Object.hasOwn(BULK_FORMS, kind)
 // "Edit shared fields" is offered on Assets and Users when Snipe-IT lets the Operator edit them.
 export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(kind) && rows.some((r) => r.can.update)
+// Audit… is offered on Assets when Snipe-IT lets the Operator audit any of them; the rest are still tried, so Snipe-IT's reason shows.
+export const mayAudit = (kind: ListKind, rows: { can: Can }[]) => kind === 'assets' && rows.some((r) => r.can.audit)
+/** The Audit Bulk Action: the same Next audit and note for each Asset, one Audit at a time (not Snipe-IT's bulk audit, which
+ * would lose Stop, progress and Retry failed), each result with its next audit date and the one it was. */
+export const auditAction = (o: AuditOptions): BulkAction =>
+  ({ kind: 'assets', title: 'Audit Assets', done: 'Audited', work: async (id) => auditedResult(await window.snipeIt.audit(id, o)) })
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
@@ -302,6 +308,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const [editing, setEditing] = useState(false)
   // The Checkout… or Checkin… form open under the Selection bar (Assets only).
   const [bulkForm, setBulkForm] = useState<keyof typeof MOVES | null>(null)
+  const [auditing, setAuditing] = useState(false)
   const mine = bulk?.kind === kind ? bulk : null
   // A deleted Record leaves the Selection; one that failed stays ticked.
   useEffect(() => {
@@ -401,6 +408,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     onBulk({ kind, title: `Edit ${listName[kind]}`, done: 'Saved', work }, selectionRun())
   }
   const runForm = (action: BulkAction) => (setBulkForm(null), onBulk(action, selectionRun()))
+  const auditSelection = (o: AuditOptions) => (setAuditing(false), onBulk(auditAction(o), selectionRun()))
   // The List as shown, every matching row up to the Report row cap; saved where the Operator chooses.
   async function exportCsv() {
     setExporting('fetching')
@@ -616,6 +624,9 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
                 {mayEdit(kind, [...selection.values()]) && (
                   <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
                 )}
+                {mayAudit(kind, [...selection.values()]) && (
+                  <button className="quiet" disabled={bulk?.busy || !!selectingAll || auditing} onClick={() => setAuditing(true)}>Audit…</button>
+                )}
                 {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
                   <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
                     <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
@@ -646,6 +657,11 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
             </section>
           )}
           {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
+          {auditing && selection.size > 0 && (
+            <section className="list-panel" aria-label="Audit Assets">
+              <AuditForm count={selection.size} busy={!!bulk?.busy} onAudit={auditSelection} onCancel={() => setAuditing(false)} />
+            </section>
+          )}
           {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
         </div>
         <table ref={table} className="history list-table">
@@ -707,7 +723,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       </div>
       {kind === 'assets' && panel && panelAsset && (
         <AssetSheet key={panel.n} {...panel.sheet} form={panel.form} onCheckin={reloading(panel.sheet.onCheckin)} onCheckout={reloading(panel.sheet.onCheckout)}
-          onStatus={reloading(panel.sheet.onStatus)}
+          onStatus={reloading(panel.sheet.onStatus)} onAudit={reloading(panel.sheet.onAudit)}
           onDeleted={() => (setSelection((s) => (s.has(panelAsset.id) ? new Map([...s].filter(([id]) => id !== panelAsset.id)) : s)), reload(), panel.sheet.onDeleted())}
           docked={{ ticked: selection.has(panelAsset.id), notInView: outside === panelAsset.id, onClose: onClosePanel, onTick: () => tickRow(panelRow()) }} />
       )}
