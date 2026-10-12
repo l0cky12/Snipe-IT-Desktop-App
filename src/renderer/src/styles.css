@@ -393,11 +393,12 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
 .pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
-.batch td { white-space: nowrap; }
-.batch td[role=status] { white-space: normal; width: 100%; }
 .form-grid.bulk-form { padding: 4px 16px 16px; }
 .bulk-rows { max-height: 40vh; overflow: auto; border-top: 1px solid var(--line); }
 .bulk-rows tr:last-child td { border-bottom: 0; }
+.bulk td { white-space: nowrap; }
+/* Checkout… and Checkin… on a Selection: the form sits in its panel as Edit shared fields' does. */
+.list-panel > fieldset > form { padding: 4px 16px 16px; border: 0; background: none; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }

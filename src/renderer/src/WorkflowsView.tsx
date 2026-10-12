@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'rea
 import { ArchiveRestore, PackageCheck, Wrench, type LucideIcon } from 'lucide-react'
 import { cleanText, WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
-import { OutcomeText } from './BatchView'
+import { OutcomeText } from './ListView'
 import { assigneeName, cleanTag, fieldKey, type BulkCheckout, type BulkReturn, type RepairIntake, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
