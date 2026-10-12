@@ -2041,6 +2041,21 @@ describe('Incoming repair', () => {
       expect(calls.filter((c) => c.startsWith('delete'))).toEqual([])
     })
 
+    it("a one-word note or cost whose tag lookup fails is cleared, never kept unchecked; the field shows what's kept", async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+      flow.runner.setText('fixed')
+      expect(await flow.submitNote('fixed')).toBe("Couldn't check whether fixed is an Asset Tag: Can't reach Snipe-IT")
+      expect(flow.runner.open?.text).toBe('')
+      bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+      flow.setCost('cracked')
+      expect(await flow.submitCost('cracked')).toBe("Couldn't check whether cracked is an Asset Tag: Can't reach Snipe-IT")
+      expect(flow.cost).toBe('')
+      expect(writes(calls)).toEqual([])
+    })
+
     it('a one-word note whose lookup is overtaken by a newer submission never confirms', async () => {
       const { flow, bridge, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
       flow.scan('NOMMA-1')

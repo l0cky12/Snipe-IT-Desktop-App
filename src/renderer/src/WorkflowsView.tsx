@@ -663,7 +663,7 @@ export function IncomingRepairView({ flow, field, repairTypeId, onOpenAsset }: {
                   inputMode="decimal" placeholder="Optional, e.g. 45" aria-label="Repair cost (optional)" title="What the repair cost, e.g. 45 or $45.00. Kept on the Maintenance, never as the purchase cost." />
               </label>
               <label className="dim">Note{' '}
-                <input value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(e.target.value); setStatus('') }} onKeyDown={(e) => fieldKey(e, () => flow.submitNote(note))}
+                <input value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(e.target.value); setStatus('') }} onKeyDown={(e) => fieldKey(e, () => flow.submitNote(note).then((said) => (setNote(flow.runner.open?.text ?? ''), said)))}
                   placeholder="Optional" aria-label="Note (optional)" />
               </label>
             </div>
