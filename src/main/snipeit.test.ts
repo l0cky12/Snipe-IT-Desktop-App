@@ -544,10 +544,74 @@ describe('checkin', () => {
     expect(posted(requests)).toEqual([])
   })
 
+  it("refuses, writing nothing, when its own read finds another Assignee or Status Label than the caller expects", async () => {
+    const { fetch, requests } = checkinWith(chromebook)
+    const snipeIt = createSnipeIt(config, fetch)
+    // Checked out to User 311, 'Deployed' (id 2).
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'user', id: 312 } })).rejects.toThrow('NOMMA-004812 is checked out to Jordan Reyes now')
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'location', id: 311 } })).rejects.toThrow('NOMMA-004812 is checked out to Jordan Reyes now')
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'user', id: 311 }, fromStatusId: 1 })).rejects.toThrow("NOMMA-004812 is 'Deployed' now")
+    expect(posted(requests)).toEqual([])
+    await snipeIt.checkin(4812, { statusId: 1, fromAssignee: { type: 'user', id: 311 }, fromStatusId: 2 })
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 1 } }])
+  })
+
+  it('refuses, writing nothing, when a Checkin with no Location would move it to a Default Location the caller expects it not to have', async () => {
+    const { fetch, requests } = checkinWith({ ...chromebook, location: null, rtd_location: { id: 8, name: 'IT Office' } })
+    await expect(createSnipeIt(config, fetch).checkin(4812, { noDefaultLocation: true })).rejects.toThrow('NOMMA-004812 has a Default Location now, IT Office; a Checkin would move it there')
+    expect(posted(requests)).toEqual([])
+    const none = checkinWith({ ...chromebook, location: null, rtd_location: null })
+    await createSnipeIt(config, none.fetch).checkin(4812, { noDefaultLocation: true })
+    expect(posted(none.requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 2 } }])
+  })
+
   it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
     const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
     const { fetch } = checkinWith(chromebook, { body: refused })
     await expect(createSnipeIt(config, fetch).checkin(4812, {})).rejects.toThrow('That asset is already checked in.')
+  })
+})
+
+describe("Finding a Workflow's User", () => {
+  const avery = { id: 311, name: 'Avery Testwell', username: 'atestwell', email: 'avery.testwell@example.org', employee_num: '20417', assets_count: 2 }
+  const card = { id: 311, name: 'Avery Testwell', username: 'atestwell', employeeNum: '20417', assets: 2 }
+
+  it('all digits is tried as an exact employee number, then a username', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/users': { body: { total: 1, rows: [avery] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers(' 20417 ')).toEqual([card])
+    expect(calls).toEqual(['/users'])
+    expect(queries[0]).toMatchObject({ employee_num: '20417' })
+  })
+
+  it('text with @ is tried as an exact email, then a username; nothing found is an empty list', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('avery.testwell@example.org')).toEqual([])
+    expect(queries.map((q) => Object.keys(q).filter((k) => k !== 'limit'))).toEqual([['email'], ['username']])
+  })
+
+  it('other text is tried as a username only', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 1, rows: [avery] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('ATestwell')).toEqual([card])
+    expect(queries).toEqual([{ username: 'ATestwell', limit: '2' }])
+  })
+
+  it("keeps only rows whose field really matches, in case a server ignores the filter or matches loosely", async () => {
+    const other = { ...avery, id: 312, employee_num: '204170' }
+    const { fetch } = fakeFetch({ '/users': { body: { total: 2, rows: [other] } } })
+    expect(await createSnipeIt(config, fetch).exactUsers('20417')).toEqual([])
+  })
+
+  it("the User picker list is Snipe-IT's selectlist text, Users only", async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/users/selectlist': { body: { results: [{ id: 311, text: 'Testwell, Avery (atestwell) - #20417', image: null }], pagination: { more: false } } } })
+    expect(await createSnipeIt(config, fetch).userSelectlist(' test ')).toEqual([{ id: 311, name: 'Testwell, Avery (atestwell) - #20417' }])
+    expect(calls).toEqual(['/users/selectlist'])
+    expect(queries[0]).toEqual({ search: 'test' })
+    expect(await createSnipeIt(config, fetch).userSelectlist('  ')).toEqual([])
+  })
+
+  it("a picked User's header: name, username, employee number and how many Assets they hold", async () => {
+    const { fetch } = fakeFetch({ '/users/311': { body: { ...avery, employee_num: null } } })
+    expect(await createSnipeIt(config, fetch).userCard(311)).toEqual({ ...card, employeeNum: '' })
   })
 })
 
@@ -653,6 +717,19 @@ describe('checkout', () => {
     const same = checkoutWith(ready)
     await createSnipeIt(config, same.fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, fromStatusId: 1 })
     expect(posted(same.requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311 })
+  })
+
+  it("refuses, writing nothing, when the Asset isn't at the Location the caller expects (null: none)", async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 4 })).rejects.toThrow('NOMMA-004812 is at Library now')
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: null })).rejects.toThrow('NOMMA-004812 is at Library now')
+    expect(posted(requests)).toEqual([])
+    await snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 9 })
+    const nowhere = checkoutWith({ ...ready, location: null })
+    await expect(createSnipeIt(config, nowhere.fetch).checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 9 })).rejects.toThrow('NOMMA-004812 is at no Location now')
+    await createSnipeIt(config, nowhere.fetch).checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: null })
+    expect(posted(requests).length + posted(nowhere.requests).length).toBe(2)
   })
 
   it('refuses another target type, a bad Status Label id or a malformed Expected Checkin without asking Snipe-IT', async () => {

@@ -1,14 +1,17 @@
-import { useEffect, useState, type ReactNode, type RefObject } from 'react'
-import { ArchiveRestore, type LucideIcon } from 'lucide-react'
-import { WORKFLOWS, type Workflow } from '../../main/notes'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { ArchiveRestore, PackageCheck, type LucideIcon } from 'lucide-react'
+import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import { cleanTag, type BulkReturn, type Row } from './workflows'
+import { cleanTag, fieldKey, type BulkCheckout, type BulkReturn, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
-export const BUILT: Workflow[] = ['Bulk return']
-export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk return': ArchiveRestore }
-const about: Partial<Record<Workflow, string>> = { 'Bulk return': 'Pick where returns go, then scan Assets to check them in.' }
+export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return']
+export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk checkout': PackageCheck, 'Bulk return': ArchiveRestore }
+const about: Partial<Record<Workflow, string>> = {
+  'Bulk checkout': 'Find a User, then scan Assets and confirm each to check it out to them.',
+  'Bulk return': 'Pick where returns go, then scan Assets to check them in.',
+}
 export const shortcut = (w: Workflow) => `Ctrl ${WORKFLOWS.indexOf(w) + 1}`
 
 // A short buzz for a refused or failed scan; success is silent, as the scanner already beeps.
@@ -88,14 +91,20 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
       <table className="history running">
         <thead><tr><th>Time</th><th>Asset Tag</th><th>Name</th><th>What</th><th>Result</th></tr></thead>
         <tbody>
-          {rows.map((r) => (
+          {rows.map((r) => r.line ? (
+            <tr key={r.key} className="line"><td className="dim">{r.time}</td><td colSpan={4}>{what(r)}</td></tr>
+          ) : (
             <tr key={r.key} className={r.result.state === 'failed' ? 'failed' : undefined}>
               <td className="dim">{r.time}</td>
               <td>{r.assetId === null ? <span className="mono">{r.tag}</span> : <button className="link mono" onClick={() => onOpenAsset(r.assetId!)}>{r.tag}</button>}</td>
               <td>{r.name || '—'}</td>
               <td>{what(r)}</td>
               <td>
-                {r.result.state === 'waiting' ? <span className="dim">Waiting…</span> : r.result.state === 'undone' ? <span className="dim">Undone</span> : <OutcomeText outcome={r.result} />}
+                {r.result.state === 'waiting' ? <span className="dim">Waiting…</span>
+                  : r.result.state === 'confirm' ? <span className="dim">Waiting for confirm</span>
+                  : r.result.state === 'undone' ? <span className="dim">Undone</span>
+                  : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
+                  : <OutcomeText outcome={r.result} />}
                 {r.undoFailed && <> <span className="late">Undo failed: {r.undoFailed}</span></>}
               </td>
             </tr>
@@ -230,4 +239,188 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
         : <KeysPanel keys={[['Enter', 'Pick Location'], ['↑ ↓', 'Move the highlight']]} hint="Type to filter the Locations." />}
     </div>
   )
+}
+
+// Bulk checkout (#57). Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
+// step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost.
+export function BulkCheckoutView({ flow, field, onOpenAsset }: {
+  flow: BulkCheckout
+  field: RefObject<HTMLInputElement | null>
+  onOpenAsset: (id: number) => void
+}) {
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState('')
+  // The picker list and the text it's for; an answer for older text is never shown against newer text.
+  const [list, setList] = useState<{ q: string; users: StatusLabel[] } | null>(null)
+  const [moved, setMoved] = useState<{ q: string; i: number } | null>(null)
+  const step = flow.step
+  const user = step.step === 'scan' ? step.user : null
+  const q = text.trim()
+  // What the field holds now, for an answer that lands after the Operator typed on.
+  const typed = useRef(q)
+  typed.current = q
+  const shown = !user && list?.q === q ? list.users : []
+  const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
+  // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
+  useEffect(() => {
+    setText(''); setList(null); setMoved(null); field.current?.focus()
+  }, [fieldKey(step)])
+  // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
+  useEffect(() => {
+    flow.runner.enter()
+    const back = () => document.activeElement === document.body && field.current?.focus()
+    window.addEventListener('focus', back)
+    return () => (window.removeEventListener('focus', back), flow.runner.leave())
+  }, [])
+  // Snipe-IT's picker list as the Operator types, after a short pause, like the Checkout form's.
+  useEffect(() => {
+    if (user || !q) return setList(null)
+    let stale = false
+    const timer = setTimeout(() => flow.suggest(q).then((users) => !stale && setList({ q, users }), (e: Error) => !stale && setStatus(e.message)), 250)
+    return () => { stale = true; clearTimeout(timer) }
+  }, [q, user])
+
+  async function find() {
+    try {
+      const r: { users?: StatusLabel[]; status: string } = moved?.q === q && shown[hi] ? await flow.pick(shown[hi].id) : await flow.find(q, shown, hi)
+      if (typed.current !== q) return
+      if (r.users) setList({ q, users: r.users })
+      setStatus(r.status)
+    } catch (e) {
+      if (typed.current === q) setStatus((e as Error).message)
+    }
+  }
+  function pick(id: number) {
+    flow.pick(id).catch((e: Error) => setStatus(e.message))
+  }
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
+  function confirm() {
+    setStatus(flow.runner.confirmOpen())
+    field.current?.focus()
+  }
+  function cancel() {
+    flow.runner.cancelOpen()
+    field.current?.focus()
+  }
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setStatus('')
+    // Enter on the empty field confirms an open confirm (or Undo); a scan confirms its own tag, or skips the waiting one.
+    if (!cleanTag(text) && (flow.runner.open || flow.runner.confirm)) return flow.runner.open ? confirm() : undo()
+    if (!user) return void find()
+    if (!cleanTag(text)) return
+    setStatus(flow.scan(text))
+    setText('')
+  }
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && (user || flow.runner.confirm)) {
+      e.preventDefault()
+      // One level back: the open confirm, then the Undo confirm, then Done for this User.
+      return flow.runner.open ? cancel() : flow.runner.confirm ? flow.runner.cancelUndo() : (flow.done(), setStatus(''))
+    }
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+    if (user || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !shown.length) return
+    e.preventDefault()
+    setMoved({ q, i: e.key === 'ArrowDown' ? Math.min(hi + 1, shown.length - 1) : Math.max(hi - 1, 0) })
+  }
+
+  const open = user ? flow.runner.open : null
+  const undoConfirm = flow.runner.confirm
+  const o = flow.options
+  const who = (u: { username: string; employeeNum: string }) => [u.username, u.employeeNum && `#${u.employeeNum}`].filter(Boolean).join(', ')
+  const a = open?.row.before
+  const ctx = open?.row.ctx
+  const said = open && `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}? Enter or rescan to confirm, Esc to cancel.`
+  return (
+    <div className="workflow">
+      <div className="workflow-main">
+        <header className="head">
+          {user ? (
+            <h1>{user.name}<span className="sub">{[who(user), `holds ${user.assets} Asset${user.assets === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</span></h1>
+          ) : (
+            <h1>Bulk checkout<span className="sub">Who are the Assets for?</span></h1>
+          )}
+          {user && <div className="actions"><button className="quiet" onClick={() => (flow.done(), setStatus(''))}>Done</button></div>}
+        </header>
+        <form className="workflow-field" onSubmit={onSubmit}>
+          <input
+            ref={field}
+            autoFocus
+            className="search"
+            value={text}
+            onChange={(e) => { setText(e.target.value); setStatus(''); if (!user) flow.stopFinding() }}
+            onKeyDown={onKeyDown}
+            placeholder={user ? `Scan an Asset Tag for ${user.name}` : 'Find a User by name, email or employee number'}
+            aria-label={user ? 'Asset Tag' : 'Find a User'}
+            {...(!user && { role: 'combobox', 'aria-expanded': shown.length > 0, 'aria-controls': 'checkout-users', 'aria-activedescendant': shown[hi] ? `checkout-user-${shown[hi].id}` : undefined })}
+          />
+          <p className="message" role="status">{status}</p>
+          {open && a && (
+            // The buttons don't take focus either, so the next scan still lands in the field.
+            <div className="scan-confirm" role="group" aria-label="Confirm checkout">
+              <div className="confirm-tag mono">{a.assetTag}</div>
+              <dl className="confirm-facts">
+                {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
+              </dl>
+              <p>→ Checkout to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
+              {(ctx!.expectedCheckin || ctx!.note) && (
+                <p className="dim">{[ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote('Bulk checkout', { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
+              )}
+              <div className="actions">
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={confirm}>Confirm</button>
+                <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {undoConfirm && (
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
+              <span>{undoConfirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
+        </form>
+        {!user && (
+          <>
+            <ul className="pick-list" id="checkout-users" role="listbox" aria-label="Users">
+              {shown.map((u, i) => (
+                <li key={u.id} id={`checkout-user-${u.id}`} role="option" aria-selected={i === hi} className={i === hi ? 'sel' : undefined} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(u.id)}>{u.name}</li>
+              ))}
+            </ul>
+            {/* Kept until changed or the app quits, across Users; shown on every confirm. */}
+            <details className="options">
+              <summary>Options{(o.expectedCheckin || o.note) && <span className="dim"> · {[o.expectedCheckin && `Expected Checkin ${o.expectedCheckin}`, o.note && `Note: ${o.note}`].filter(Boolean).join(' · ')}</span>}</summary>
+              <div className="actions">
+                <input type="date" value={o.expectedCheckin} onChange={(e) => setStatus(flow.setOptions({ ...o, expectedCheckin: e.target.value }))} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />
+                <NoteOption note={o.note} onSet={(note) => setStatus(flow.setOptions({ ...o, note }))} />
+              </div>
+            </details>
+          </>
+        )}
+        <RunningList rows={flow.runner.rows} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+          what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what || `To ${r.ctx.user.name}`)} />
+        <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
+      </div>
+      {open
+        ? <KeysPanel keys={[['Enter', 'Confirm (or rescan the same tag)'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
+        : undoConfirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : user
+        ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}.`} />
+        : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight'], [UNDO_KEY, 'Undo last']]} hint="Type a name, email or employee number, or scan an ID card." />}
+    </div>
+  )
+}
+
+// The Options note: typed freely, kept (and checked) when the field is left, so a half-typed link isn't refused per key.
+function NoteOption({ note, onSet }: { note: string; onSet: (note: string) => void }) {
+  const [draft, setDraft] = useState(note)
+  return <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => onSet(draft)} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), onSet(draft))} placeholder="Note (optional)" aria-label="Checkout note (optional)" />
 }
