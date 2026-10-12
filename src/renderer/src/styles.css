@@ -53,7 +53,7 @@ button, input, select { font-family: inherit; }
 .find, .nav { all: unset; box-sizing: border-box; display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
 .find { gap: 8px; flex: none; margin-bottom: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--dim); }
 .find:hover { border-color: var(--dim); }
-.nav { position: relative; flex: none; gap: 9px; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
+.nav { position: relative; flex: none; gap: 9px; white-space: nowrap; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
 .nav svg { flex: none; }
 .nav:hover:not(:disabled), .nav:focus-visible { background: var(--hover); color: var(--text); }
 .nav.sel { background: var(--hover); color: var(--text); font-weight: 600; }
@@ -454,3 +454,14 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .keys dd { margin: 0; }
 .keys p { margin: 14px 0 0; font-size: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Bulk checkout's confirm: in place under the field, saying exactly what will be written. */
+.scan-confirm { margin: 4px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--mark); display: flex; flex-direction: column; gap: 6px; }
+.scan-confirm p { margin: 0; }
+.confirm-tag { font-size: 22px; font-weight: 700; }
+.confirm-facts { display: grid; grid-template-columns: repeat(4, minmax(0, auto)); justify-content: start; gap: 4px 24px; margin: 0; }
+.confirm-facts dt { font-size: 12px; color: var(--dim); }
+.confirm-facts dd { margin: 0; }
+.options { margin: 8px 28px; }
+.options summary { cursor: pointer; }
+.options .actions { margin-top: 8px; }
+.running tr.line td { border-top: 1px solid var(--line); }
