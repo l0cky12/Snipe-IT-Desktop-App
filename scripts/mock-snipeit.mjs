@@ -44,6 +44,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
 })
 const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
+// Activity times are local, as Snipe-IT sends them in its own timezone.
+const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().replace('T', ' ').slice(0, 19)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 // A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
@@ -75,7 +77,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     asset_eol_date: i % 13 === 0 ? null : { date: day(((i * 53) % 700) - 90), formatted: day(((i * 53) % 700) - 90) },
     // Snipe-IT formats money as text ("1,149.99") and sends null for none.
     purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
-    last_checkout: holder ? { datetime: `${day(-1 - (i % 60))} 08:15:00`, formatted: day(-1 - (i % 60)) } : null,
+    // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
+    last_checkout: holder ? { datetime: local(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -92,14 +95,22 @@ const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', 
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
-// Activity times are local, as Snipe-IT sends them in its own timezone.
-const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().replace('T', ' ').slice(0, 19)
 const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
     item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
+// A checked-out Asset due at a time of day is a Temp checkout: its current Checkout carries the tag. Except NOMMA-001055,
+// checked in and out again in the web UI since its tagged Checkout; and NOMMA-001037's tag was put back by an undo.
 for (const a of assets.slice(0, 90).reverse()) {
-  const action = a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
-  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', new Date(Date.now() - a.id * 36e5))
+  const when = new Date(Date.now() - a.id * 36e5)
+  const temp = a.assigned_to && a.expected_checkin?.datetime.slice(11, 16) > '00:00'
+  const tag = temp && `[Temp checkout | due: ${a.expected_checkin.datetime.slice(0, 16)}]`
+  if (temp && a.id !== 56) {
+    act('checkout', a, a.assigned_to, a.id === 38 ? `[Undo] Bulk return ${tag}` : `${tag} Charger included`, when)
+    continue
+  }
+  if (temp) act('checkout', a, a.assigned_to, tag, new Date(when - 2 * 864e5))
+  const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
+  act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
 // Damaged Assets, three ways: taken in by Repair intake with its Repair Maintenance open, taken in without one (its
 // Maintenance step failed, or an Asset that wasn't checked out), or set Damaged by hand in the web UI with neither.
@@ -421,7 +432,7 @@ createServer(async (req, res) => {
       const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
       if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
       a.assigned_to = { ...target, ...(target.employee_num !== undefined && { employee_number: target.employee_num }), type: body.checkout_to_type }
-      a.last_checkout = { datetime: `${day(0)} ${new Date().toTimeString().slice(0, 8)}`, formatted: day(0) }
+      a.last_checkout = { datetime: local(new Date()), formatted: day(0) }
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
