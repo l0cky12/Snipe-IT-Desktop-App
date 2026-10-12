@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
@@ -499,9 +499,9 @@ function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGr
       <div className="records">
         {(Object.keys(listName) as ListKind[]).map((k) => {
           const Icon = listIcon[k]
-          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
+          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={18} />{listName[k]}</button>
         })}
-        <button className="record-kind" onClick={onGroups}><ShieldCheck size={20} />Permission groups</button>
+        <button className="record-kind" onClick={onGroups}><ShieldCheck size={18} />Permission groups</button>
       </div>
     </>
   )
@@ -756,38 +756,30 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     setForm(null)
     root.current?.focus()
   }
-  const facts: [string, string, boolean?][] = [
+  // Overdue and Warranty flag the fact they're about.
+  const facts: [string, React.ReactNode][] = [
+    ['Name', a.name || 'Unnamed Asset'],
+    ['Asset Model', a.model],
+    ['Status', <StatusChip asset={a} />],
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
-    ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? ''],
+    ['Type', a.assignee && kind[a.assignee.type]],
+    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>],
     ['Location', a.location],
     ['Last audited', a.lastAudited ?? 'Never'],
-    ['Next audit', a.nextAudit ?? ''],
-    ['Serial', a.serial, true],
+    ['Next audit', a.nextAudit],
     ['Category', a.category],
-    ['Purchased', a.purchaseDate ?? ''],
-    ['Warranty ends', a.warrantyEnd ?? ''],
+    ['Serial', a.serial && <span className="mono">{a.serial}</span>],
+    ['Purchased', a.purchaseDate],
+    ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
+      ? <span className="flag c-grey">Warranty expired</span>
+      : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>],
   ]
   const canCheckout = !checkoutReason(a)
   return (
     <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
       <header className="head">
-        <span className="tag">{a.assetTag}</span>
-        <h1>
-          {a.name || 'Unnamed Asset'}
-          <span className="sub">{a.model}</span>
-        </h1>
+        <h1><span className="dim">Assets / </span><span className="mono">{a.assetTag}</span></h1>
         {docked && <button className="panel-close" aria-label="Close the Asset panel" title="Close (Esc)" onClick={docked.onClose}><X size={16} /></button>}
-        <div className="sheet-status-line">
-          <StatusChip asset={a} />
-          {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
-          {a.warranty &&
-            (a.warranty.expired ? (
-              <span className="flag c-grey">Warranty expired</span>
-            ) : (
-              <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
-            ))}
-        </div>
         <div className="actions">
           <button className={checkinReason(a) ? 'quiet' : undefined} disabled={!!checkinReason(a)} title={checkinReason(a)} aria-expanded={form === 'checkin'} onClick={() => toggle('checkin')}>Checkin</button>
           <button className={canCheckout ? undefined : 'quiet'} disabled={!canCheckout} title={checkoutReason(a)} aria-expanded={form === 'checkout'} onClick={() => toggle('checkout')}>Checkout…</button>
@@ -809,15 +801,12 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
           {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} autoFocus={takesFocus} />}
         </div>
       )}
-      <div className="grid">
-        {facts.map(([k, v, mono]) => (
-          <div className="cell" key={k}>
-            <div className="k">{k}</div>
-            <span className={mono ? 'mono' : undefined}>{v || '—'}</span>
-          </div>
-        ))}
+      <div className="asset-top">
+        <dl className="facts">
+          {facts.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}</dd></Fragment>)}
+        </dl>
+        <AssetCodes baseUrl={baseUrl} asset={a} />
       </div>
-      <AssetCodes baseUrl={baseUrl} asset={a} />
       {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
       <details className="all-fields">
         <summary className="section">All fields ({a.fields.length})</summary>
@@ -841,7 +830,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
               <td>{h.operator}</td>
               <td>
                 {h.detail}
-                {h.note && <>{h.detail && ' '}<span className="note">{h.note}</span></>}
+                {h.note && <span className="note">{h.note}</span>}
               </td>
             </tr>
           ))}
