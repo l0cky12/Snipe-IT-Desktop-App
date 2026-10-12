@@ -1155,21 +1155,25 @@ export function createIncomingRepair(
       // Taken before the re-read, so Settings pointing at another server meanwhile stops it before the first write.
       const mine = session
       const still = () => sameSession(mine)
-      // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
-      const fresh = newest(await openRepairs())
-      if (fresh?.id !== open?.id || fresh?.supplier?.id !== open?.supplier?.id || fresh?.cost !== open?.cost) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
+      if (!(await unchanged())) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
       // Built first, so a link in it refuses before anything is written.
       noteFor(text)
       still()
       await bridge.updateStatus(a.id, ready)
       return rest(text, mine)
     }
+    // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
+    const unchanged = async () => {
+      const fresh = newest(await openRepairs())
+      return fresh?.id === open?.id && fresh?.supplier?.id === open?.supplier?.id && fresh?.cost === open?.cost
+    }
     const noteFor = (text: string) => {
       const { plan, supplier: s, cost } = planOf(ctx)
       return workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
     }
-    // The steps after the status change, which never pause: each failure is in the result text or a sub-result.
-    const rest = async (text: string, mine: number): Promise<Done> => {
+    // The steps after the status change, which never pause: each failure is in the result text or a sub-result. stale:
+    // the Maintenance changed while paused, so it's left as is.
+    const rest = async (text: string, mine: number, stale = false): Promise<Done> => {
       const still = () => sameSession(mine)
       const { plan, supplier: s, cost } = planOf(ctx)
       const note = noteFor(text)
@@ -1185,7 +1189,10 @@ export function createIncomingRepair(
       let closed = false
       let created: number | null = null
       const sub: string[] = []
-      if (plan === 'close') {
+      if (stale) {
+        sub.push('Maintenance left as is')
+        failed.push('the Maintenance changed while paused, so it was left as is')
+      } else if (plan === 'close') {
         try {
           if (s && !open!.supplier) change.supplierId = s.id
           if (cost) change.cost = cost
@@ -1247,7 +1254,7 @@ export function createIncomingRepair(
         return notBack.join('; ')
       }
       const says = `${a.assetTag} made Ready to Deploy${closed ? ', its Maintenance closed' : created !== null ? ', a Maintenance created' : ''}`
-      return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: backFrom(plan === 'none' ? null : s, cost), sub, undo: { says, run } }
+      return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: stale ? backFrom(null, '') : backFrom(plan === 'none' ? null : s, cost), sub, undo: { says, run } }
     }
 
     // The header's Supplier shows only where it will be recorded.
@@ -1256,7 +1263,11 @@ export function createIncomingRepair(
     const check = (text: string) => wrong(() => (workflowNote('Incoming repair', { text }), costOf(ctx.cost)))
     // A status change that lost the connection may have gone through: made Ready to Deploy, the rest is sent then. An
     // Asset scanned as Ready already can't tell, so it's sent again whole: the Maintenance re-read, and the same label.
-    const left = (now: Asset, text: string) => (a.statusId !== ready && !now.assignee && now.statusId === ready ? rest(text, session) : null)
+    const left = async (now: Asset, text: string) => {
+      if (a.statusId === ready || now.assignee || now.statusId !== ready) return null
+      const mine = session
+      return rest(text, mine, !(await unchanged()))
+    }
     if (isDamaged) return { what, confirm: { check, write, left } }
     return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write, left } }
   }, events, now, pace)

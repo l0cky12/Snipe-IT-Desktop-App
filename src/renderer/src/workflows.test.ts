@@ -2646,6 +2646,22 @@ describe('Incoming repair', () => {
     expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done', text: 'Ready: went through before the connection dropped' }, sub: ['Maintenance closed'] })
   })
 
+  it("a Maintenance corrected while paused (#73) is left as is on Resume: the status change went through, the note follows", async () => {
+    const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    const usual = bridge.updateStatus.getMockImplementation()!
+    bridge.updateStatus.mockImplementationOnce(async (id, statusId) => { await usual(id, statusId); throw { message: "Can't reach Snipe-IT.", kind: 'unreachable' } })
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    flow.setCost('45')
+    expect(flow.runner.confirmOpen()).toBe('')
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    bridge.openMaintenances.mockResolvedValueOnce([maintenance(51, { cost: '60.00' })])
+    await flow.runner.resume()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
+    expect(flow.runner.rows[0]).toMatchObject({ what: 'Back from repair', result: { state: 'done', text: 'Ready, but the Maintenance changed while paused, so it was left as is: went through before the connection dropped' }, sub: ['Maintenance left as is'] })
+  })
+
   describe('Assets that are not Damaged', () => {
     it('refuses checked out, Archived, already ready, and a key that may not edit it, writing nothing', async () => {
       const { flow, calls, failed } = await opened([
