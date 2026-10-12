@@ -1,14 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
-import type { SnipeItBridge } from '../main/snipeit'
+import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
 import type { ReportsApi } from '../main/scheduler'
 
-// Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message.
+// Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
+// failure's kind the main process wrote into it (fromWire).
 // ponytail: matches Electron's current wording; if it changes, the Operator sees the wrapper text too, nothing is lost.
 const call = (name: string) => (...args: unknown[]) =>
   ipcRenderer.invoke(name, ...args).catch((e: Error) => {
-    throw new Error(e.message.replace(/^Error invoking remote method '[^']*': (\w*Error: )?/, ''))
+    throw fromWire(e.message.replace(/^Error invoking remote method '[^']*': (\w*Error: )?/, ''))
   })
 
 const snipeIt: SnipeItBridge = {

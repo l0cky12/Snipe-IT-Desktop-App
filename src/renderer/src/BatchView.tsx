@@ -75,7 +75,7 @@ export function BatchView({ batch, busy, last, onRun, onRemove, onClear, statusL
             {statusLabels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
           <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-            <option value="">Keep current Location</option>
+            <option value="">Each Asset's Default Location, if it has one</option>
             {defaultLocation && !locations.some((l) => l.id === defaultLocation.id) && <option value={defaultLocation.id}>{defaultLocation.name}</option>}
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>

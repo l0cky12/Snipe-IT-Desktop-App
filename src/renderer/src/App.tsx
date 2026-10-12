@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
@@ -450,6 +450,9 @@ function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+// A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
+export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
+
 export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
@@ -480,7 +483,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         ))}
       </select>
       <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-        <option value="">Keep current Location</option>
+        <option value="">{defaultLocationChoice(a.defaultLocation)}</option>
         {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -588,7 +591,7 @@ function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, de
     ['Status', <StatusChip asset={a} />],
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
     ['Type', a.assignee && kind[a.assignee.type]],
-    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}</>],
+    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>],
     ['Location', a.location],
     ['Category', a.category],
     ['Serial', a.serial && <span className="mono">{a.serial}</span>],
@@ -794,7 +797,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th className="num">Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -802,7 +805,8 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   {tag(a)}
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late num">{a.overdueDays}d</td>
+                  <td>{a.expectedCheckin}</td>
+                  <td className="late num">{lateness(a.overdue)}</td>
                 </tr>
               ))}
             </tbody>
