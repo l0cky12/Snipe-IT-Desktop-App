@@ -2662,6 +2662,22 @@ describe('Incoming repair', () => {
     expect(flow.runner.rows[0]).toMatchObject({ what: 'Back from repair', result: { state: 'done', text: 'Ready, but the Maintenance changed while paused, so it was left as is: went through before the connection dropped' }, sub: ['Maintenance left as is'] })
   })
 
+  it("a Maintenance re-read that fails on Resume still finishes the return: the note follows, the Maintenance is left, Undo stays", async () => {
+    const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    const usual = bridge.updateStatus.getMockImplementation()!
+    bridge.updateStatus.mockImplementationOnce(async (id, statusId) => { await usual(id, statusId); throw { message: "Can't reach Snipe-IT.", kind: 'unreachable' } })
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    expect(flow.runner.confirmOpen()).toBe('')
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    bridge.openMaintenances.mockRejectedValueOnce({ message: 'Snipe-IT had a problem (500).', kind: 'server' })
+    await flow.runner.resume()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
+    expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done', text: "Ready, but the Maintenance couldn't be read again (Snipe-IT had a problem (500).), so it was left as is: went through before the connection dropped" }, sub: ['Maintenance left as is'] })
+    expect(flow.runner.askUndo()).toBe('')
+  })
+
   describe('Assets that are not Damaged', () => {
     it('refuses checked out, Archived, already ready, and a key that may not edit it, writing nothing', async () => {
       const { flow, calls, failed } = await opened([
