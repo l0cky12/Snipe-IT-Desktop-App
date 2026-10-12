@@ -1685,22 +1685,40 @@ describe('Repair intake', () => {
       const { flow, calls, checkouts } = await takenIn(asset('NOMMA-1', { expectedCheckin: '2026-10-20' }))
       expect(flow.runner.confirm).toBe('Undo: NOMMA-1 checked in as Damaged from Avery Testwell? Enter to undo, Esc to cancel.')
       await flow.runner.undo()
-      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: '2026-10-20', note: '[Undo] Repair intake' }]])
+      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, statusId: 2, fromStatusId: 9, expectedCheckin: '2026-10-20', note: '[Undo] Repair intake' }]])
       expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1', 'delete maintenance 61', `remove user notes 7 ${LINE}`])
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted', 'User note removed'] })
     })
 
-    it('carries the Temp checkout tag when the Expected Checkin had a time of day', async () => {
-      const { flow, checkouts } = await takenIn(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+    it('carries the Temp checkout tag only when History says the Checkout was a Temp checkout, not for a time of day alone', async () => {
+      const { flow, checkouts, history } = await takenIn(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+      history[1] = [{ action: 'Checkin', note: '[Repair intake] cracked screen' }, { action: 'Checkout', note: '[Temp checkout | due: 2026-10-13 14:50]' }]
       await flow.runner.undo()
       expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Repair intake [Temp checkout | due: 2026-10-13 14:50]' })
+      const plain = await takenIn(asset('NOMMA-2', { expectedCheckin: '2026-10-13 14:50' }))
+      plain.history[2] = [{ action: 'Checkout', note: 'Room 204 cart' }]
+      await plain.flow.runner.undo()
+      expect(plain.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Repair intake' })
+    })
+
+    it("refuses when someone changed the Damaged label before Checkout's own read; nothing is deleted or removed", async () => {
+      const one = asset('NOMMA-1')
+      const { flow, bridge, calls, checkouts } = await takenIn(one)
+      // The undo's lookup still finds it Damaged; by the Checkout, it's Pending.
+      const seen = { ...one }
+      bridge.assetByTag.mockImplementationOnce(async (tag) => (calls.push(`bytag ${tag}`), seen))
+      Object.assign(one, { status: 'Pending', statusId: 5 })
+      await flow.runner.undo()
+      expect(checkouts).toEqual([])
+      expect(flow.runner.rows[0].undoFailed).toBe("NOMMA-1 is 'Pending' now")
+      expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1'])
     })
 
     it('a Location held it: checked out to the Location again and the Maintenance deleted; there is no User note', async () => {
       const { flow, calls, checkouts } = await takenIn(asset('NOMMA-1', { assignee: { type: 'location', id: 4, name: 'Room 204' } }))
       expect(flow.runner.confirm).toBe('Undo: NOMMA-1 checked in as Damaged from Room 204? Enter to undo, Esc to cancel.')
       await flow.runner.undo()
-      expect(checkouts).toEqual([[1, { targetType: 'location', targetId: 4, statusId: 2, expectedCheckin: undefined, note: '[Undo] Repair intake' }]])
+      expect(checkouts).toEqual([[1, { targetType: 'location', targetId: 4, statusId: 2, fromStatusId: 9, expectedCheckin: undefined, note: '[Undo] Repair intake' }]])
       expect(calls).toEqual(['bytag NOMMA-1', 'checkout 1', 'delete maintenance 61'])
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance deleted'] })
     })
@@ -1715,10 +1733,11 @@ describe('Repair intake', () => {
     })
 
     it('a Maintenance that was open before the intake is left alone, and none is deleted when none was opened', async () => {
-      const { flow, bridge, calls } = await opened([asset('NOMMA-1')])
+      const one = asset('NOMMA-1')
+      const { flow, bridge, calls } = await opened([one])
       bridge.openMaintenances.mockResolvedValueOnce([{ id: 51, type: { id: 9, name: 'Repair' } }])
       await intake(flow, 'NOMMA-1')
-      bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }))
+      Object.assign(one, { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' })
       await (flow.runner.askUndo(), flow.runner.undo())
       expect(calls.some((c) => c.startsWith('delete maintenance'))).toBe(false)
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, sub: ['Maintenance left open: it was open before', 'User note removed'] })
@@ -1747,10 +1766,11 @@ describe('Repair intake', () => {
     })
 
     it('a User note that was never added is not taken off', async () => {
-      const fake = await opened([asset('NOMMA-1')])
+      const one = asset('NOMMA-1')
+      const fake = await opened([one])
       fake.bridge.appendUserNotes.mockRejectedValueOnce(new Error("the User's notes have formatting the app can't keep"))
       await intake(fake.flow, 'NOMMA-1')
-      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }))
+      Object.assign(one, { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' })
       fake.flow.runner.askUndo()
       await fake.flow.runner.undo()
       expect(fake.calls.some((c) => c.startsWith('remove user notes'))).toBe(false)

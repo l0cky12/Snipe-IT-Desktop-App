@@ -618,7 +618,7 @@ type RepairSetup = { damaged: number; typeId: number | null; fallback: number | 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
 // notes line. Each step after the first runs only once the first worked, and none undoes an earlier one.
-export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'getAsset' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   // Looked up when the Workflow opens and kept for the session; what isn't found yet (Damaged, a Repair type) is looked
   // for again at the next open.
   let setup: Promise<RepairSetup> | null = null
@@ -696,9 +696,17 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         const mine = session
         const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
         const results: string[] = []
-        // A time of day means it was a Temp checkout, so the undo makes it one again. Snipe-IT may send the checkout email again.
-        const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
-        if (held) await bridge.checkout(a.id, { targetType: held.type, targetId: held.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Repair intake', due) })
+        // A Temp checkout is made one again (its tag back), but a time of day alone doesn't make one: an ordinary Checkout
+        // can have one too. So History says, as for Bulk return's undo: its newest Checkout is the one the intake checked
+        // in. History that can't be read puts back an ordinary Checkout. Snipe-IT may send the checkout email again.
+        let due: string | undefined
+        if (held && expectedCheckin && expectedCheckin.length > 10) {
+          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
+          still()
+          if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
+        }
+        // Checkout's own last read refuses a label someone set since the intake, so nothing is written over it.
+        if (held) await bridge.checkout(a.id, { targetType: held.type, targetId: held.id, statusId: statusId ?? undefined, fromStatusId: damaged, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Repair intake', due) })
         else {
           await bridge.updateStatus(a.id, statusId!)
           still()
