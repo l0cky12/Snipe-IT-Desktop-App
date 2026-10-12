@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type SnipeItBridge, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
-import { AssetSheet, AuditForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
-import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
+import { AssetSheet, AuditForm, CheckoutForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
 import { FerpaConfirm, saveCsv } from './ReportsView'
@@ -93,13 +92,17 @@ export const drillTo = (kind: OtherKind, { id, name }: { id: number; name: strin
 
 /** What a List is showing: its View (Assets only; All elsewhere), search, filter boxes and sort. */
 export type ListState = { view: AssetView; search: string; filters: Record<string, string>; sort: SavedReport['sort'] }
-/** Where a List opens: on All, with a Drill's filters, or a Saved Report's search and sort (App passes its filters as the Drill). */
-export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? drill?.sort ?? null })
+/** Where a List opens: on All, with a Drill's filters, or a Saved Report's View, search and sort (its filters come as the Drill). */
+export const opening = (drill?: Drill, report?: SavedReport): ListState => ({ view: report?.view ?? 'all', search: report?.search ?? '', filters: drill?.filters ?? {}, sort: report?.sort ?? drill?.sort ?? null })
+/** A Saved Report's filters as the Drill it opens with, so a filter with no box shows as its chip. */
+export const reportDrill = (r: SavedReport): Drill => ({ filters: r.filters, label: r.label })
 /** Where picking an Assets View starts: no search or filters, and the View's own sort, as if another List were opened. */
 export const picking = (view: AssetView): ListState => ({ view, search: '', filters: {}, sort: ASSET_VIEWS[view].sort ?? null })
 /** What a List asks Snipe-IT for; only Assets have Views. */
 export const listQuery = (kind: ListKind, { view, search, filters, sort }: ListState): ListQuery =>
   ({ search, filters, sort: sort?.key, order: sort?.order, ...(kind === 'assets' && { view }) })
+
+const VIEW_COUNT = Object.keys(ASSET_VIEWS).length
 
 type Row = ListPage<ListKind>['rows'][number]
 
@@ -174,8 +177,45 @@ export async function allMatching<T extends { id: number }>(page: (offset: numbe
   }
 }
 
-/** A Bulk Action: what it does to each Record of a List, under a title. deletes: a Record it's done leaves the List. */
-export type BulkAction = BatchAction & { kind: ListKind; title: string; deletes?: true }
+/** How one Record fared in a Bulk Action's run (a Workflow's Running list rows use the same states). */
+export type Outcome = { state: 'working' } | { state: 'done'; text: string } | { state: 'failed'; reason: string }
+
+// Runs the action on each Record in turn and reports each outcome as it lands; one failing doesn't stop the rest, stop() does.
+// Each is the usual single edit, delete, Checkout, Checkin or Audit, so History credits the Operator for every one. Work
+// that answers with text (an Audit's dates) is reported with it instead of `done`.
+// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout or an Audit is two requests); a Selection of 30 takes ~20s on a busy server.
+export async function eachInTurn(ids: number[], work: (id: number) => Promise<string | void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
+  for (const id of ids) {
+    if (stop()) return
+    report(id, { state: 'working' })
+    try {
+      report(id, { state: 'done', text: (await work(id)) || done })
+    } catch (e) {
+      report(id, { state: 'failed', reason: (e as Error).message })
+    }
+  }
+}
+
+// What a run's result cell says for one Record.
+export function OutcomeText({ outcome: o }: { outcome: Outcome }) {
+  return o.state === 'working' ? <span className="dim">Working…</span> : o.state === 'done' ? <span className="chip c-green">{o.text}</span> : <span className="late">{o.reason}</span>
+}
+
+/** A Bulk Action: what it does to each Record of a List (done: what its result says), under a title. deletes: a Record it's done leaves the List. */
+export type BulkAction = { kind: ListKind; title: string; done: string; work: (id: number) => Promise<string | void>; deletes?: true }
+// Checkout… and Checkin… on the Assets List: each selected Asset gets the usual single Checkout or Checkin with the form's options.
+export const checkoutAction = (bridge: Pick<SnipeItBridge, 'checkout'>, o: CheckoutOptions): BulkAction =>
+  ({ kind: 'assets', title: MOVES.checkout.title, done: 'Checked out', work: (id) => bridge.checkout(id, o) })
+export const checkinAction = (bridge: Pick<SnipeItBridge, 'checkin'>, o: CheckinOptions): BulkAction =>
+  ({ kind: 'assets', title: MOVES.checkin.title, done: 'Checked in', work: (id) => bridge.checkin(id, o) })
+// Snipe-IT would refuse each one anyway; saying so up front beats a run of failed rows.
+export const cantCheckout = (assets: Pick<Asset, 'can'>[]) => assets.some((a) => !a.can.checkout)
+export const cantCheckin = (assets: Pick<Asset, 'can'>[]) => assets.some((a) => !a.can.checkin)
+// The two, as the Selection bar offers them.
+const MOVES = {
+  checkout: { button: 'Checkout…', title: 'Checkout Assets', verb: 'Check out', cant: cantCheckout },
+  checkin: { button: 'Checkin…', title: 'Checkin Assets', verb: 'Check in', cant: cantCheckin },
+}
 /** A Bulk Action's run: each Record by name with how it fared, and the ones this run (or a retry) goes over. stopping: Stop was pressed. */
 export type BulkRun = { records: { id: number; name: string; outcome?: Outcome }[]; ids: number[]; busy: boolean; stopping?: true }
 const finished = (o?: Outcome) => o?.state === 'done' || o?.state === 'failed'
@@ -209,8 +249,8 @@ export const auditAction = (o: AuditOptions): BulkAction =>
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
-// report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, panelLoading, onRefreshPanel, onDropPanel }: {
+// report: the Saved Report it was opened from; its View, search, sort and Columns start the List (App passes its filters as drill).
+export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, panelLoading, onRefreshPanel, onDropPanel }: {
   onNew: (kind: EditKind) => void
   // The Asset panel (Assets only): what it shows, and closing it.
   panel: ListPanel | null
@@ -227,19 +267,21 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   onCloseBulk: () => void
   kind: ListKind
   baseUrl: string
-  batch: AssetSummary[]
-  onBatch: (a: AssetSummary[]) => void
   drill?: Drill
   report?: SavedReport
   /** Opens the Assets List on this View instead of All (a Health warning's click). */
   assetView?: AssetView
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
+  // What Checkout… and Checkin… on a Selection start with, as the Asset panel's forms do.
+  defaultLocation: StatusLabel | null
   // On the Assets List an Asset opens in the Asset panel; form: the form a Quick Action opens there.
   onOpenAsset: (id: number, form?: SheetForm) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
   const [start] = useState(() => (assetView ? picking(assetView) : opening(drill, report)))
+  // The Drill in force: App's, or that of a Saved Report opened from the tab bar.
+  const [drilled, setDrilled] = useState(drill)
   const [view, setView] = useState(start.view)
   const [text, setText] = useState(start.search)
   const [search, setSearch] = useState(start.search)
@@ -254,6 +296,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // The Saved Report this List is (once opened from or saved as one), so Save writes over it; and the name being typed.
   const [saved, setSaved] = useState(report ?? null)
   const [naming, setNaming] = useState<string | null>(null)
+  // The Operator's Saved Reports of Assets, shown in the tab bar after the Views.
+  const [tabReports, setTabReports] = useState<SavedReport[]>([])
   const [customizing, setCustomizing] = useState(false)
   // The row ↑/↓ have moved to (Assets only), by id.
   const [cursor, setCursor] = useState<number | null>(null)
@@ -270,6 +314,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // Export CSV: asking for the FERPA confirmation, or fetching every matching row.
   const [exporting, setExporting] = useState<'asking' | 'fetching' | null>(null)
   const [editing, setEditing] = useState(false)
+  // The Checkout… or Checkin… form open under the Selection bar (Assets only).
+  const [bulkForm, setBulkForm] = useState<keyof typeof MOVES | null>(null)
   const [auditing, setAuditing] = useState(false)
   const mine = bulk?.kind === kind ? bulk : null
   // A deleted Record leaves the Selection; one that failed stays ticked.
@@ -321,6 +367,12 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     ).finally(() => !stale && setLoading(false))
     return () => { stale = true }
   }, [kind, view, search, filters, sort, offset, reloads])
+  // A tab bar without them still has the Views.
+  useEffect(() => {
+    let stale = false
+    if (kind === 'assets') window.settings.savedReports().then((all) => !stale && setTabReports(all.filter((r) => r.kind === 'assets')), () => {})
+    return () => { stale = true }
+  }, [kind])
   // A filter whose names don't load just has fewer choices.
   useEffect(() => {
     let stale = false
@@ -331,7 +383,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const pickColumn = (key: string) => {
     const next = shown.includes(key) ? shown.filter((k) => k !== key) : [...shown, key]
     setShown(next)
-    if (!report) localStorage.setItem(columnsKey(kind), JSON.stringify(next))
+    if (!saved) localStorage.setItem(columnsKey(kind), JSON.stringify(next))
   }
 
   const all: AnyColumn[] = LIST_COLUMNS[kind]
@@ -342,10 +394,18 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const columns = all.filter((c) => showing.includes(c.key))
   const sortable: Record<string, string> = LIST_SORTS[kind]
   const setFilter = (key: string, value: string) => (setFilters((f) => ({ ...f, [key]: value })), setOffset(0))
-  // Picking a View keeps the Selection; the search, filter boxes and sort start again.
+  // Picking a View or a Saved Report's tab keeps the Selection; the rest starts again as that View or Saved Report.
+  const show = (next: ListState) => (setView(next.view), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null))
   const pickView = (v: AssetView) => {
-    const next = picking(v)
-    setView(v), setText(next.search), setSearch(next.search), setFilters(next.filters), setSort(next.sort), setOffset(0), setPage(null), setNaming(null)
+    // Leaving a Saved Report: the List's usual Columns come back, and Save report… makes a new one (its form, named for the
+    // one left, closes).
+    if (saved) setSaved(null), setDrilled(undefined), setShown(readColumns(kind)), setNaming(null)
+    show(picking(v))
+  }
+  const openReport = (r: SavedReport) => {
+    const d = reportDrill(r)
+    setSaved(r), setDrilled(d), setShown(shownColumns(kind, r.columns)), setNaming(null)
+    show(opening(d, r))
   }
   const toggleSort = (key: string) => (setSort((s) => (s?.key === key && s.order === 'asc' ? { key, order: 'desc' } : { key, order: 'asc' })), setOffset(0))
 
@@ -369,6 +429,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     }
     onBulk({ kind, title: `Edit ${listName[kind]}`, done: 'Saved', work }, selectionRun())
   }
+  const runForm = (action: BulkAction) => (setBulkForm(null), onBulk(action, selectionRun()))
   const auditSelection = (o: AuditOptions) => (setAuditing(false), onBulk(auditAction(o), selectionRun()))
   // The List as shown, every matching row up to the Report row cap; saved where the Operator chooses.
   async function exportCsv() {
@@ -386,10 +447,12 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // The List as it is now, under the typed name: over the Saved Report it is (asNew: as another), or as a new one.
   // The search as typed, even if the List hasn't caught up with the last keystrokes; the label while its chip shows.
   async function saveReport(asNew: boolean) {
-    const drilled = Object.keys(drill?.filters ?? {}).some((k) => filters[k] && !filterBar.some((f) => f.key === k))
+    const chip = Object.keys(drilled?.filters ?? {}).some((k) => filters[k] && !filterBar.some((f) => f.key === k))
     try {
-      const r = await window.settings.saveReport({ id: asNew ? undefined : saved?.id, name: naming ?? '', kind, search: text, filters, label: drilled ? drill?.label : undefined, sort, columns: shown })
+      const r = await window.settings.saveReport({ id: asNew ? undefined : saved?.id, name: naming ?? '', kind, search: text, filters, label: chip ? drilled?.label : undefined, sort, columns: shown,
+        ...(kind === 'assets' && { view }) })
       setSaved(r)
+      setTabReports((all) => (r.kind !== 'assets' ? all : all.some((x) => x.id === r.id) ? all.map((x) => (x.id === r.id ? r : x)) : [...all, r]))
       setNaming(null)
       setMessage({ text: `Saved report "${r.name}"` })
     } catch (e) {
@@ -434,6 +497,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   }
   const clear = () => (selectEpoch.current++, setSelectingAll(null), setSelection(new Map()))
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
+  const moveOff = !!bulk?.busy || !!selectingAll
   // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
   const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== viewSpec?.filter?.[0])
 
@@ -501,9 +565,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
           <div className="actions">
             <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
-            {/* ponytail: a Saved Report can't remember its View yet, so only All can be saved; #107 adds the View. */}
-            <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
-              disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
+            <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
             <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
               onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
               {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
@@ -514,15 +576,19 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
         </header>
         {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
         <div className="list-top">
-          {/* The Assets Views; only the open one shows its count. */}
+          {/* The Assets Views, then the Operator's Saved Reports of Assets, which open in place; only the open tab shows its count. */}
           {kind === 'assets' && (
-            <div className="view-tabs" role="tablist" aria-label="Views">
-              {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => (
-                <button key={v} role="tab" aria-selected={v === view} className={v === view ? 'on' : undefined} onClick={() => v !== view && pickView(v)}>
-                  {ASSET_VIEWS[v].name}
-                  {v === view && page && !loading && <span className="count">{total.toLocaleString()}</span>}
-                </button>
-              ))}
+            <div className="view-tabs" role="tablist" aria-label="Views and Saved Reports">
+              {[
+                ...(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => ({ key: v, name: ASSET_VIEWS[v].name, on: !saved && v === view, pick: () => pickView(v), title: undefined })),
+                ...tabReports.map((r) => ({ key: r.id, name: r.name, on: saved?.id === r.id, pick: () => openReport(r), title: `Saved Report: ${ASSET_VIEWS[r.view ?? 'all'].name}` })),
+              ].map((t, i) => [
+                i === VIEW_COUNT && <span key="sep" className="tab-sep" aria-hidden="true" />,
+                <button key={t.key} role="tab" aria-selected={t.on} className={t.on ? 'on' : undefined} onClick={() => !t.on && t.pick()} title={t.title}>
+                  {t.name}
+                  {t.on && page && !loading && <span className="count">{total.toLocaleString()}</span>}
+                </button>,
+              ])}
             </div>
           )}
           {customizing && (
@@ -546,7 +612,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
               <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
               {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
               <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
-              <span className="dim">Saves this List's search, filters, sort and Columns.</span>
+              <span className="dim">Saves this List's {kind === 'assets' && 'View, '}search, filters, sort and Columns.</span>
             </form>
           )}
           {/* The toolbar: search and filters, then the Selection bar at its right end while rows are ticked. */}
@@ -554,9 +620,9 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
             {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
             {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
-            {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
-              <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
-                {drill?.label ?? 'Filtered'} ×
+            {Object.keys(drilled?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
+              <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drilled?.label ?? k}`}>
+                {drilled?.label ?? 'Filtered'} ×
               </button>
             ))}
             {selectable && (selection.size > 0 || selectingAll) && (
@@ -575,7 +641,11 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
                     {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
                   </button>
                 )}
-                {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+                {kind === 'assets' && (Object.keys(MOVES) as (keyof typeof MOVES)[]).map((m) => {
+                  const cant = MOVES[m].cant([...selection.values()] as Asset[])
+                  return <button key={m} className={`quiet${bulkForm === m ? ' on' : ''}`} aria-expanded={bulkForm === m} disabled={moveOff || cant} title={cant ? NOT_ALLOWED : undefined}
+                    onClick={() => setBulkForm((x) => (x === m ? null : m))}>{MOVES[m].button}</button>
+                })}
                 {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
                 {mayEdit(kind, [...selection.values()]) && (
                   <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
@@ -597,6 +667,21 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
           {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
           {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
+          {bulkForm && selection.size > 0 && kind === 'assets' && (
+            <section className="list-panel" aria-label={MOVES[bulkForm].title}>
+              <div className="actions">
+                <b>{MOVES[bulkForm].verb} {selection.size.toLocaleString()} {selection.size === 1 ? 'Asset' : 'Assets'}</b>
+                <span className="dim">One at a time, each with a result.</span>
+                <button type="button" className="quiet" onClick={() => setBulkForm(null)}>Cancel</button>
+              </div>
+              {/* Off as its button is: while a run goes, or once the Selection holds an Asset Snipe-IT won't let the Operator act on. */}
+              <fieldset className="plain" disabled={moveOff || MOVES[bulkForm].cant([...selection.values()] as Asset[])}>
+                {bulkForm === 'checkout'
+                  ? <CheckoutForm defaultLocation={defaultLocation} onCheckout={async (o) => runForm(checkoutAction(window.snipeIt, o))} />
+                  : <BulkCheckinForm statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={(o) => runForm(checkinAction(window.snipeIt, o))} />}
+              </fieldset>
+            </section>
+          )}
           {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
           {auditing && selection.size > 0 && (
             <section className="list-panel" aria-label="Audit Assets">
@@ -631,7 +716,6 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
               // Open in the Asset panel, focused by ↑/↓, ticked.
               const docked = kind === 'assets' && panelAsset?.id === row.id
               const quickProps = (form: SheetForm) => ({ onClick: () => openAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
-              const inBatch = batch.some((b) => b.id === a.id)
               return (
                 <tr key={row.id} {...(kind === 'assets' && { 'data-id': row.id, tabIndex: -1 })} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
                   {selectable && (
@@ -647,7 +731,6 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
                       <button disabled={!!checkinReason(a)} {...quickProps('checkin')} title={checkinReason(a)}>Checkin</button>
                       <button disabled={!!checkoutReason(a)} {...quickProps('checkout')} title={checkoutReason(a)}>Checkout</button>
                       <button disabled={!a.can.update} {...quickProps('status')} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
-                      <button disabled={inBatch} onClick={() => onBatch([toSummary(a)])}>{inBatch ? 'In batch' : 'Batch'}</button>
                     </td>
                   )}
                 </tr>
@@ -692,7 +775,7 @@ export function BulkResults({ title, run, onStop, onRetry, onClose }: { title: s
           </>}
       </div>
       <div className="bulk-rows">
-        <table className="history batch">
+        <table className="history">
           <tbody>
             {run.records.map((r) => (
               <tr key={r.id}>
@@ -725,6 +808,29 @@ export function filterPick(f: Pick<Filter, 'label' | 'options'>, text: string, o
 
 // Type to narrow the choices with the browser's own datalist: arrows move, Enter picks, Escape closes.
 // Picking "Any …" or emptying the box clears the filter; text that names no choice is put back on leaving the box.
+// Checkin… on a Selection: one Status Label, Location and note for every Asset. With no Location, Snipe-IT moves each to
+// its own Default Location, or to none (#72).
+function BulkCheckinForm({ statusLabels, locations, defaultLocation, onCheckin }: { statusLabels: StatusLabel[]; locations: StatusLabel[]; defaultLocation: StatusLabel | null; onCheckin: (o: CheckinOptions) => void }) {
+  const [statusId, setStatusId] = useState<number | undefined>()
+  const [locationId, setLocationId] = useState(defaultLocation?.id)
+  const [note, setNote] = useState('')
+  return (
+    <form className="actions" onSubmit={(e) => (e.preventDefault(), onCheckin({ statusId, locationId, note }))}>
+      <select autoFocus value={statusId ?? ''} onChange={(e) => setStatusId(e.target.value ? Number(e.target.value) : undefined)} aria-label="Status after Checkin">
+        <option value="">Keep each Asset's status</option>
+        {statusLabels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      <select aria-label="Checkin Location" value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
+        <option value="">Each Asset's Default Location, if it has one</option>
+        {defaultLocation && !locations.some((l) => l.id === defaultLocation.id) && <option value={defaultLocation.id}>{defaultLocation.name}</option>}
+        {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Checkin note" />
+      <button>Checkin</button>
+    </form>
+  )
+}
+
 function FilterBox({ filter: f, value, onPick }: { filter: Filter; value: string; onPick: (value: string) => void }) {
   const options = choices(f)
   // A drilled-into value shows even before its names load.

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { allMatching } from '../renderer/src/ListView'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
+import { reportRunner } from './scheduler'
 import { userNotesLine } from './notes'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -714,10 +715,10 @@ describe('checkout', () => {
     expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'asset', assigned_asset: 77 })
   })
 
-  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day', async () => {
+  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day (Central, to the second)', async () => {
     const { fetch, requests } = checkoutWith(ready)
     await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, expectedCheckin: '2026-10-13 14:50' })
-    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50:00' })
   })
 
   it("refuses, writing nothing, when the Asset's Status Label isn't the one the caller expects it still has", async () => {
@@ -751,6 +752,43 @@ describe('checkout', () => {
     await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, statusId: 1.5 })).rejects.toThrow(/Invalid status id/)
     await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, expectedCheckin: 'next Tuesday' })).rejects.toThrow(/YYYY-MM-DD/)
     expect(requests).toEqual([])
+  })
+
+  describe('a Status Label override on an Asset whose label is not deployable (an undo putting Damaged back)', () => {
+    const damaged = { ...ready, status_label: { id: 9, name: 'Damaged', status_type: 'undeployable', status_meta: 'undeployable' } }
+    const statusSet = { body: { status: 'success', messages: 'Updated.', payload: {} } }
+
+    it('sets the override first, since Snipe-IT checks out only an Asset that is deployable now, then checks it out with it', async () => {
+      const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: damaged }, 'PATCH /hardware/4812': statusSet, 'POST /hardware/4812/checkout': { body: checkedOut } })
+      await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, note: '[Undo] Repair intake' })
+      expect(requests.filter((r) => r.method !== 'GET')).toEqual([
+        { method: 'PATCH', path: '/hardware/4812', body: { status_id: 2 } },
+        { method: 'POST', path: '/hardware/4812/checkout', body: { status_id: 2, checkout_to_type: 'user', assigned_user: 311, note: '[Undo] Repair intake' } },
+      ])
+    })
+
+    it('puts the old label back when Snipe-IT refuses the Checkout, and says why', async () => {
+      const refused = { body: { status: 'error', messages: 'That asset is not available for checkout!', payload: null } }
+      const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: damaged }, 'PATCH /hardware/4812': statusSet, 'POST /hardware/4812/checkout': refused })
+      await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 5 })).rejects.toThrow('That asset is not available for checkout!')
+      expect(requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${JSON.stringify(r.body)}`)).toEqual(['PATCH {"status_id":5}', expect.stringMatching(/^POST /), 'PATCH {"status_id":9}'])
+    })
+
+    it("says so when the old label can't be put back either", async () => {
+      let patches = 0
+      const { fetch } = fakeFetch({
+        '/hardware/4812': { body: damaged },
+        'PATCH /hardware/4812': { body: () => (++patches === 1 ? statusSet.body : { status: 'error', messages: 'Snipe-IT said no', payload: null }) },
+        'POST /hardware/4812/checkout': { body: { status: 'error', messages: 'That asset is not available for checkout!', payload: null } },
+      })
+      await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 5 })).rejects.toThrow("That asset is not available for checkout! (its Status Label is still the new one: put back 'Damaged' by hand)")
+    })
+
+    it("a refused override is never checked out", async () => {
+      const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: damaged }, 'PATCH /hardware/4812': { body: { status: 'error', messages: { status_id: ['Choose a valid status.'] }, payload: null } } })
+      await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2 })).rejects.toThrow('Choose a valid status.')
+      expect(requests.filter((r) => r.method === 'POST')).toEqual([])
+    })
   })
 
   it("a Checkout Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
@@ -1086,6 +1124,35 @@ describe('dashboard (today is 2026-09-24)', () => {
       expect([...all!.keys()]).toEqual(many.map((a) => a.id))
       // Each page asks Snipe-IT for the whole set again, never for a page of it.
       expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').every((u) => u.searchParams.get('offset') === '0')).toBe(true)
+    })
+
+    // Export CSV, Email me now and Schedules all run a Saved Report through reportRunner.
+    describe('a Saved Report runs its View', () => {
+      const saved = (id: string, view?: AssetView) => ({ id, name: id, kind: 'assets' as const, search: '', filters: { location_id: '9' }, sort: null, columns: ['assetTag'], ...(view && { view }) })
+      const reports = [saved('Audit late, Library', 'auditLate'), saved('Out on temp, Library', 'outOnTemp'), saved('Library')]
+      const late = [asset(7, { next_audit_date: { date: '2026-09-01' } })]
+
+      it('Audit late exports from the audit route with its filters, with its View column', async () => {
+        const { snipeIt, urls } = fleet({ 'hardware/audit/overdue': late })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Audit late, Library' })
+        expect(run).toMatchObject({ columns: ['Asset Tag', 'Next audit'], rows: [['NOMMA-7', '2026-09-01']] })
+        expect(urls.map((u) => [u.pathname, u.searchParams.get('location_id')])).toEqual([['/api/v1/hardware/audit/overdue', '9']])
+      })
+
+      it('Out on temp runs the Temp checkout lookup', async () => {
+        const { snipeIt, listsAsked } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': tempLog })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Out on temp, Library' })
+        expect(run.rows.map((r) => r[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
+        expect(run.columns).toEqual(['Asset Tag', 'Expected checkin'])
+        expect(listsAsked()).toEqual(['hardware', 'reports/activity'])
+      })
+
+      it('one without a View runs the All View, as before', async () => {
+        const { snipeIt, urls } = fleet({ hardware: late })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Library' })
+        expect(run).toMatchObject({ columns: ['Asset Tag'], rows: [['NOMMA-7']] })
+        expect(urls.map((u) => u.pathname)).toEqual(['/api/v1/hardware'])
+      })
     })
   })
 
@@ -2481,6 +2548,13 @@ describe('Repair intake', () => {
     await expect(createSnipeIt(config, refused.fetch).createMaintenance(input)).rejects.toThrow('The selected maintenance type id is invalid.')
   })
 
+  it('deletes a Maintenance', async () => {
+    const { fetch, requests } = fakeFetch({ 'DELETE /maintenances/61': { body: { status: 'success', messages: 'Deleted.', payload: null } } })
+    await createSnipeIt(config, fetch).deleteMaintenance(61)
+    expect(requests).toEqual([{ method: 'DELETE', path: '/maintenances/61', body: {} }])
+    await expect(createSnipeIt(config, fetch).deleteMaintenance(Number.NaN)).rejects.toThrow(/Invalid Maintenance id/)
+  })
+
   it("adds a note to an Asset's History", async () => {
     const { fetch, requests } = fakeFetch({ 'POST /notes/4812/store': { body: { status: 'success', messages: 'Note added', payload: { note: 'x', item_id: 4812 } } } })
     await createSnipeIt(config, fetch).addAssetNote(4812, '[Repair intake] cracked screen')
@@ -2532,6 +2606,32 @@ describe('Repair intake', () => {
         await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("someone else changed the User's notes at the same time; check them for the line")
         expect(requests.map((r) => r.method)).toEqual(['GET', 'PATCH', 'GET'])
       }
+    })
+
+    describe('taking the line off again (Undo last)', () => {
+      it('writes the notes back without it when they still end with exactly that line', async () => {
+        for (const [notes, left] of [[`Loaner agreement on file.\n${line}\n`, 'Loaner agreement on file.'], [line, '']]) {
+          const { fetch, requests } = user(notes)
+          await createSnipeIt(config, fetch).removeUserNotesLine(311, line)
+          expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /users/311', 'PATCH /users/311'])
+          expect(requests[1].body).toEqual({ notes: left })
+        }
+      })
+
+      it('leaves notes that changed since alone: another line after it, or the line edited', async () => {
+        for (const notes of [`${line}\nCalled home`, line.replace('cracked', 'chipped'), `Old note ${line}`]) {
+          const { fetch, requests } = user(notes)
+          await expect(createSnipeIt(config, fetch).removeUserNotesLine(311, line)).rejects.toThrow(/^changed since$/)
+          expect(requests.map((r) => r.method)).toEqual(['GET'])
+        }
+      })
+
+      it("refuses markup, and a key that can't edit Users, like adding it", async () => {
+        const marked = user(`See <a href="https://example.org/form">the form</a>\n${line}`)
+        await expect(createSnipeIt(config, marked.fetch).removeUserNotesLine(311, line)).rejects.toThrow("the User's notes have formatting the app can't keep")
+        const { fetch } = fakeFetch({ '/users/311': { body: { id: 311, notes: line } }, 'PATCH /users/311': denied })
+        await expect(createSnipeIt(config, fetch).removeUserNotesLine(311, line)).rejects.toThrow("your Snipe-IT account can't edit Users")
+      })
     })
   })
 })

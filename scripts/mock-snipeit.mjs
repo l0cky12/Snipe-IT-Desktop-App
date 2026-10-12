@@ -391,6 +391,7 @@ createServer(async (req, res) => {
       Object.assign(found, { completed_at: { datetime: at, formatted: at.slice(0, 10) }, completed_by: { id: 900, name: 'Demo Tech' } })
       return send({ status: 'success', messages: 'Maintenance completed.', payload: found })
     }
+    // Snipe-IT soft-deletes a Maintenance; here it's just gone.
     if (req.method === 'DELETE') return maintenances.splice(maintenances.indexOf(found), 1), send({ status: 'success', messages: 'Maintenance deleted.', payload: null })
     if (req.method === 'GET') return send(found)
     if ('cost' in body && body.cost !== null && !(Number(body.cost) >= 0)) return fail({ cost: ['The cost must be at least 0.'] })
@@ -496,6 +497,8 @@ createServer(async (req, res) => {
     } else if (m[2] === 'checkout') {
       const other = body.checkout_to_type === 'asset' && assets.find((x) => x.id === body.assigned_asset && x.id !== a.id)
       const target = other ? { id: other.id, name: other.name } : body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
+      // Like Snipe-IT's availableForCheckout(): the label it has now must be deployable, whatever label is sent.
+      if (a.assigned_to || a.status_label.status_type !== 'deployable') return fail('That asset is not available for checkout!')
       if (!target) return fail('Checkout target does not exist.')
       // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
       const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')

@@ -1,19 +1,21 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { ArchiveRestore, PackageCheck, PackageOpen, Wrench, type LucideIcon } from 'lucide-react'
+import { useEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { ArchiveRestore, PackageCheck, PackageOpen, Timer, Wrench, type LucideIcon } from 'lucide-react'
 import { cleanText, WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
+import { dueLabel } from '../../main/calendar'
 import { localDate } from '../../main/export'
 import type { StatusLabel } from '../../main/snipeit'
-import { OutcomeText } from './BatchView'
+import { OutcomeText } from './ListView'
 import { assigneeName, cleanTag, fieldKey, type BulkCheckout, type BulkReturn, type IncomingRepair, type RepairIntake, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
-export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair']
-export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk checkout': PackageCheck, 'Bulk return': ArchiveRestore, 'Repair intake': Wrench, 'Incoming repair': PackageOpen }
+export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout']
+export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk checkout': PackageCheck, 'Bulk return': ArchiveRestore, 'Repair intake': Wrench, 'Incoming repair': PackageOpen, 'Temp checkout': Timer }
 const about: Partial<Record<Workflow, string>> = {
   'Bulk checkout': 'Find a User, then scan Assets and confirm each to check it out to them.',
   'Bulk return': 'Pick where returns go, then scan Assets to check them in.',
   'Repair intake': 'Scan a broken Asset, say what happened, then check it in as Damaged and open a repair Maintenance.',
   'Incoming repair': 'Scan an Asset back from repair, then make it Ready to Deploy and close its repair Maintenance.',
+  'Temp checkout': 'Lend Assets to a User for the rest of the school day, due back at the end-of-day time.',
 }
 export const shortcut = (w: Workflow) => `Ctrl ${WORKFLOWS.indexOf(w) + 1}`
 
@@ -111,7 +113,7 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
                   : r.result.state === 'undone' ? <span className="dim">Undone{r.undoFailed && <>, but <span className="late">{r.undoFailed}</span></>}</span>
                   : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
                   : <OutcomeText outcome={r.result} />}
-                {r.result.state === 'done' && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
+                {(r.result.state === 'done' || r.result.state === 'undone') && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
                 {r.result.state === 'done' && r.copy && (
                   <button className="link" title={r.copy} onClick={() => navigator.clipboard.writeText(r.copy!).then(() => setCopied({ key: r.key, ok: true }), () => setCopied({ key: r.key, ok: false }))}>{copied?.key !== r.key ? 'Copy line' : copied.ok ? 'Copied' : "Couldn't copy"}</button>
                 )}
@@ -251,7 +253,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
   )
 }
 
-// Bulk checkout (#57). Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
+// Bulk checkout (#57), and Temp checkout (#61 §7) on the same steps with a due time in the header. Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
 // step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost. Someone
 // else's Asset opens a choice there instead: Move to this User (a click, or Tab then Enter) or Stop (Esc).
 export function BulkCheckoutView({ flow, field, onOpenAsset }: {
@@ -264,6 +266,16 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   // The picker list and the text it's for; an answer for older text is never shown against newer text.
   const [list, setList] = useState<{ q: string; users: StatusLabel[] } | null>(null)
   const [moved, setMoved] = useState<{ q: string; i: number } | null>(null)
+  // Temp checkout: the due time's date and time while the Operator changes it, or null.
+  const [editing, setEditing] = useState<{ date: string; time: string } | null>(null)
+  const temp = flow.workflow === 'Temp checkout'
+  // Temp checkout's header reads the clock, so it re-renders now and then to roll past the end-of-day time.
+  const [, tick] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    if (!temp) return
+    const timer = setInterval(tick, 30_000)
+    return () => clearInterval(timer)
+  }, [temp])
   const step = flow.step
   const user = step.step === 'scan' ? step.user : null
   const q = text.trim()
@@ -274,7 +286,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
   // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
   useEffect(() => {
-    setText(''); setList(null); setMoved(null); field.current?.focus()
+    setText(''); setList(null); setMoved(null); setEditing(null); field.current?.focus()
   }, [fieldKey(step)])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
@@ -324,6 +336,12 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
     setStatus(flow.runner.fixOpen())
     field.current?.focus()
   }
+  function setDue(e: React.FormEvent) {
+    e.preventDefault()
+    const why = flow.setDue(`${editing!.date} ${editing!.time}`)
+    setStatus(why)
+    if (!why) (setEditing(null), field.current?.focus())
+  }
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('')
@@ -355,9 +373,11 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   const choice = open?.choice
   // Who has it: a User with their username and employee number, or the Location or Asset.
   const has = a?.assignee && <>{a.assetTag} is checked out to <strong>{assigneeName(a.assignee)}</strong>{who(a.assignee) && ` (${who(a.assignee)})`}</>
+  const due = flow.due
+  const dueText = (d: string | null) => (d ? `Due ${dueLabel(d, new Date())}` : 'No School day in the next year')
   const said = open && (choice
     ? `${open.row.tag} is checked out to ${a?.assignee ? assigneeName(a.assignee) : 'someone else'}. ${choice.fix}: click it, or Tab then Enter. Esc to Stop.`
-    : `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}? Enter or rescan to confirm, Esc to cancel.`)
+    : `Confirm ${open.row.tag}: Checkout to ${open.row.ctx.user.name}${temp ? `, ${dueText(due).toLowerCase()}` : ''}? Enter or rescan to confirm, Esc to cancel.`)
   return (
     <div className="workflow">
       <div className="workflow-main">
@@ -365,9 +385,27 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
           {user ? (
             <h1>{user.name}<span className="sub">{[who(user), `holds ${user.assets} Asset${user.assets === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</span></h1>
           ) : (
-            <h1>Bulk checkout<span className="sub">Who are the Assets for?</span></h1>
+            <h1>{flow.workflow}<span className="sub">{['Who are the Assets for?', temp && `${dueText(due)}.`].filter(Boolean).join(' ')}</span></h1>
           )}
-          {user && <div className="actions"><button className="quiet" onClick={() => (flow.done(), setStatus(''))}>Done</button></div>}
+          {user && (
+            <div className="actions">
+              {/* Temp checkout: the due time every Checkout for this User gets; a change holds until Done or another User. */}
+              {temp && (editing ? (
+                <form className="actions" aria-label="Change due time" onSubmit={setDue} onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), setEditing(null), field.current?.focus())}>
+                  <input type="date" required autoFocus aria-label="Due date" value={editing.date} onChange={(e) => setEditing({ ...editing, date: e.target.value })} />
+                  <input type="time" required aria-label="Due time" value={editing.time} onChange={(e) => setEditing({ ...editing, time: e.target.value })} />
+                  <button type="submit">Set</button>
+                  <button type="button" className="quiet" onClick={() => (setEditing(null), field.current?.focus())}>Cancel</button>
+                </form>
+              ) : (
+                <>
+                  <strong>{dueText(due)}</strong>
+                  <button className="quiet" onClick={() => setEditing({ date: due?.slice(0, 10) ?? '', time: due?.slice(11) ?? '' })}>Change</button>
+                </>
+              ))}
+              <button className="quiet" onClick={() => (flow.done(), setStatus(''))}>Done</button>
+            </div>
+          )}
         </header>
         <form className="workflow-field" onSubmit={onSubmit}>
           <input
@@ -392,8 +430,9 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
                 {([['Name', a.name], ['Asset Model', a.model], ['Serial', a.serial], ['Status Label', a.status]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
               </dl>
               <p>→ {choice ? 'Move' : 'Checkout'} to <strong>{ctx!.user.name}</strong>{who(ctx!.user) && ` (${who(ctx!.user)})`}</p>
-              {(ctx!.expectedCheckin || ctx!.note) && (
-                <p className="dim">{[ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote('Bulk checkout', { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
+              {/* Temp checkout's due time is worked out again as it's written, so this is the one it gets if confirmed now. */}
+              {(temp || ctx!.expectedCheckin || ctx!.note) && (
+                <p className="dim">{[temp ? dueText(due) : ctx!.expectedCheckin && `Expected Checkin ${ctx!.expectedCheckin}`, ctx!.note && `Note: ${workflowNote(flow.workflow, { text: ctx!.note })}`].filter(Boolean).join(' · ')}</p>
               )}
               {choice ? (
                 <div className="actions">
@@ -427,9 +466,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             </ul>
             {/* Kept until changed or the app quits, across Users; shown on every confirm. */}
             <details className="options">
-              <summary>Options{(o.expectedCheckin || o.note) && <span className="dim"> · {[o.expectedCheckin && `Expected Checkin ${o.expectedCheckin}`, o.note && `Note: ${o.note}`].filter(Boolean).join(' · ')}</span>}</summary>
+              <summary>Options{((!temp && o.expectedCheckin) || o.note) && <span className="dim"> · {[!temp && o.expectedCheckin && `Expected Checkin ${o.expectedCheckin}`, o.note && `Note: ${o.note}`].filter(Boolean).join(' · ')}</span>}</summary>
               <div className="actions">
-                <input type="date" value={o.expectedCheckin} onChange={(e) => setStatus(flow.setOptions({ ...o, expectedCheckin: e.target.value }))} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />
+                {/* Temp checkout's Expected Checkin is always its due time. */}
+                {!temp && <input type="date" value={o.expectedCheckin} onChange={(e) => setStatus(flow.setOptions({ ...o, expectedCheckin: e.target.value }))} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />}
                 <NoteOption note={o.note} onSet={(note) => setStatus(flow.setOptions({ ...o, note }))} />
               </div>
             </details>
@@ -446,7 +486,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
         : undoConfirm
         ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
         : user
-        ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}.`} />
+        ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}${temp ? ' until the due time' : ''}.`} />
         : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight'], [UNDO_KEY, 'Undo last']]} hint="Type a name, email or employee number, or scan an ID card." />}
     </div>
   )
@@ -454,6 +494,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
 
 // Repair intake (#59). The scan field takes each Asset Tag; a scanned Asset's confirm opens under it with the note
 // field, which takes focus (the note is required), and gives it back to the scan field once confirmed or cancelled.
+// Undo last (Ctrl+Z on the empty scan field, or the button) puts the newest intake back.
 export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   flow: RepairIntake
   field: RefObject<HTMLInputElement | null>
@@ -484,8 +525,8 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setStatus('')
-    // Enter on the empty field confirms the open confirm; a scan confirms its own tag, or skips the waiting one.
-    if (!cleanTag(text)) return void (open && setStatus(flow.runner.confirmOpen()))
+    // Enter on the empty field confirms the open confirm (or Undo); a scan confirms its own tag, or skips the waiting one.
+    if (!cleanTag(text)) return void (open ? setStatus(flow.runner.confirmOpen()) : flow.runner.confirm && undo())
     setStatus(flow.scan(text))
     setText('')
   }
@@ -499,19 +540,40 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
     flow.runner.cancelOpen()
     setStatus('')
   }
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape' && open) return e.preventDefault(), cancel()
+    if (e.key === 'Escape' && (open || flow.runner.confirm)) return e.preventDefault(), open ? cancel() : flow.runner.cancelUndo()
+  }
+  // Ctrl+Z only on the empty scan field: in the note field (or with text typed) it's the usual text undo.
+  function onScanKeyDown(e: React.KeyboardEvent) {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+    onKeyDown(e)
   }
 
   const a = open?.row.before
+  const undoConfirm = flow.runner.confirm
   const announce = open && `Confirm ${open.row.tag}: ${open.says}? Say what happened, then Enter. Esc to cancel.`
   return (
     <div className="workflow">
       <div className="workflow-main">
         <header className="head"><h1>Repair intake<span className="sub">Scan a broken Asset</span></h1></header>
         <form className="workflow-field" onSubmit={onSubmit}>
-          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onKeyDown} placeholder="Scan the Asset Tag of a broken Asset" aria-label="Asset Tag" />
+          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onScanKeyDown} placeholder="Scan the Asset Tag of a broken Asset" aria-label="Asset Tag" />
           {flow.blocked ? <p className="message error" role="alert">{flow.blocked}</p> : <p className="message" role="status">{status}</p>}
+          {undoConfirm && (
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
+              <span>{undoConfirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
         </form>
         {open && a && (
           <form className="scan-confirm" aria-label="Confirm repair intake" onSubmit={submitNote}>
@@ -529,12 +591,14 @@ export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset }: {
             </div>
           </form>
         )}
-        <RunningList rows={flow.runner.rows} doneLabel="taken in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
-        <p className="sr-only" aria-live="polite">{announce ?? flow.runner.announce}</p>
+        <RunningList rows={flow.runner.rows} doneLabel="taken in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
+        <p className="sr-only" aria-live="polite">{announce ?? undoConfirm ?? flow.runner.announce}</p>
       </div>
       {open
         ? <KeysPanel keys={[['Enter', 'Confirm (note required)'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
-        : <KeysPanel keys={[['Enter', 'Scan']]} hint="Each scanned Asset is confirmed with what happened, then checked in as Damaged and a repair Maintenance opened." />}
+        : undoConfirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : <KeysPanel keys={[['Enter', 'Scan'], [UNDO_KEY, 'Undo last']]} hint="Each scanned Asset is confirmed with what happened, then checked in as Damaged and a repair Maintenance opened. Undo last puts the newest one back." />}
     </div>
   )
 }

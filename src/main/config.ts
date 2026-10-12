@@ -2,13 +2,18 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
-import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
+import { END_OF_DAY, parseCalendar, realTime, type CalendarEntry } from './calendar'
+import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
 export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance
+  tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[]
   /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
   repairTypeId: number | null }
+/** Temp checkout's settings on this PC. endOfDay: when Temp checkouts are due on a School day without a half day ("HH:MM"). */
+export type TempCheckout = { endOfDay: string }
+const TEMP_CHECKOUT: TempCheckout = { endOfDay: END_OF_DAY }
 /** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
@@ -29,6 +34,9 @@ export type SettingsApi = {
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
   saveAppearance(input: Appearance): Promise<Settings>
+  saveTempCheckout(input: TempCheckout): Promise<Settings>
+  /** The School calendar box's text; throws "Line N: …" and saves nothing when a line is bad. */
+  saveSchoolCalendar(text: string): Promise<Settings>
   /** The Maintenance type for repairs as typed: a whole number above 0, or blank for none. */
   saveRepairs(maintenanceTypeId: string): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
@@ -41,8 +49,9 @@ export type SettingsApi = {
   /** null stops the schedule. */
   setSchedule(report: ScheduleKey, schedule: Schedule | null): Promise<Scheduled[]>
 }
-/** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …"). */
-export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[] }
+/** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …").
+ * view: an Assets one's View (All when left out). */
+export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[]; view?: AssetView }
 // Re-saving and renaming leave its schedule be.
 export type SavedReport = SavedReportQuery & { id: string; name: string; schedule?: KeptSchedule }
 /** No id: a new Saved Report. An id: re-saves that one. */
@@ -63,7 +72,8 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
-  release?: ReleaseCache; repairTypeId?: number | null }
+  release?: ReleaseCache; repairTypeId?: number | null
+  tempCheckout?: TempCheckout; schoolCalendar?: CalendarEntry[] }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -73,10 +83,12 @@ function reportQuery(r: SavedReportInput): SavedReportQuery & { name: string } {
   if (!name) throw new Error('Name the report.')
   const sorts: Record<string, string> | undefined = Object.hasOwn(LIST_SORTS, r.kind) ? LIST_SORTS[r.kind] : undefined
   if (!sorts || typeof r.search !== 'string' || !isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || (r.label !== undefined && typeof r.label !== 'string')
-    || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order))))
+    || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order)))
+    || (r.view !== undefined && (r.kind !== 'assets' || typeof r.view !== 'string' || !Object.hasOwn(ASSET_VIEWS, r.view))))
     throw new Error('Invalid report')
   const filters = Object.fromEntries(Object.entries(r.filters).filter(([, v]) => v))
-  return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns] }
+  return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns],
+    ...(r.view && r.view !== 'all' && { view: r.view }) }
 }
 
 function checkMail(m: MailInput): MailServer {
@@ -149,7 +161,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null }
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null,
+      tempCheckout: value.tempCheckout ?? TEMP_CHECKOUT, schoolCalendar: value.schoolCalendar ?? [] }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -229,6 +242,18 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     saveRelease(release: ReleaseCache) {
       write({ ...read(), release })
     },
+    saveTempCheckout({ endOfDay }: TempCheckout) {
+      if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')
+      // 00:00 would read back as a date-only Expected Checkin (#71).
+      if (endOfDay === '00:00') throw new Error("The end-of-day time can't be midnight.")
+      write({ ...read(), tempCheckout: { endOfDay } })
+      return get()
+    },
+    saveSchoolCalendar(text: string) {
+      if (typeof text !== 'string') throw new Error('Invalid School calendar')
+      write({ ...read(), schoolCalendar: parseCalendar(text) })
+      return get()
+    },
     // Not checked against Snipe-IT: Operator keys can't read Maintenance types. A wrong id shows on Repair intake's rows.
     saveRepairs(maintenanceTypeId: string) {
       const v = typeof maintenanceTypeId === 'string' ? maintenanceTypeId.trim() : null
@@ -247,8 +272,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
         return report
       }
       const old = reports.find((r) => r.id === input.id) ?? gone()
-      // The old label goes, so one the List no longer has doesn't linger; anything else beside the query stays.
-      const { label: _, ...kept } = old
+      // The old label and View go, so ones the List no longer has don't linger; anything else beside the query stays.
+      const { label: _, view: __, ...kept } = old
       const report = { ...kept, ...query }
       write({ ...saved, savedReports: reports.map((r) => (r === old ? report : r)) })
       return report

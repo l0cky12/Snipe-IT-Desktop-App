@@ -107,6 +107,16 @@ it('refuses a Saved Report it could not open again', () => {
   expect(store.savedReports()).toEqual([])
 })
 
+it("keeps an Assets Saved Report's View; re-saving without one drops it, and a View it doesn't know is refused", () => {
+  const { store } = setup()
+  const late = store.saveReport({ ...report, view: 'auditLate' })
+  expect(store.savedReports()).toEqual([{ ...late, view: 'auditLate' }])
+  expect(store.saveReport({ ...report, id: late.id })).not.toHaveProperty('view')
+  expect(() => store.saveReport({ ...report, view: 'nope' as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, view: ['auditLate'] as unknown as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, kind: 'users', sort: null, view: 'overdue' })).toThrow('Invalid report')
+})
+
 const mail = { host: 'smtp.gmail.com', port: 465, security: 'ssl' as const, username: 'operator@nomma.net', sender: 'operator@nomma.net', password: 'app-password' }
 
 it("fills in Gmail's mail server, keeps the email password encrypted across a restart, and keeps it when left blank", () => {
@@ -244,6 +254,30 @@ it('follows the system appearance until one is chosen, and keeps the choice acro
   expect(relaunched.saveAppearance('light').appearance).toBe('light')
   expect(relaunched.saveAppearance('system').appearance).toBe('system')
   expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
+})
+
+it('the end-of-day time is 2:50 pm until changed, must be a real HH:MM, and is kept across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50' })
+  expect(store.saveTempCheckout({ endOfDay: '15:10' }).tempCheckout).toEqual({ endOfDay: '15:10' })
+  for (const endOfDay of ['24:00', '3:10', '15:60', '', 1510]) expect(() => store.saveTempCheckout({ endOfDay } as never)).toThrow('Enter the end-of-day time as HH:MM, like 14:50.')
+  expect(() => store.saveTempCheckout({ endOfDay: '00:00' })).toThrow("The end-of-day time can't be midnight.")
+  expect(createSettingsStore(path, storage, '0.1.0').get().tempCheckout).toEqual({ endOfDay: '15:10' })
+})
+
+it('keeps the School calendar as checked entries sorted by date; a bad line refuses the whole save', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().schoolCalendar).toEqual([])
+  const saved = store.saveSchoolCalendar('2026-12-18 half day 12:00 Winter concert\n2026-11-23 to 2026-11-27 Thanksgiving break')
+  expect(saved.schoolCalendar).toEqual([
+    { from: '2026-11-23', to: '2026-11-27', label: 'Thanksgiving break' },
+    { from: '2026-12-18', to: '2026-12-18', halfDay: '12:00', label: 'Winter concert' },
+  ])
+  expect(() => store.saveSchoolCalendar('2026-11-26 Thanksgiving\n2026-11-27 to 2026-11-23 Break')).toThrow('Line 2: the end date is before the start date')
+  expect(() => store.saveSchoolCalendar(7 as never)).toThrow('Invalid School calendar')
+  expect(createSettingsStore(path, storage, '0.1.0').get().schoolCalendar).toEqual(saved.schoolCalendar)
+  // An empty box: every weekday is a School day.
+  expect(store.saveSchoolCalendar('\n  \n').schoolCalendar).toEqual([])
 })
 
 it('keeps the Maintenance type for repairs blank until set: a whole number above 0, or blank for none, kept across a restart', () => {
