@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { eachInTurn, type Outcome } from './BatchView'
-import { auditAction, mayAudit, allMatching, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { auditAction, mayAudit, allMatching, focusRow, openRow, panelLive, panelToRefresh, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -234,6 +234,38 @@ describe('Assets Views', () => {
 })
 
 describe('keys on the Assets List', () => {
+  it('↑/↓ take the Asset panel along and Esc closes it while it shows, or while the first open is still loading', () => {
+    expect(panelLive(true, false)).toBe(true)
+    expect(panelLive(false, true)).toBe(true)
+    expect(panelLive(false, false)).toBe(false)
+  })
+
+  it('a Bulk Action reloads only the panel open that showed as it began, so a form opened mid-run keeps its inputs', () => {
+    const run = { records: [{ id: 7 }] }
+    expect(panelToRefresh(3, { n: 3, id: 7 }, run)).toBe(7)
+    expect(panelToRefresh(3, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(undefined, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 8 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 7 }, { ...run, deletes: true })).toBeUndefined()
+    expect(panelToRefresh(3, null, run)).toBeUndefined()
+  })
+
+  it('↑/↓ give the row they move to DOM focus, so Enter opens that row and not one a button was left focused on', () => {
+    const focused: string[] = []
+    const rows = new Map([7, 8].map((id) => [`tr[data-id="${id}"]`, { focus: () => focused.push(`row ${id}`) }]))
+    focusRow({ querySelector: ((s: string) => rows.get(s) ?? null) as ParentNode['querySelector'] }, 8)
+    expect(focused).toEqual(['row 8'])
+    focusRow(null, 8)
+  })
+
+  it('a row or Quick Action click moves the focused row onto it at once, before its Asset loads', () => {
+    const done: string[] = []
+    const open = openRow((id) => done.push(`cursor ${id}`), (id, form) => done.push(`open ${id} ${form ?? ''}`.trim()))
+    open(3)
+    open(4, 'checkin')
+    expect(done).toEqual(['cursor 3', 'open 3', 'cursor 4', 'open 4 checkin'])
+  })
+
   const key = (name: string, mods: Partial<Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {}) =>
     ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
 

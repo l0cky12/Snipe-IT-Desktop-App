@@ -17,7 +17,7 @@ describe('Export CSV', () => {
   const asset = {
     id: 1, assetTag: 'NOMMA-1', name: 'CB-01', model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed',
     assignee: { type: 'user' as const, id: 311, name: 'Jordan Reyes' }, checkoutAllowed: false, location: 'Library', category: 'Chromebook',
-    serial: '5CD1', purchaseDate: null, warrantyEnd: null, expectedCheckin: null, overdueDays: null, warranty: null, can,
+    serial: '5CD1', purchaseDate: null, warrantyEnd: null, expectedCheckin: null, overdue: null, warranty: null, can,
   }
 
   it('holds only the visible Columns, in the order the List shows them', () => {
@@ -32,6 +32,16 @@ describe('Export CSV', () => {
     const activity = { id: 7, when: '2026-08-17 15:40', action: 'Checkin', operator: 'E. Caldwell', detail: 'from Sam Whitaker', note: 'keyboard sticky', item: { type: 'asset', id: 4812, name: 'CB-LIB-012' }, can }
     expect(exportTable('activity', ['when', 'item', 'note'], [activity]).rows).toEqual([['2026-08-17 15:40', 'CB-LIB-012', 'keyboard sticky']])
     expect(exportTable('statuslabels', ['name', 'type', 'assets'], [{ id: 1, name: 'Broken', type: 'undeployable', assets: 3, can }]).rows).toEqual([['Broken', 'Undeployable', '3']])
+  })
+})
+
+describe('Purchase cost and End of life', () => {
+  it('are Columns the Operator can show on the Assets List, and export as shown', () => {
+    expect(shownColumns('assets', null)).not.toContain('purchaseCost')
+    expect(shownColumns('assets', ['purchaseCost', 'endOfLife'])).toEqual(['assetTag', 'purchaseCost', 'endOfLife'])
+    const asset = { id: 1, assetTag: 'NOMMA-1', purchaseCost: '1234.56', endOfLife: '2029-08-01' }
+    expect(exportTable('assets', ['assetTag', 'purchaseCost', 'endOfLife'], [asset, { ...asset, purchaseCost: null, endOfLife: null }]))
+      .toEqual({ columns: ['Asset Tag', 'Purchase cost', 'End of life'], rows: [['NOMMA-1', '1234.56', '2029-08-01'], ['NOMMA-1', '', '']] })
   })
 })
 

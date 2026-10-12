@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
-import { cleanText } from '../../main/notes'
+import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -13,6 +13,9 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
+import { createBulkCheckout, createBulkReturn, NOT_ALLOWED } from './workflows'
+import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
+import { Bars, ChartCard, Donut, chartRows, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -30,8 +33,7 @@ export const StatusChip = ({ asset }: { asset: AssetSummary }) => (
 export const statusChoices = (labels: StatusLabel[], a: Asset) =>
   labels.some((l) => l.id === a.statusId) || a.statusId === null ? labels : [{ id: a.statusId, name: a.status }, ...labels]
 
-// Why an action is off when Snipe-IT says the Operator's key may not do it.
-export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
+export { NOT_ALLOWED }
 // Why an Asset's Checkin / Checkout button is disabled (its title), or undefined when it may go ahead.
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
@@ -46,10 +48,20 @@ export const auditedLine = ({ was, next }: Audited) => `${next ? `Audited. Next 
 /** One Asset's result in the Audit Bulk Action. */
 export const auditedResult = ({ was, next }: Audited) => (next ? `Audited, next ${next}, ${wasDate(was)}` : `${NO_INTERVAL} (${wasDate(was)})`)
 
-// Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
+// Where a keydown goes. 'panel': the Scan/Search panel opens and takes it, for Ctrl+K from anywhere or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
-export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
-  !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
+// On a Workflow page that character goes to the Workflow's field instead. A Workflow: Ctrl+1–5 from anywhere, in
+// glossary order. null: the key keeps its usual job.
+export function routeKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean, onWorkflow = false): 'panel' | 'workflow field' | Workflow | null {
+  if (e.altKey || e.metaKey) return null
+  if (e.ctrlKey) return e.key.toLowerCase() === 'k' ? 'panel' : /^[1-5]$/.test(e.key) ? WORKFLOWS[Number(e.key) - 1] : null
+  return inField || e.key.length !== 1 || e.key === ' ' ? null : onWorkflow ? 'workflow field' : 'panel'
+}
+
+// Only another server (or logging out) starts the session over; saving Email, Background or a new key for the same
+// server keeps the Workflows, Bulk Action results and the open List.
+export const startsOver = (before: Settings | null, after: Settings) => !before || before.baseUrl !== after.baseUrl || !after.hasToken
+
 /** Where a key was pressed: in a field (it takes typing), on a control (a button, link or checkbox has its own Enter and Space), or neither. */
 export type KeyPlace = 'field' | 'control' | 'none'
 export const keyPlace = (target: EventTarget | null): KeyPlace =>
@@ -63,11 +75,14 @@ export const opensAt = <V extends { page: string }>(view: V | null, showSettings
   !showSettings && view?.page === 'assets' ? { docked: true, view } : { docked: false, view: null }
 
 /** The Asset panel once something done to Asset id ends (a Bulk Action, a delete): changed only while it still shows that Asset,
- * so an open that landed meanwhile stays. It never touches `latest`, so an open still loading isn't cancelled either.
- * seen: the panel when the work started; then only that very panel changes, not a newer open of the same Asset (a Quick
- * Action's form) or of the same id on another server. */
-export const ifShowing = <P extends { asset: { id: number } }>(p: P | null, id: number, next: (p: P) => P | null, seen?: P | null): P | null =>
-  (p?.asset.id === id && (seen === undefined || p === seen) ? next(p) : p)
+ * so an open that landed meanwhile stays; given n (the panel's when the work began), only while it's still that open, so a newer
+ * open of the same Asset (a Quick Action's form) stays too. It never touches `latest`, so an open still loading isn't cancelled either. */
+export const ifShowing = <P extends { asset: { id: number }; n: number }>(p: P | null, id: number, next: (p: P) => P | null, n?: number): P | null =>
+  p?.asset.id === id && (n === undefined || p.n === n) ? next(p) : p
+/** The Asset panel with its Asset reloaded after a Bulk Action: the same open (n, its key), so the sheet isn't remounted and a form
+ * opened from its header meanwhile keeps its inputs. */
+export const reloadPanel = <P extends { asset: { id: number }; n: number }>(p: P | null, id: number, n: number, asset: P['asset']): P | null =>
+  ifShowing(p, id, (q) => ({ ...q, asset }), n)
 
 /** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
 export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
@@ -89,7 +104,7 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 type Panel = { asset: AssetWithHistory; form?: SheetForm; n: number }
 
@@ -101,7 +116,7 @@ export function App() {
   const [query, setQuery] = useState('')
   const [asset, setAsset] = useState<AssetWithHistory | null>(null)
   const [view, setView] = useState<View | null>(null)
-  // Search Matches, or the Assets of a clicked Inventory Chart segment; both list the same way.
+  // Search Matches.
   const [matches, setMatches] = useState<{ label: string; assets: (AssetSummary | AssetMatch)[] }>({ label: '', assets: [] })
   // Lookup's matches of the other kinds; Users, Locations and Asset Models open the Assets List filtered to them, the stocked kinds are listed only (until #1).
   const [others, setOthers] = useState<Matches[]>([])
@@ -118,6 +133,11 @@ export function App() {
   const bulkBusy = useRef(false)
   const bulkStop = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
+  // Each Workflow's step, queue and Running list, kept for the session (in memory only) so leaving one loses nothing.
+  const [, changed] = useReducer((n: number) => n + 1, 0)
+  const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
+  const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
   // Whether the Operator's account has Snipe-IT's import permission; Import shows only once Snipe-IT says yes.
@@ -130,6 +150,8 @@ export function App() {
   const [audited, setAudited] = useState<{ id: number; result: Audited } | null>(null)
   // Set when an open docks in the Asset panel, which then takes focus instead of the Scan box.
   const docking = useRef(false)
+  // The last panel n handed out; never reused, so work begun on a closed panel can't match one reopened on the same Asset.
+  const panelN = useRef(0)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
@@ -148,17 +170,34 @@ export function App() {
   // Discards any lookup or open still loading, so it can't pull the Operator off the page they chose.
   const cancel = () => (setBusy(0), ++latest.current)
 
+  const page = !showSettings && view?.page
+  const onWorkflow = page === 'workflow'
+  // Read by run(), whose closure may predate the page it finishes on.
+  const workflowShowing = useRef(onWorkflow)
+  workflowShowing.current = onWorkflow
+  // Straight in, skipping the Workflows page; from Settings too, like the sidebar. Rendered now, so its field takes focus
+  // even when the Workflow was already showing (e.g. Ctrl+K, then Ctrl+2 to carry on scanning).
+  function openWorkflow(workflow: Workflow) {
+    cancel()
+    flushSync(() => (setShowSettings(false), setView({ page: 'workflow', workflow })))
+    workflowField.current?.focus()
+  }
+
   useEffect(() => search.current?.focus(), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!opensPanel(e, keyPlace(e.target) === 'field')) return
-      // Ctrl+K is the app's; a scanned character goes on to the box once it has focus.
+      const to = routeKey(e, keyPlace(e.target) === 'field', onWorkflow)
+      if (!to) return
+      // Ctrl+K and Ctrl+1–5 are the app's; a typed character goes on to the box or field once it has focus.
       if (e.ctrlKey) e.preventDefault()
-      openPanel()
+      if (to === 'panel') openPanel()
+      else if (to === 'workflow field') workflowField.current?.focus()
+      // Unbuilt Workflows do nothing; nothing does until an API key is saved.
+      else if (settings?.hasToken && BUILT.includes(to)) openWorkflow(to)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [onWorkflow, settings?.hasToken])
   useEffect(() => {
     window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
@@ -176,7 +215,12 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
+    const over = startsOver(settings, value)
+    setSettings(value)
+    if (!over) return
+    bulkCheckout.reset()
+    bulkReturn.reset()
+    cancel(); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -193,7 +237,8 @@ export function App() {
     } finally {
       setBusy((b) => (b === mine ? 0 : b))
       // Only the newest run moves focus: one superseded by ↑/↓ mustn't pull it into the Scan box after the panel took it.
-      if (!isStale() && !docking.current) search.current?.focus()
+      // Not while a Workflow shows either: its field keeps focus, so the next scan lands there.
+      if (!isStale() && !docking.current && !workflowShowing.current) search.current?.focus()
     }
   }
 
@@ -203,7 +248,7 @@ export function App() {
     if (isStale()) return
     if (opensAt(view, showSettings).docked) {
       docking.current = true
-      setPanel((p) => ({ asset: full, form, n: (p?.n ?? 0) + 1 }))
+      setPanel({ asset: full, form, n: ++panelN.current })
     } else {
       setShowSettings(false)
       setAsset(full)
@@ -304,9 +349,7 @@ export function App() {
   }
 
   const selected = view ? (opensAt(view, showSettings).docked ? panel?.asset.id : undefined) : asset?.id
-  // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the panel, so it opens.
-  const showSegment = (s: AssetSegment) => (setPanelOpen(true), setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
-  const go = (page: ListKind, drill?: Drill, report?: SavedReport) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, n: cancel() }))
+  const go = (page: ListKind, drill?: Drill, report?: SavedReport, assetView?: AssetView) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, assetView, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
@@ -330,15 +373,17 @@ export function App() {
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
-  // The reload doesn't start the panel afresh, so a form open in it keeps what's typed.
-  const refreshPanel = (id: number) => {
-    const seen = panel, epoch = batchEpoch.current
-    window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ ...p, asset: full }), seen)), (e: Error) => epoch === batchEpoch.current && setMessage({ text: e.message, error: true }))
+  // n: the panel's open as the Bulk Action began, so a newer open (of the same Asset too) stays.
+  const refreshPanel = (id: number, n: number) => {
+    const epoch = batchEpoch.current
+    window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => epoch === batchEpoch.current && setMessage({ text: e.message, error: true }))
   }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
-  const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+
+  // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
+  const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -380,6 +425,14 @@ export function App() {
             <ListChecks size={18} />Batch
             {batch.length > 0 && <span className="badge">{batch.length}</span>}
           </button>
+          <button aria-label={`Workflows${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
+            <WorkflowsIcon size={18} />Workflows
+            {workflowsBusy > 0 && <span className="badge">{workflowsBusy}</span>}
+          </button>
+          {BUILT.map((w) => {
+            const Icon = workflowIcon[w]!
+            return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
+          })}
           <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
@@ -421,13 +474,16 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
+        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
-          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet key={opened} {...sheetProps(asset, () => deleted('assets', asset.id, asset.assetTag))} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
@@ -474,7 +530,8 @@ const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Locati
 // A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
 export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
 
-export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+// autoFocus: false keeps focus where it is (a half-typed scan in the Scan box) as the form opens.
+export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void>; autoFocus?: boolean }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
   const [statusId, setStatusId] = useState(a.statusId)
@@ -493,7 +550,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   return (
     <form className="actions" onSubmit={onSubmit}>
       <select
-        autoFocus
+        autoFocus={props.autoFocus ?? true}
         value={statusId ?? ''}
         onChange={(e) => setStatusId(Number(e.target.value))}
         disabled={off}
@@ -517,7 +574,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   )
 }
 
-export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void> }) {
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; autoFocus?: boolean }) {
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
@@ -564,7 +621,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
           <option value="location">Location</option>
         </select>
         <input
-          autoFocus
+          autoFocus={props.autoFocus ?? true}
           value={text}
           onChange={(e) => (setText(e.target.value), setTarget(null))}
           placeholder={`Search ${kind[targetType]}s by name…`}
@@ -592,7 +649,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void> }) {
+export function StatusForm({ asset: a, statusLabels, onSave, autoFocus = true }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void>; autoFocus?: boolean }) {
   const [statusId, setStatusId] = useState(a.statusId)
   const [busy, setBusy] = useState(false)
   const labels = statusChoices(statusLabels, a)
@@ -605,7 +662,7 @@ export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; s
   }
   return (
     <form className="actions" onSubmit={onSubmit}>
-      <select autoFocus value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
+      <select autoFocus={autoFocus} value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
         {statusId === null && <option value="" disabled>Choose a status</option>}
         {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -616,8 +673,8 @@ export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; s
 
 // Audit…'s form, in the Asset sheet or for a Selection (count): Next audit, left blank for Snipe-IT's audit interval, and an
 // optional one-line note. It is the confirmation: Enter or Audit sends it, Esc cancels. A note with a link is refused here.
-// busy: another Bulk Action is still running, so this one would not start.
-export function AuditForm({ count, busy: elsewhere, onAudit, onCancel }: { count?: number; busy?: boolean; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void }) {
+// busy: another Bulk Action is still running, so this one would not start. autoFocus: false keeps a half-typed scan where it is.
+export function AuditForm({ count, busy: elsewhere, onAudit, onCancel, autoFocus = true }: { count?: number; busy?: boolean; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void; autoFocus?: boolean }) {
   const [nextAudit, setNextAudit] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -642,7 +699,7 @@ export function AuditForm({ count, busy: elsewhere, onAudit, onCancel }: { count
   return (
     <form className="audit" onSubmit={onSubmit} onKeyDown={onKeyDown} aria-label={count === undefined ? 'Audit' : 'Audit the Selection'}>
       <div className="actions">
-        <label className="dim">Next audit <input autoFocus type="date" value={nextAudit} onChange={(e) => setNextAudit(e.target.value)} title="Left blank, Snipe-IT's audit interval sets it" /></label>
+        <label className="dim">Next audit <input autoFocus={autoFocus} type="date" value={nextAudit} onChange={(e) => setNextAudit(e.target.value)} title="Left blank, Snipe-IT's audit interval sets it" /></label>
         <input value={note} onChange={(e) => (setNote(e.target.value), setError(''))} placeholder="Note (optional)" aria-label="Audit note" />
         <button disabled={busy || elsewhere}>{busy ? 'Auditing…' : count === undefined ? 'Audit' : `Audit ${count.toLocaleString()} ${count === 1 ? 'Asset' : 'Assets'}`}</button>
         <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
@@ -681,10 +738,12 @@ export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void;
 export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
+  // Read as it renders, before a form's autoFocus moves it: a field holding text (a half-typed scan) keeps focus.
+  const active = document.activeElement
+  const takesFocus = panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')
   // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
   useEffect(() => {
-    const active = document.activeElement
-    if (docked && !initialForm && panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')) root.current?.focus()
+    if (docked && !initialForm && takesFocus) root.current?.focus()
   }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
   // An Audit that went through closes its form, even when the refresh after it failed, so it isn't sent twice by mistake.
@@ -720,7 +779,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
         {docked && <button className="panel-close" aria-label="Close the Asset panel" title="Close (Esc)" onClick={docked.onClose}><X size={16} /></button>}
         <div className="sheet-status-line">
           <StatusChip asset={a} />
-          {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
+          {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
           {a.warranty &&
             (a.warranty.expired ? (
               <span className="flag c-grey">Warranty expired</span>
@@ -743,10 +802,10 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
       {audited && <p className={`notice${audited.next ? ' done' : ''}`} role="status">{auditedLine(audited)}</p>}
       {form && (
         <div className="sheet-form">
-          {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />}
-          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
-          {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} />}
-          {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} />}
+          {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} autoFocus={takesFocus} />}
+          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} autoFocus={takesFocus} />}
+          {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} autoFocus={takesFocus} />}
+          {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} autoFocus={takesFocus} />}
         </div>
       )}
       <div className="grid">
@@ -798,7 +857,8 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
 
 
 const pieceName: Record<DashboardPiece, string> = {
-  assets: 'Assets', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
+  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location',
+  licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
   overdue: 'Overdue', expiring: 'Warranty expiring',
 }
 // Segment names for the kinds counted by quantity: used side, available side.
@@ -806,25 +866,35 @@ const splitNames = {
   licenses: ['In use', 'Free'], accessories: ['Checked out', 'Available'], consumables: ['Used', 'Remaining'],
   components: ['In use', 'Available'], users: ['Holding', 'Holding nothing'],
 } as const
-const isBar = (p: DashboardPiece) => p !== 'overdue' && p !== 'expiring'
+// Customize's groups, in screen order; a piece moves only within its own.
+const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
+type Group = (typeof GROUPS)[number]
+const pieceGroup: Record<DashboardPiece, Group> = {
+  assets: 'Charts', categories: 'Charts', locations: 'Charts',
+  licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
+  overdue: 'Tables', expiring: 'Tables',
+}
+const chartColumn: Record<ChartPiece, string> = { assets: 'Status Label', categories: 'Category', locations: 'Location' }
 
-// Stored per computer: which pieces show, in what order (bars first, then tables).
+// Stored per computer: which pieces show, in what order (by group).
 type Layout = { piece: DashboardPiece; show: boolean }[]
 const LAYOUT_KEY = 'dashboardLayout'
-function readLayout(): Layout {
+/** The layout from what's stored (or null). The assets piece was the Inventory Chart's Assets bar and is now the Status Label
+ * chart, so hiding one hid the other. */
+export function layoutFrom(saved: string | null): Layout {
   let stored: Layout = []
   try {
-    stored = (JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '[]') as Layout)
+    stored = (JSON.parse(saved ?? '[]') as Layout)
       .filter((p, i, list) => DASHBOARD_PIECES.includes(p?.piece) && list.findIndex((q) => q.piece === p.piece) === i)
       .map(({ piece, show }) => ({ piece, show: show !== false }))
   } catch {}
   // A piece missing from the stored layout (e.g. new in this version) shows, right after the piece before it by default.
   for (const [i, piece] of DASHBOARD_PIECES.entries())
     if (!stored.some((p) => p.piece === piece)) stored.splice(stored.findIndex((p) => p.piece === DASHBOARD_PIECES[i - 1]) + 1, 0, { piece, show: true })
-  return [...stored.filter((p) => isBar(p.piece)), ...stored.filter((p) => !isBar(p.piece))]
+  return stored.sort((a, b) => GROUPS.indexOf(pieceGroup[a.piece]) - GROUPS.indexOf(pieceGroup[b.piece]))
 }
 
-type Segment = { name: string; count: number; color: string; onClick?: () => void }
+type Segment = { name: string; count: number; color: string }
 
 function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
   if (!Array.isArray(entry))
@@ -840,32 +910,80 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
     <div className="bar-row">
       <span className="bar-name">{name}</span>
       <div className="bar">
-        {entry.filter((s) => s.count).map((s) =>
-          s.onClick
-            // Mouse only; the labelled button in the key underneath is the keyboard's way in, so Tab stops once per segment.
-            ? <button key={s.name} style={{ flexGrow: s.count, background: s.color }} onClick={s.onClick} title={`${s.name} ${s.count}`} tabIndex={-1} aria-hidden />
-            : <span key={s.name} style={{ flexGrow: s.count, background: s.color }} title={`${s.name} ${s.count}`} />)}
+        {entry.filter((s) => s.count).map((s) => <span key={s.name} style={{ flexGrow: s.count, background: s.color }} title={`${s.name} ${s.count}`} />)}
       </div>
       <span className="bar-total">{total.toLocaleString()}</span>
       <div className="bar-key">
-        {entry.map((s) => {
-          const text = <><i style={{ background: s.color }} />{s.name} <b>{s.count.toLocaleString()}</b></>
-          return s.onClick ? <button key={s.name} onClick={s.onClick}>{text}</button> : <span key={s.name}>{text}</span>
-        })}
+        {entry.map((s) => <span key={s.name}><i style={{ background: s.color }} />{s.name} <b>{s.count.toLocaleString()}</b></span>)}
       </div>
     </div>
   )
 }
 
+const healthName: Record<HealthLine['warning'], string> = {
+  unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
+}
+// red: fix it now; amber: keep an eye on it.
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber' }
+
+// The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
+function HealthStrip({ health, onRetry, onSettings, onAssetView }: {
+  health: { lines: HealthLine[]; at: string } | Failed | null
+  onRetry: () => void
+  onSettings: () => void
+  onAssetView: (v: AssetView) => void
+}) {
+  if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
+  if ('error' in health)
+    return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
+  const line = (l: HealthLine) => {
+    if ('error' in l) return <><b>{l.warning === 'tooOld' ? 'Snipe-IT version' : healthName[l.warning]}</b> <span>Couldn't check: {l.error}</span></>
+    if ('message' in l)
+      return <>
+        <b>{healthName[l.warning]}</b> <span>{l.message}</span>
+        <span className="health-actions">
+          {l.warning === 'unreachable' && <button onClick={onRetry}>Retry</button>}
+          <button onClick={onSettings}>Settings</button>
+        </span>
+      </>
+    if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
+    return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
+  }
+  return (
+    <section className="health" aria-label="Health warnings" aria-live="polite">
+      {health.lines.length
+        ? health.lines.map((l) => <p key={l.warning} className={`health-line c-${healthTone[l.warning]}`}>{line(l)}</p>)
+        : <p className="health-line c-green">All clear <span className="dim">Checked {health.at}</span></p>}
+    </section>
+  )
+}
+
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; onSegment: (s: AssetSegment) => void }) {
-  const [layout, setLayout] = useState(readLayout)
+function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
+  onPick: (id: number) => void
+  onDrill: (d: Drill) => void
+  onAssetView: (v: AssetView) => void
+  onSettings: () => void
+}) {
+  const [layout, setLayout] = useState(() => layoutFrom(localStorage.getItem(LAYOUT_KEY)))
   const [customizing, setCustomizing] = useState(false)
   const [data, setData] = useState<Dashboard>({})
   const [loadedAt, setLoadedAt] = useState('')
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
+  // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
+  const [health, setHealth] = useState<(Health & { lines: HealthLine[]; at: string }) | Failed | null>(null)
+  const latestHealth = useRef(0)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
+
+  // On open and Refresh only, not when Customize shows a piece; the last result stays up while a new one loads.
+  function check() {
+    const mine = ++latestHealth.current
+    window.snipeIt.health().then(
+      (h) => mine === latestHealth.current && setHealth({ ...h, lines: healthLines(h), at: new Date().toLocaleTimeString() }),
+      (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
+  }
+  useEffect(check, [])
 
   function load() {
     const mine = ++latest.current
@@ -884,28 +1002,31 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
   useEffect(load, [[...shown].sort().join()])
   useEffect(() => localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)), [layout])
 
-  // Moves a piece within its group (bars or tables) only.
+  // Moves a piece within its group only; the layout is kept in group order, so its neighbours in the group are beside it.
   const move = (piece: DashboardPiece, by: -1 | 1) => setLayout((layout) => {
-    const group = layout.filter((p) => isBar(p.piece) === isBar(piece))
-    const i = group.findIndex((p) => p.piece === piece)
-    if (!group[i + by]) return layout
-    ;[group[i], group[i + by]] = [group[i + by], group[i]]
-    return isBar(piece) ? [...group, ...layout.filter((p) => !isBar(p.piece))] : [...layout.filter((p) => isBar(p.piece)), ...group]
+    const i = layout.findIndex((p) => p.piece === piece)
+    if (pieceGroup[layout[i + by]?.piece] !== pieceGroup[piece]) return layout
+    const next = [...layout]
+    ;[next[i], next[i + by]] = [next[i + by], next[i]]
+    return next
   })
   const toggle = (piece: DashboardPiece) => setLayout((layout) => layout.map((p) => (p.piece === piece ? { ...p, show: !p.show } : p)))
 
   function segments(piece: DashboardPiece): Segment[] | Failed | undefined {
     const entry = data[piece]
     if (!entry || 'error' in entry) return entry
-    if (piece === 'assets')
-      return (entry as AssetSegment[]).map((s) => ({
-        name: s.status || 'No status', count: s.count,
-        // Snipe-IT's label color as-is; a label without one gets the app's usual color for its kind of status.
-        color: s.color ?? `var(--${statusColor[s.statusMeta] ?? 'grey'})`, onClick: () => onSegment(s),
-      }))
     const { used, available } = entry as { used: number; available: number }
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
+  }
+  function chart(piece: ChartPiece) {
+    const entry = data[piece]
+    const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
+    return (
+      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} dots={piece === 'assets'} rows={rows} onDrill={onDrill}>
+        {(rows) => (piece === 'assets' ? <Donut rows={rows} onDrill={onDrill} /> : <Bars rows={rows} onDrill={onDrill} />)}
+      </ChartCard>
+    )
   }
 
   const tag = (a: AssetSummary) => (
@@ -930,7 +1051,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th className="num">Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -938,7 +1059,8 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   {tag(a)}
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late num">{a.overdueDays}d</td>
+                  <td>{a.expectedCheckin}</td>
+                  <td className="late num">{lateness(a.overdue)}</td>
                 </tr>
               ))}
             </tbody>
@@ -971,7 +1093,8 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
     )
   }
 
-  const bars = layout.filter((p) => p.show && isBar(p.piece)).flatMap(({ piece }) => {
+  const showing = (group: Group) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
+  const bars = showing('Inventory Chart').flatMap((piece) => {
     const entry = segments(piece)
     return entry ? [<BarRow key={piece} name={pieceName[piece]} entry={entry} />] : []
   })
@@ -982,15 +1105,16 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
         <span className="dim">{loading ? 'Loading…' : loadedAt && `Loaded ${loadedAt}`}</span>
         <div className="actions">
           <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Customize</button>
-          <button onClick={load} disabled={loading}>Refresh</button>
+          <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
+      <HealthStrip health={health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} />
       {customizing && (
         <div className="customize">
-          {(['Chart', 'Tables'] as const).map((group) => (
+          {GROUPS.map((group) => (
             <ol key={group} aria-label={group}>
               <li className="k">{group}</li>
-              {layout.filter((p) => isBar(p.piece) === (group === 'Chart')).map((p, i, list) => (
+              {layout.filter((p) => pieceGroup[p.piece] === group).map((p, i, list) => (
                 <li key={p.piece}>
                   <label>
                     <input type="checkbox" checked={p.show} onChange={() => toggle(p.piece)} />
@@ -1004,13 +1128,14 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           ))}
         </div>
       )}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece))}</div>}
       {bars.length > 0 && (
-        <>
-          <div className="section">Inventory Chart</div>
+        <section className="card inventory" aria-label="Inventory Chart">
+          <header><h2>Inventory Chart</h2></header>
           <div className="chart">{bars}</div>
-        </>
+        </section>
       )}
-      {layout.filter((p) => p.show && !isBar(p.piece)).map(({ piece }) => table(piece))}
+      {showing('Tables').map((piece) => table(piece))}
     </>
   )
 }

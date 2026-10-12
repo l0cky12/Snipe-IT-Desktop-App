@@ -103,12 +103,27 @@ export function listKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | '
     default: return null
   }
 }
+/** Whether ↑/↓ take the Asset panel along and Esc closes it: while it shows, or while an open is still loading (the first, before
+ * any panel shows), so that open can't land after and pull the focused row back, or open a panel the Operator dismissed. */
+export const panelLive = (shown: boolean, loading: boolean) => shown || loading
+/** The panel's Asset to reload when a Bulk Action ends: only the open that showed as the run began (n), and only if the run changed
+ * it without deleting it. An open made mid-run (a Quick Action's form) is newer and keeps its inputs. */
+export const panelToRefresh = (startN: number | undefined, panel: { n: number; id: number } | null, run: { deletes?: true; records: { id: number }[] } | null) =>
+  panel && panel.n === startN && !run?.deletes && run?.records.some((r) => r.id === panel.id) ? panel.id : undefined
 /** The row focused after ↑ (-1) or ↓ (1): the next one on the page, stopping at either end; from none, the first or the last. */
 export function moveCursor(ids: number[], at: number | null, by: -1 | 1): number | null {
   if (!ids.length) return null
   const i = at === null ? -1 : ids.indexOf(at)
   return i < 0 ? ids[by > 0 ? 0 : ids.length - 1] : ids[Math.min(ids.length - 1, Math.max(0, i + by))]
 }
+/** Gives the List's row for id DOM focus (it's focusable, but not in the Tab order), so after ↑/↓ Enter and Space act on the row shown
+ * rather than a button on the row focus was left on. */
+export const focusRow = (table: Pick<ParentNode, 'querySelector'> | null, id: number) =>
+  table?.querySelector<HTMLElement>(`tr[data-id="${id}"]`)?.focus({ preventScroll: true })
+/** Starts opening a row's Asset in the Asset panel (its first column or a Quick Action): the focused row moves onto it at once, not when
+ * the fetch lands, so ↑/↓ meanwhile move on from it. */
+export const openRow = (setCursor: (id: number) => void, onOpenAsset: (id: number, form?: SheetForm) => void) => (id: number, form?: SheetForm) =>
+  (setCursor(id), onOpenAsset(id, form))
 /** The Asset docked in the Asset panel (App owns it, so a scan can open it), with the form a Quick Action opened. */
 export type ListPanel = { n: number; form?: SheetForm; sheet: SheetProps }
 
@@ -181,13 +196,15 @@ export const auditAction = (o: AuditOptions): BulkAction =>
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 // report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, onRefreshPanel, onDropPanel }: {
+export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, panelLoading, onRefreshPanel, onDropPanel }: {
   onNew: (kind: EditKind) => void
   // The Asset panel (Assets only): what it shows, and closing it.
   panel: ListPanel | null
   onClosePanel: () => void
+  // A lookup or open still loading, which ↑/↓ supersede.
+  panelLoading: boolean
   // When a Bulk Action ends: reload the panel's Asset, or close the panel after a delete; neither cancels an open still loading.
-  onRefreshPanel: (id: number) => void
+  onRefreshPanel: (id: number, n: number) => void
   onDropPanel: (id: number) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
@@ -200,13 +217,15 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   onBatch: (a: AssetSummary[]) => void
   drill?: Drill
   report?: SavedReport
+  /** Opens the Assets List on this View instead of All (a Health warning's click). */
+  assetView?: AssetView
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
   // On the Assets List an Asset opens in the Asset panel; form: the form a Quick Action opens there.
   onOpenAsset: (id: number, form?: SheetForm) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
-  const [start] = useState(() => opening(drill, report))
+  const [start] = useState(() => (assetView ? picking(assetView) : opening(drill, report)))
   const [view, setView] = useState(start.view)
   const [text, setText] = useState(start.search)
   const [search, setSearch] = useState(start.search)
@@ -224,6 +243,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const [customizing, setCustomizing] = useState(false)
   // The row ↑/↓ have moved to (Assets only), by id.
   const [cursor, setCursor] = useState<number | null>(null)
+  const openAsset = openRow(setCursor, onOpenAsset)
   // The id of the panel's Asset once it's found outside the open View; kept while a reload checks again, so the notice doesn't blink.
   const [outside, setOutside] = useState<number | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
@@ -249,11 +269,14 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   // The List refreshes when its run ends (finished or stopped), and so does the Asset panel if the run included its Asset.
   const running = !!mine?.busy
   const wasRunning = useRef(running)
+  // The panel's open (n) as the run began.
+  const startN = useRef<number>(undefined)
   useEffect(() => {
+    if (!wasRunning.current && running) startN.current = panel?.n
     if (wasRunning.current && !running) {
       setReloads((n) => n + 1)
-      const shown = panel?.sheet.asset.id
-      if (shown !== undefined && !mine?.deletes && mine?.records.some((r) => r.id === shown)) onRefreshPanel(shown)
+      const shown = panelToRefresh(startN.current, panel && { n: panel.n, id: panel.sheet.asset.id }, mine)
+      if (shown !== undefined) onRefreshPanel(shown, startN.current!)
     }
     wasRunning.current = running
   }, [running])
@@ -362,7 +385,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
   function open(row: Row): (() => void) | undefined {
-    if (kind === 'assets') return () => onOpenAsset(row.id)
+    if (kind === 'assets') return () => openAsset(row.id)
     if (kind !== 'activity') return () => onOpenRecord(kind, row.id)
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
@@ -430,8 +453,9 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       const next = moveCursor(ids, cursor, k === 'up' ? -1 : 1)
       if (next === null) return
       setCursor(next)
+      focusRow(table.current, next)
       // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
-      if (panel) onOpenAsset(next)
+      if (panelLive(!!panel, panelLoading)) onOpenAsset(next)
     } else if (k === 'open') {
       if (cursor === null || !ids.includes(cursor)) return
       onOpenAsset(cursor)
@@ -439,7 +463,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       // The focused row, which the panel follows (and which ↑/↓ move before the panel catches up); with none, the panel's Asset (a scan, then Space).
       if (!tickRow(rows.find((r) => r.id === cursor) ?? panelRow())) return
     } else if (k === 'close') {
-      if (!panel) return
+      if (!panelLive(!!panel, panelLoading)) return
       onClosePanel()
     } else return
     e.preventDefault()
@@ -591,10 +615,10 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
               const a = row as Asset
               // Open in the Asset panel, focused by ↑/↓, ticked.
               const docked = kind === 'assets' && panelAsset?.id === row.id
-              const quickProps = (form: SheetForm) => ({ onClick: () => onOpenAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
+              const quickProps = (form: SheetForm) => ({ onClick: () => openAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
               const inBatch = batch.some((b) => b.id === a.id)
               return (
-                <tr key={row.id} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
+                <tr key={row.id} {...(kind === 'assets' && { 'data-id': row.id, tabIndex: -1 })} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
                   {selectable && (
                     <td className="tick">
                       <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
