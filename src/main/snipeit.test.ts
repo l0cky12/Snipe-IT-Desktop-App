@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -755,6 +755,7 @@ describe('dashboard (today is 2026-09-24)', () => {
   // A fake Snipe-IT that pages each list (hardware, licenses, users, …) by limit/offset, capped at pageMax.
   // A list given as { status, body } answers that instead, e.g. a permission error. Records every URL it was asked for.
   // A status filter is its own list, e.g. 'hardware?status=Archived'; the fake answers it with nothing unless given.
+  // A search keeps the rows that mention it anywhere, as Snipe-IT's does across a row's fields.
   type Refusal = { status?: number; body: unknown }
   function fleet(lists: Record<string, object[] | Refusal>, pageMax = 500) {
     const urls: URL[] = []
@@ -766,13 +767,15 @@ describe('dashboard (today is 2026-09-24)', () => {
       const list = status ? lists[`${path}?status=${status}`] ?? [] : lists[path]
       if (!list) return new Response(JSON.stringify(notFound), { status: 404 })
       if (!Array.isArray(list)) return new Response(JSON.stringify(list.body), { status: list.status ?? 200 })
+      const search = url.searchParams.get('search')?.toLowerCase()
+      const rows = search ? list.filter((r) => JSON.stringify(r).toLowerCase().includes(search)) : list
       const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), pageMax)
       const offset = Number(url.searchParams.get('offset') ?? 0)
-      return new Response(JSON.stringify({ total: list.length, rows: list.slice(offset, offset + limit) }))
+      return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(offset, offset + limit) }))
     }) as typeof globalThis.fetch
     const offsets = (list: string) => urls.filter((u) => u.pathname === `/api/v1/${list}` && !u.searchParams.has('status')).map((u) => Number(u.searchParams.get('offset')))
     const listsAsked = () => [...new Set(urls.map((u) => u.pathname.replace('/api/v1/', '')))].sort()
-    return { snipeIt: createSnipeIt(config, fetch, today), fetch, offsets, listsAsked }
+    return { snipeIt: createSnipeIt(config, fetch, today), fetch, urls, offsets, listsAsked }
   }
   const asset = (id: number, fields: object = {}) => ({
     ...chromebook, id, asset_tag: `NOMMA-${id}`, expected_checkin: null, warranty_expires: null, ...fields,
@@ -847,7 +850,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     const late = { expected_checkin: { datetime: '2026-09-01 00:00:00' }, warranty_expires: { date: '2026-10-01' } }
     const { snipeIt } = fleet({ hardware: [asset(1, late)], 'hardware?status=Archived': [asset(9, { ...late, status_label: archived })] })
     const { overdue, expiring } = await snipeIt.dashboard(['overdue', 'expiring'])
-    expect([overdue, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
+    expect([overdue && 'rows' in overdue && overdue.rows, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
   })
 
   it("Status Labels that can't be loaded leave every label without a color, its kind read from the Asset (deployed is deployable)", async () => {
@@ -882,11 +885,80 @@ describe('dashboard (today is 2026-09-24)', () => {
       asset(5), // no Expected Checkin: never Overdue
     ] })
     const { overdue } = await snipeIt.dashboard(['overdue'])
-    if (!Array.isArray(overdue)) throw new Error('expected rows')
-    expect(overdue.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
+    if (!overdue || !('rows' in overdue)) throw new Error('expected rows')
+    expect(overdue.rows.map((a) => [a.assetTag, a.expectedCheckin, lateness(a.overdue)])).toEqual([
       ['NOMMA-3', '2026-09-01', '23d'], ['NOMMA-6', '2026-09-23 14:50', '1d'], ['NOMMA-1', '2026-09-23', '1d'],
     ])
-    expect(overdue[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+    expect(overdue.rows[0]).toMatchObject({ id: 3, name: 'CB-LIB-012', assignee: { type: 'user', id: 311, name: 'Jordan Reyes' } })
+  })
+
+  // Outstanding Temp checkouts (#61 §2). Today is 2026-09-24, so every 14:50 due time on the 23rd has passed.
+  const checkedOut = (id: number, due: string, lastCheckout: string) =>
+    asset(id, { expected_checkin: { datetime: due }, last_checkout: { datetime: lastCheckout, formatted: lastCheckout } })
+  const logged = (id: number, item: number, when: string, note: string) => ({
+    id, action_type: 'checkout', created_at: { datetime: when }, created_by: { id: 5, name: 'Demo Operator' },
+    target: { id: 311, name: 'Jordan Reyes', type: 'user' }, note, item: { id: item, name: `NOMMA-${item}`, type: 'asset' },
+  })
+  const tempFleet = (pageMax?: number) => fleet({
+    hardware: [
+      checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
+      checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
+      checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
+      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
+      checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
+    ],
+    // Newest first, as asked for.
+    'reports/activity': [
+      logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
+      logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
+      logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
+      logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
+      logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
+      logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
+      logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
+    ],
+  }, pageMax)
+  const temps = (overdue: Dashboard['overdue']) => (overdue && 'rows' in overdue ? overdue.rows.filter((a) => a.temp).map((a) => a.id).sort() : overdue)
+
+  it('marks Overdue Temp checkouts: a tagged current Checkout or an undo-restored tag, not a later Checkout or a date-only one', async () => {
+    const { snipeIt, urls } = tempFleet()
+    const { overdue } = await snipeIt.dashboard(['overdue'])
+    expect(temps(overdue)).toEqual([1, 4])
+    expect(overdue && 'rows' in overdue && overdue.rows.map((a) => a.id)).toEqual([3, 2, 1, 4, 5])
+    // One request: only tagged Checkouts, newest first, and the first page already reaches back past the oldest candidate.
+    const asked = urls.filter((u) => u.pathname === '/api/v1/reports/activity')
+    expect(asked.map((u) => Object.fromEntries(u.searchParams))).toEqual([
+      { action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: '500', offset: '0' },
+    ])
+  })
+
+  it('pages the Activity Report only until past the oldest candidate\'s last Checkout', async () => {
+    const { snipeIt, offsets } = tempFleet(2)
+    expect(temps((await snipeIt.dashboard(['overdue'])).overdue)).toEqual([1, 4])
+    // The second page ends at the oldest candidate's own Checkout; the third goes past it, so a fourth isn't asked for.
+    expect(offsets('reports/activity')).toEqual([0, 2, 4])
+  })
+
+  it('asks the Activity Report nothing when no checked-out Asset has a time of day', async () => {
+    const { snipeIt, listsAsked } = fleet({ hardware: [asset(1, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, last_checkout: { datetime: '2026-08-31 09:00:00' } })] })
+    expect(temps((await snipeIt.dashboard(['overdue'])).overdue)).toEqual([])
+    expect(listsAsked()).toEqual(['hardware'])
+  })
+
+  it('an Activity Report Snipe-IT refuses still lists Overdue, with no Temp marks and the reason', async () => {
+    const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+    const { snipeIt } = fleet({ hardware: [checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12')], 'reports/activity': refused })
+    expect((await snipeIt.dashboard(['overdue'])).overdue).toEqual({
+      rows: [expect.objectContaining({ id: 1, temp: false })], tempError: 'Snipe-IT returned HTTP 403: You do not have permission to view the Activity Report.',
+    })
+  })
+
+  it('Temp only keeps the Temp checkouts, and Health warning 5 counts the same list', async () => {
+    const { overdue } = await tempFleet().snipeIt.dashboard(['overdue'])
+    if (!overdue || !('rows' in overdue)) throw new Error('expected rows')
+    expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
+    expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
+    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, null, overdue)).toEqual([{ warning: 'temp', count: 2 }])
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
@@ -1098,6 +1170,18 @@ describe('Health warnings', () => {
     expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
   })
 
+  it('lines: Temp checkouts Overdue counts the marked rows, says why it could not check, and is hidden at 0', () => {
+    const fine = { probe: { version: 'v8.8.0' }, auditLate: 4, auditDue: 2 } as const
+    const row = (temp: boolean) => ({ temp }) as NonNullable<Exclude<Dashboard['overdue'], { error: string }>>['rows'][number]
+    expect(healthLines(fine, null, { rows: [row(true), row(false), row(true)] })).toEqual([{ warning: 'auditLate', count: 4 }, { warning: 'temp', count: 2 }, { warning: 'auditDue', count: 2 }])
+    expect(healthLines(fine, null, { rows: [row(false)] })).toHaveLength(2)
+    expect(healthLines(fine, null, { rows: [], tempError: 'No Activity Report for you.' })).toContainEqual({ warning: 'temp', error: 'No Activity Report for you.' })
+    expect(healthLines(fine, null, { error: 'No Assets for you.' })).toContainEqual({ warning: 'temp', error: 'No Assets for you.' })
+    expect(healthLines(fine)).toHaveLength(2) // the Overdue list hasn't loaded yet
+    // Temp checkouts Overdue is red, so it comes before the amber Newer Snipe-IT available.
+    expect(healthLines(fine, { tag: 'v9.0.0', url: '' }, { rows: [row(true)] }).map((l) => l.warning)).toEqual(['auditLate', 'temp', 'newer', 'auditDue'])
+  })
+
   it('lines: Newer Snipe-IT available for any newer release, patches included, after Audit late', () => {
     const release = (tag: string) => ({ tag, url: `https://github.com/grokability/snipe-it/releases/tag/${tag}` })
     const newer = (running: string, tag: string) => healthLines({ probe: { version: running }, auditLate: 0, auditDue: 0 }, release(tag))
@@ -1118,7 +1202,7 @@ describe('Health warnings', () => {
     const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
     expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
     const key = { warning: 'key', message: 'Snipe-IT rejected your API key.' } as const
-    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 })).toEqual([key])
+    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 }, null, { error: 'Snipe-IT rejected your API key.' })).toEqual([key])
   })
 })
 
