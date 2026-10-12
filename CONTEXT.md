@@ -171,13 +171,6 @@ _Avoid_: incident note, damage report
 An Asset between Repair intake and Incoming repair: broken, waiting for or away at repair. It's the Status Label named 'Damaged' in Snipe-IT, which the app finds by name. A Damaged Asset normally has an open Maintenance.
 _Avoid_: broken, in repair (one state covers both)
 
-**User notes line**:
-The one dated line Repair intake adds to a User's notes about an Asset they returned damaged, naming the Asset Tag and the Operator. It says what happened to the Asset, never anything about the User. If Snipe-IT refuses the write, the Operator can copy the line and add it by hand.
-_Avoid_: incident note, damage report
-
-**Maintenance**:
-Snipe-IT's record of a repair on one Asset. Repair intake opens it; Incoming repair closes it, adding the Supplier and Repair cost if given.
-_Avoid_: ticket, work order, RMA
 **Damaged since**:
 When an Asset became Damaged: the start date of its open Maintenance, or of its Repair intake. "Not recorded" when it was set Damaged outside the app.
 

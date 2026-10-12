@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
+import type { ReleaseCache } from './release'
 import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
@@ -61,7 +62,8 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; repairTypeId?: number | null }
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
+  release?: ReleaseCache; repairTypeId?: number | null }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -221,6 +223,11 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
       return get()
+    },
+    /** The newer Snipe-IT release check's cache and hidden tag, on this PC (see createReleaseCheck). */
+    release: (): ReleaseCache => read().release ?? {},
+    saveRelease(release: ReleaseCache) {
+      write({ ...read(), release })
     },
     // Not checked against Snipe-IT: Operator keys can't read Maintenance types. A wrong id shows on Repair intake's rows.
     saveRepairs(maintenanceTypeId: string) {

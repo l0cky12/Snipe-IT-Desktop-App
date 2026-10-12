@@ -1,4 +1,4 @@
-import type { ListKind, ListRows } from './snipeit'
+import { ASSET_VIEWS, type AssetView, type ListKind, type ListRows } from './snipeit'
 
 // What Export writes, shared by the window (Export CSV) and the Report scheduler (the emailed CSV), so the two match.
 
@@ -22,16 +22,20 @@ export type AnyColumn = { key: string; label: string; hidden?: true; text?: (row
 export const LIST_COLUMNS: { [K in ListKind]: ListColumn<K>[] } = {
   assets: [
     { key: 'assetTag', label: 'Asset Tag' },
-    { key: 'name', label: 'Name' },
+    { key: 'name', label: 'Name', hidden: true },
     { key: 'status', label: 'Status' },
     { key: 'model', label: 'Asset Model' },
-    { key: 'category', label: 'Category' },
-    { key: 'location', label: 'Location' },
+    { key: 'category', label: 'Category', hidden: true },
     { key: 'assignee', label: 'Assignee', text: (a) => a.assignee?.name },
+    { key: 'location', label: 'Location' },
     { key: 'serial', label: 'Serial', hidden: true },
     { key: 'expectedCheckin', label: 'Expected checkin', hidden: true },
+    { key: 'lastAudited', label: 'Last audited', hidden: true },
+    { key: 'nextAudit', label: 'Next audit', hidden: true },
     { key: 'purchaseDate', label: 'Purchased', hidden: true },
+    { key: 'purchaseCost', label: 'Purchase cost', hidden: true },
     { key: 'warrantyEnd', label: 'Warranty ends', hidden: true },
+    { key: 'endOfLife', label: 'End of life', hidden: true },
   ],
   users: [
     { key: 'name', label: 'Name' },
@@ -102,6 +106,12 @@ export function shownColumns(kind: ListKind, stored: unknown): string[] {
   const all: AnyColumn[] = LIST_COLUMNS[kind]
   if (Array.isArray(stored)) return all.filter((c, i) => i === 0 || stored.includes(c.key)).map((c) => c.key)
   return all.filter((c) => !c.hidden).map((c) => c.key)
+}
+
+/** The Columns an Assets View shows: the Operator's, plus the View's own column, which always shows in its View. */
+export function viewColumns(shown: string[], view: AssetView): string[] {
+  const column = ASSET_VIEWS[view].column
+  return column && !shown.includes(column) ? [...shown, column] : shown
 }
 
 /** A cell's text as the List shows it (a status, an Assignee's name); empty where the List shows a dash. */

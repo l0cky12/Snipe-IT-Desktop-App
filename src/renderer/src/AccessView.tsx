@@ -61,7 +61,7 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
           <div className="actions">
             {access.groups.length === 0 && <span className="dim">None</span>}
             {access.groups.map((g) => (
-              <span key={g.id} className="chip c-blue">
+              <span key={g.id} className="flag c-blue">
                 {g.name}
                 {canManage && <button className="chip-x" disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== g.id))} aria-label={`Remove from ${g.name}`}>×</button>}
               </span>
@@ -153,7 +153,7 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
   return (
     <form onSubmit={save}>
       <header className="head">
-        <h1>{group?.name ?? 'Permission group'}<span className="sub">Permission group</span></h1>
+        <h1><span className="dim">Permission groups{group && ' / '}</span>{group?.name}</h1>
         <div className="actions">
           <button type="button" className="quiet" onClick={() => onDone(null)}>Back</button>
           <button disabled={busy || !group}>{busy ? 'Saving…' : 'Save'}</button>
