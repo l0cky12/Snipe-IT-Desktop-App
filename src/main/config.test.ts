@@ -194,15 +194,17 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   expect(relaunched.schedules()).toEqual([])
 })
 
-it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts', () => {
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
   const { store } = setup()
   for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
   const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
-  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited'])
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory'])
   expect(ranged).toEqual(RANGED_REPORTS)
   // The Schedule form shows the range choice by the same rule.
   expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
   expect(takesRange({ saved: 'x' })).toBe(false)
+  // The snapshot Reports send what's true at the time.
+  for (const builtIn of ['statusLocation', 'checkedOut'] as const) expect(store.schedules().find((s) => 'builtIn' in s.report && s.report.builtIn === builtIn)?.schedule).not.toHaveProperty('range')
 })
 
 it('refuses a schedule it could not keep', () => {
@@ -281,4 +283,17 @@ it('keeps the School calendar as checked entries sorted by date; a bad line refu
   expect(createSettingsStore(path, storage, '0.1.0').get().schoolCalendar).toEqual(saved.schoolCalendar)
   // An empty box: every weekday is a School day.
   expect(store.saveSchoolCalendar('\n  \n').schoolCalendar).toEqual([])
+})
+
+it('keeps the Maintenance type for repairs blank until set: a whole number above 0, or blank for none, kept across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().repairTypeId).toBeNull()
+  store.save(input)
+  expect(store.saveRepairs(' 12 ').repairTypeId).toBe(12)
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, repairTypeId: 12 })
+  for (const bad of ['0', '-3', '1.5', '1e3', 'abc', '12 34', '99999999999999999999', 7 as never, null as never])
+    expect(() => relaunched.saveRepairs(bad)).toThrow('Maintenance type for repairs must be a whole number above 0, or blank.')
+  expect(relaunched.get().repairTypeId).toBe(12)
+  expect(relaunched.saveRepairs('  ').repairTypeId).toBeNull()
 })

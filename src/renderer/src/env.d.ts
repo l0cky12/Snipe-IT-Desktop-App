@@ -3,6 +3,7 @@ import type { SnipeItBridge } from '../../main/snipeit'
 
 import type { SettingsApi } from '../../main/config'
 import type { LabelApi } from '../../main/index'
+import type { ReleaseApi } from '../../main/release'
 import type { ReportsApi } from '../../main/scheduler'
 import type { ReminderApi } from '../../main/reminder'
 
@@ -12,6 +13,7 @@ declare global {
     settings: SettingsApi
     label: LabelApi
     reports: ReportsApi
+    releases: ReleaseApi
     reminder: ReminderApi
   }
 }

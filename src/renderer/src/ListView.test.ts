@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { allMatching, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { CheckinOptions, CheckoutOptions } from '../../main/snipeit'
+import { auditAction, mayAudit, allMatching, cantCheckin, cantCheckout, checkinAction, checkoutAction, eachInTurn, focusRow, openRow, panelLive, panelToRefresh, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun, type Outcome } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -70,7 +71,7 @@ describe('Selection', () => {
     expect(pageTicks(new Map(), [])).toBe('none')
   })
 
-  it('a ticked row reloaded with new values carries them, so Add to Batch sends what Snipe-IT has now', () => {
+  it('a ticked row reloaded with new values carries them, so a Bulk Action sends what Snipe-IT has now', () => {
     const s = refreshed(tick(new Map(), page1), [{ id: 2, name: 'Room 2 (renamed)' }, row(9)])
     expect([...s.values()]).toEqual([row(1), { id: 2, name: 'Room 2 (renamed)' }, row(3)])
   })
@@ -99,7 +100,7 @@ describe('Selection', () => {
 })
 
 describe('Bulk delete', () => {
-  const allowed = { checkout: true, checkin: true, update: true, delete: true }
+  const allowed = { checkout: true, checkin: true, update: true, delete: true, audit: true }
   const row = (id: number, del = true) => ({ id, can: { ...allowed, delete: del } })
 
   it('the confirmation names the count and kind', () => {
@@ -138,13 +139,41 @@ describe('Bulk delete', () => {
 })
 
 describe('Bulk edit', () => {
-  const row = (id: number, update = true) => ({ id, can: { checkout: true, checkin: true, update, delete: true } })
+  const row = (id: number, update = true) => ({ id, can: { checkout: true, checkin: true, update, delete: true, audit: true } })
 
   it("is offered on a Selection of Assets or Users when Snipe-IT lets the Operator edit what's selected", () => {
     expect(mayEdit('assets', [row(1), row(2)])).toBe(true)
     expect(mayEdit('users', [row(1)])).toBe(true)
     expect(mayEdit('assets', [row(1, false), row(2, false)])).toBe(false)
     expect(mayEdit('locations', [row(1)])).toBe(false)
+  })
+})
+
+describe('Bulk audit', () => {
+  const row = (id: number, audit = true) => ({ id, can: { checkout: true, checkin: true, update: true, delete: true, audit } })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('is offered on a Selection of Assets when Snipe-IT lets the Operator audit any of them', () => {
+    expect(mayAudit('assets', [row(1, false), row(2)])).toBe(true)
+    expect(mayAudit('assets', [row(1, false)])).toBe(false)
+    expect(mayAudit('users', [row(1)])).toBe(false)
+  })
+
+  it('sends one Audit per Asset, each with the same Next audit and note, and says what each did', async () => {
+    const audit = vi.fn(async (id: number) => {
+      if (id === 2) throw new Error('You do not have permission to audit this asset.')
+      return { was: id === 1 ? '2026-10-01' : null, next: id === 1 ? '2027-10-10' : null }
+    })
+    vi.stubGlobal('window', { snipeIt: { audit } })
+    const action = auditAction({ nextAudit: '2027-10-10', note: 'Room 204' })
+    const results: [number, Outcome][] = []
+    await eachInTurn([1, 2, 3], action.work, action.done, (id, o) => o.state !== 'working' && results.push([id, o]))
+    expect(audit.mock.calls).toEqual([[1, { nextAudit: '2027-10-10', note: 'Room 204' }], [2, { nextAudit: '2027-10-10', note: 'Room 204' }], [3, { nextAudit: '2027-10-10', note: 'Room 204' }]])
+    expect(results).toEqual([
+      [1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }],
+      [2, { state: 'failed', reason: 'You do not have permission to audit this asset.' }],
+      [3, { state: 'done', text: 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date (had none)' }],
+    ])
   })
 })
 
@@ -188,6 +217,12 @@ describe('Assets Views', () => {
     expect(opening({ filters: report.filters }, report)).toEqual({ view: 'all', search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' } })
   })
 
+  it("a Health warning's drill opens filtered to its gap, most urgent first: deactivated Users by most Assets, Licenses by fewest Free seats", () => {
+    expect(listQuery('assets', opening({ filters: { missing: 'location' } }))).toEqual({ view: 'all', search: '', filters: { missing: 'location' }, sort: undefined, order: undefined })
+    expect(listQuery('users', opening({ filters: { activated: '0' }, sort: { key: 'assets', order: 'desc' } }))).toEqual({ search: '', filters: { activated: '0' }, sort: 'assets', order: 'desc' })
+    expect(listQuery('licenses', opening({ filters: {}, sort: { key: 'free', order: 'asc' } }))).toEqual({ search: '', filters: {}, sort: 'free', order: 'asc' })
+  })
+
   it('the Selection survives switching Views, and "Select all N matching" adds the open View\'s Assets to it', async () => {
     const asset = (id: number) => ({ id, name: `NOMMA-${id}` })
     // Ticked on All, then Audit late's first page loads with one of them on it.
@@ -201,5 +236,174 @@ describe('Assets Views', () => {
     const all = await allMatching(async (offset) => (asked.push({ ...query, offset }), { total: 3, rows: lateRows.slice(offset, offset + 2) }))
     expect(asked).toEqual([0, 2].map((offset) => ({ view: 'auditLate', search: '', filters: {}, sort: 'id', order: 'asc', offset })))
     expect([...new Map([...s, ...all!]).keys()]).toEqual([1, 2, 9, 12])
+  })
+})
+
+describe('keys on the Assets List', () => {
+  it('↑/↓ take the Asset panel along and Esc closes it while it shows, or while the first open is still loading', () => {
+    expect(panelLive(true, false)).toBe(true)
+    expect(panelLive(false, true)).toBe(true)
+    expect(panelLive(false, false)).toBe(false)
+  })
+
+  it('a Bulk Action reloads only the panel open that showed as it began, so a form opened mid-run keeps its inputs', () => {
+    const run = { records: [{ id: 7 }] }
+    expect(panelToRefresh(3, { n: 3, id: 7 }, run)).toBe(7)
+    expect(panelToRefresh(3, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(undefined, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 8 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 7 }, { ...run, deletes: true })).toBeUndefined()
+    expect(panelToRefresh(3, null, run)).toBeUndefined()
+  })
+
+  it('↑/↓ give the row they move to DOM focus, so Enter opens that row and not one a button was left focused on', () => {
+    const focused: string[] = []
+    const rows = new Map([7, 8].map((id) => [`tr[data-id="${id}"]`, { focus: () => focused.push(`row ${id}`) }]))
+    focusRow({ querySelector: ((s: string) => rows.get(s) ?? null) as ParentNode['querySelector'] }, 8)
+    expect(focused).toEqual(['row 8'])
+    focusRow(null, 8)
+  })
+
+  it('a row or Quick Action click moves the focused row onto it at once, before its Asset loads', () => {
+    const done: string[] = []
+    const open = openRow((id) => done.push(`cursor ${id}`), (id, form) => done.push(`open ${id} ${form ?? ''}`.trim()))
+    open(3)
+    open(4, 'checkin')
+    expect(done).toEqual(['cursor 3', 'open 3', 'cursor 4', 'open 4 checkin'])
+  })
+
+  const key = (name: string, mods: Partial<Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {}) =>
+    ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
+
+  it('↑/↓ move between rows from anywhere but a field, even with a button focused', () => {
+    expect(listKey(key('ArrowDown'), 'none', false)).toBe('down')
+    expect(listKey(key('ArrowUp'), 'control', false)).toBe('up')
+    expect(listKey(key('ArrowDown'), 'field', false)).toBeNull()
+  })
+
+  it('Enter opens the focused row, but leaves a focused button or field to do its own job', () => {
+    expect(listKey(key('Enter'), 'none', false)).toBe('open')
+    expect(listKey(key('Enter'), 'control', false)).toBeNull()
+    expect(listKey(key('Enter'), 'field', true)).toBeNull()
+  })
+
+  it('Space ticks only when focus is not in a field or on a button', () => {
+    expect(listKey(key(' '), 'none', true)).toBe('tick')
+    expect(listKey(key(' '), 'control', true)).toBeNull()
+    expect(listKey(key(' '), 'field', false)).toBeNull()
+  })
+
+  it('Esc closes (or cancels the form in the panel), but a field outside the panel keeps it', () => {
+    expect(listKey(key('Escape'), 'none', false)).toBe('close')
+    expect(listKey(key('Escape'), 'control', false)).toBe('close')
+    expect(listKey(key('Escape'), 'field', true)).toBe('close')
+    expect(listKey(key('Escape'), 'field', false)).toBeNull()
+  })
+
+  it('with a modifier held, or any other key, nothing happens', () => {
+    expect(listKey(key('ArrowDown', { shiftKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key(' ', { ctrlKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key('a'), 'none', false)).toBeNull()
+  })
+
+  it('the focused row moves one at a time and stops at either end of the page', () => {
+    const ids = [4, 8, 15]
+    expect(moveCursor(ids, 8, 1)).toBe(15)
+    expect(moveCursor(ids, 8, -1)).toBe(4)
+    expect(moveCursor(ids, 15, 1)).toBe(15)
+    expect(moveCursor(ids, 4, -1)).toBe(4)
+  })
+
+  it('with no focused row (or one no longer on the page), ↓ starts at the top and ↑ at the bottom', () => {
+    expect(moveCursor([4, 8, 15], null, 1)).toBe(4)
+    expect(moveCursor([4, 8, 15], 99, -1)).toBe(15)
+    expect(moveCursor([], null, 1)).toBeNull()
+  })
+})
+
+describe("a Bulk Action's run", () => {
+  it('acts on each Record in turn, reports each outcome, and a failure does not stop the rest', async () => {
+    const asked: number[] = []
+    const reports: [number, Outcome][] = []
+    const work = async (id: number) => {
+      asked.push(id)
+      if (id === 2) throw new Error('NOMMA-2 is not checked out, so there is nothing to check in.')
+    }
+    await eachInTurn([1, 2, 3], work, 'Checked in', (id, o) => reports.push([id, o]))
+    expect(asked).toEqual([1, 2, 3])
+    expect(reports).toEqual([
+      [1, { state: 'working' }], [1, { state: 'done', text: 'Checked in' }],
+      [2, { state: 'working' }], [2, { state: 'failed', reason: 'NOMMA-2 is not checked out, so there is nothing to check in.' }],
+      [3, { state: 'working' }], [3, { state: 'done', text: 'Checked in' }],
+    ])
+  })
+
+  it("a run whose work answers with its own text (an Audit's dates) reports that instead of the run's", async () => {
+    const reports: [number, Outcome][] = []
+    await eachInTurn([1], async () => 'Audited, next 2027-10-10, was 2026-10-01', 'Audited', (id, o) => reports.push([id, o]))
+    expect(reports[1]).toEqual([1, { state: 'done', text: 'Audited, next 2027-10-10, was 2026-10-01' }])
+  })
+
+  it('stops before the next Record once told to, e.g. by Stop or when Settings point at another server', async () => {
+    const asked: number[] = []
+    let stopped = false
+    await eachInTurn([1, 2, 3], async (id) => { asked.push(id); stopped = true }, 'Checked out', () => {}, () => stopped)
+    expect(asked).toEqual([1])
+  })
+
+  it('one at a time: the next Record waits for the one before', async () => {
+    let open = 0, most = 0
+    await eachInTurn([1, 2, 3], async () => { most = Math.max(most, ++open); await new Promise((r) => setTimeout(r, 2)); open-- }, 'Checked out', () => {})
+    expect(most).toBe(1)
+  })
+})
+
+describe('Checkout… and Checkin… on a Selection of Assets', () => {
+  // A fake Snipe-IT: every Checkout and Checkin recorded; NOMMA-2 is refused, as Snipe-IT would.
+  const fake = () => {
+    const calls: [string, number, CheckoutOptions | CheckinOptions][] = []
+    const refuse = (id: number) => { if (id === 2) throw new Error('That asset is not available for checkout!') }
+    return {
+      calls,
+      bridge: {
+        checkout: async (id: number, o: CheckoutOptions) => (calls.push(['checkout', id, o]), refuse(id)),
+        checkin: async (id: number, o: CheckinOptions) => (calls.push(['checkin', id, o]), refuse(id)),
+      },
+    }
+  }
+  const results = async (action: { work: (id: number) => Promise<string | void>; done: string }) => {
+    const out: [number, Outcome][] = []
+    await eachInTurn([1, 2, 3], action.work, action.done, (id, o) => o.state !== 'working' && out.push([id, o]))
+    return out
+  }
+
+  it("Checkout… sends one Checkout per selected Asset with the form's options, and a result for each", async () => {
+    const { calls, bridge } = fake()
+    const options: CheckoutOptions = { targetType: 'location', targetId: 4, expectedCheckin: '2026-10-16', note: 'Cart to Room 204' }
+    const action = checkoutAction(bridge, options)
+    expect(action).toMatchObject({ kind: 'assets', title: 'Checkout Assets' })
+    expect(await results(action)).toEqual([
+      [1, { state: 'done', text: 'Checked out' }], [2, { state: 'failed', reason: 'That asset is not available for checkout!' }], [3, { state: 'done', text: 'Checked out' }],
+    ])
+    expect(calls).toEqual([1, 2, 3].map((id) => ['checkout', id, options]))
+  })
+
+  it("Checkin… sends one Checkin per selected Asset with the form's options, and a result for each", async () => {
+    const { calls, bridge } = fake()
+    const options: CheckinOptions = { statusId: 1, locationId: undefined, note: 'Back from Room 204' }
+    const action = checkinAction(bridge, options)
+    expect(action).toMatchObject({ kind: 'assets', title: 'Checkin Assets' })
+    expect(await results(action)).toEqual([
+      [1, { state: 'done', text: 'Checked in' }], [2, { state: 'failed', reason: 'That asset is not available for checkout!' }], [3, { state: 'done', text: 'Checked in' }],
+    ])
+    expect(calls).toEqual([1, 2, 3].map((id) => ['checkin', id, options]))
+  })
+
+  it("each is off when Snipe-IT says the Operator's key may not do it to any selected Asset", () => {
+    const can = (checkout: boolean, checkin: boolean) => ({ can: { checkout, checkin, update: true, delete: true, audit: true } })
+    expect(cantCheckout([can(true, true), can(true, false)])).toBe(false)
+    expect(cantCheckout([can(true, true), can(false, true)])).toBe(true)
+    expect(cantCheckin([can(true, true), can(false, true)])).toBe(false)
+    expect(cantCheckin([can(true, true), can(true, false)])).toBe(true)
   })
 })

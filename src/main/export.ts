@@ -33,7 +33,9 @@ export const LIST_COLUMNS: { [K in ListKind]: ListColumn<K>[] } = {
     { key: 'lastAudited', label: 'Last audited', hidden: true },
     { key: 'nextAudit', label: 'Next audit', hidden: true },
     { key: 'purchaseDate', label: 'Purchased', hidden: true },
+    { key: 'purchaseCost', label: 'Purchase cost', hidden: true },
     { key: 'warrantyEnd', label: 'Warranty ends', hidden: true },
+    { key: 'endOfLife', label: 'End of life', hidden: true },
   ],
   users: [
     { key: 'name', label: 'Name' },

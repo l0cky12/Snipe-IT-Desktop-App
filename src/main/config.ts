@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
+import type { ReleaseCache } from './release'
 import { END_OF_DAY, parseCalendar, realTime, type CalendarEntry } from './calendar'
 import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
 export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance
-  tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[] }
+  tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[]
+  /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
+  repairTypeId: number | null }
 /**
  * Temp checkout's settings on this PC. endOfDay: when Temp checkouts are due on a School day without a half day ("HH:MM").
  * reminder: the End-of-day reminder shows here.
@@ -37,6 +40,8 @@ export type SettingsApi = {
   saveTempCheckout(input: TempCheckout): Promise<Settings>
   /** The School calendar box's text; throws "Line N: …" and saves nothing when a line is bad. */
   saveSchoolCalendar(text: string): Promise<Settings>
+  /** The Maintenance type for repairs as typed: a whole number above 0, or blank for none. */
+  saveRepairs(maintenanceTypeId: string): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
   testMail(input: MailInput): Promise<string>
   savedReports(): Promise<SavedReport[]>
@@ -69,6 +74,7 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
+  release?: ReleaseCache; repairTypeId?: number | null
   tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
@@ -155,7 +161,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system',
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null,
       tempCheckout: { ...TEMP_CHECKOUT, ...value.tempCheckout }, schoolCalendar: value.schoolCalendar ?? [] }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
@@ -231,6 +237,11 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       write({ ...read(), appearance })
       return get()
     },
+    /** The newer Snipe-IT release check's cache and hidden tag, on this PC (see createReleaseCheck). */
+    release: (): ReleaseCache => read().release ?? {},
+    saveRelease(release: ReleaseCache) {
+      write({ ...read(), release })
+    },
     saveTempCheckout({ endOfDay, reminder }: TempCheckout) {
       if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')
       // 00:00 would read back as a date-only Expected Checkin (#71).
@@ -247,6 +258,13 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     saveSchoolCalendar(text: string) {
       if (typeof text !== 'string') throw new Error('Invalid School calendar')
       write({ ...read(), schoolCalendar: parseCalendar(text) })
+      return get()
+    },
+    // Not checked against Snipe-IT: Operator keys can't read Maintenance types. A wrong id shows on Repair intake's rows.
+    saveRepairs(maintenanceTypeId: string) {
+      const v = typeof maintenanceTypeId === 'string' ? maintenanceTypeId.trim() : null
+      if (v === null || (v && !(/^\d+$/.test(v) && Number.isSafeInteger(+v) && +v > 0))) throw new Error('Maintenance type for repairs must be a whole number above 0, or blank.')
+      write({ ...read(), repairTypeId: v ? +v : null })
       return get()
     },
     savedReports,

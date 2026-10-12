@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
+import type { ReleaseApi } from '../main/release'
 import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
@@ -25,9 +26,16 @@ const snipeIt: SnipeItBridge = {
   exactUsers: call('snipeit:exactUsers'),
   userSelectlist: call('snipeit:userSelectlist'),
   userCard: call('snipeit:userCard'),
+  operatorName: call('snipeit:operatorName'),
+  repairTypeId: call('snipeit:repairTypeId'),
+  openMaintenances: call('snipeit:openMaintenances'),
+  createMaintenance: call('snipeit:createMaintenance'),
+  addAssetNote: call('snipeit:addAssetNote'),
+  appendUserNotes: call('snipeit:appendUserNotes'),
   searchLocations: call('snipeit:searchLocations'),
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
+  audit: call('snipeit:audit'),
   dashboard: call('snipeit:dashboard'),
   health: call('snipeit:health'),
   list: call('snipeit:list'),
@@ -59,7 +67,7 @@ const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
-  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'),
+  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveRepairs: call('settings:saveRepairs'),
   saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }
@@ -68,6 +76,8 @@ contextBridge.exposeInMainWorld('settings', settings)
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
 
+const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
+contextBridge.exposeInMainWorld('releases', releases)
 const reminder: ReminderApi = {
   onOpen(listener) {
     const opened = () => listener()
