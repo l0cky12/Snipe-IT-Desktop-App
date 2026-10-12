@@ -146,10 +146,25 @@ export const PERMISSIONS: [area: string, keys: string[]][] = [
     .map(([area, k]): [string, string[]] => [area, [`${k}.view`, `${k}.create`, `${k}.edit`, `${k}.delete`]]),
   ['Self', ['self.two_factor', 'self.api', 'self.edit_location', 'self.checkout_assets', 'self.view_purchase_cost']],
 ]
-/** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows. */
-export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number }
-/** Each row carries what the Operator may do to it (its available_actions), so a Bulk Action is offered only when allowed. */
-export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[] }
+/** The Assets List's built-in Views: each a fixed condition that the search and filter boxes narrow. path: Snipe-IT's route,
+ * if not /hardware. filter: the Snipe-IT filter the View fixes (status_id names a Status Label, found by name). column: shown
+ * in its View whatever the Operator picked under Columns. sort: where picking the View starts the sort. */
+export type AssetView = 'all' | 'checkedOut' | 'available' | 'damaged' | 'auditDue' | 'auditLate'
+export const ASSET_VIEWS: Record<AssetView, { name: string; path?: string; filter?: [string, string]; column?: keyof Asset; sort?: { key: keyof Asset; order: 'asc' | 'desc' } }> = {
+  all: { name: 'All' },
+  checkedOut: { name: 'Checked out', filter: ['status', 'Deployed'], column: 'expectedCheckin' },
+  available: { name: 'Available', filter: ['status', 'RTD'] },
+  damaged: { name: 'Damaged', filter: ['status_id', 'Damaged'] },
+  // The same routes as the audit Reports, so a View and a Report never disagree; Snipe-IT applies the filter boxes to them too.
+  auditDue: { name: 'Audit due', path: '/hardware/audit/due', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
+  auditLate: { name: 'Audit late', path: '/hardware/audit/overdue', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
+}
+/** sort is a row field (see LIST_SORTS); filters are Snipe-IT filter name → value, '' meaning none. offset counts rows.
+ * view: an Assets View (All when left out). */
+export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number; view?: AssetView }
+/** Each row carries what the Operator may do to it (its available_actions), so a Bulk Action is offered only when allowed.
+ * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged). */
+export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string }
 
 /** The eight dashboard pieces: six Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
@@ -560,7 +575,10 @@ type RawModel = { id: number; name: string; model_number: string | null; manufac
 
 // Which row fields each List can sort by, and Snipe-IT's name for that sort. The screen offers only these.
 export const LIST_SORTS = {
-  assets: { assetTag: 'asset_tag', name: 'name', status: 'status', model: 'model', category: 'category', location: 'location', assignee: 'assigned_to', serial: 'serial', expectedCheckin: 'expected_checkin', purchaseDate: 'purchase_date', purchaseCost: 'purchase_cost', endOfLife: 'asset_eol_date' },
+  assets: {
+    assetTag: 'asset_tag', name: 'name', status: 'status', model: 'model', category: 'category', location: 'location', assignee: 'assigned_to', serial: 'serial',
+    expectedCheckin: 'expected_checkin', purchaseDate: 'purchase_date', purchaseCost: 'purchase_cost', endOfLife: 'asset_eol_date', lastAudited: 'last_audit_date', nextAudit: 'next_audit_date',
+  },
   users: { name: 'last_name', username: 'username', email: 'email', department: 'department', location: 'location', assets: 'assets_count' },
   locations: { name: 'name', parent: 'parent', city: 'city', assets: 'assets_count', checkedOut: 'assigned_assets_count', users: 'users_count' },
   models: { name: 'name', modelNumber: 'model_number', manufacturer: 'manufacturer', category: 'category', assets: 'assets_count', available: 'remaining' },
@@ -908,11 +926,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
   }
 
+  async function statusLabels(): Promise<StatusLabel[]> {
+    // ponytail: first 500 status labels; a school has a handful.
+    const body = await request<{ rows: StatusLabel[] }>('/statuslabels?limit=500')
+    if (isError(body)) throw new Error(reason(body.messages))
+    return body.rows.map(({ id, name }) => ({ id, name }))
+  }
+
   // A page of a List. Filters and sort arrive from the screen over IPC, so only known ones reach the URL.
-  async function listPage<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0 }: ListQuery, limit: number, timeout?: number): Promise<ListPage<K>> {
+  async function listPage<K extends ListKind>(kind: K, { search, filters = {}, sort, order, offset = 0, view }: ListQuery, limit: number, timeout?: number): Promise<ListPage<K>> {
     if (!Object.hasOwn(LISTS, kind)) throw new Error(`Unknown list: ${kind}`)
     if ((search !== undefined && typeof search !== 'string') || typeof filters !== 'object' || filters === null) throw new Error('Invalid search or filters')
+    if (view !== undefined && (kind !== 'assets' || !Object.hasOwn(ASSET_VIEWS, view))) throw new Error(`Unknown View: ${view}`)
     const spec = LISTS[kind]
+    const { path = spec.path, filter } = view ? ASSET_VIEWS[view] : {}
     const params = new URLSearchParams({ limit: String(limit), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
     if (search?.trim()) params.set('search', search.trim())
     for (const [key, value] of Object.entries(filters)) {
@@ -923,10 +950,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (key === 'user_id') params.set('assigned_to', value), params.set('assigned_type', 'App\\Models\\User')
       else params.set(key, value)
     }
+    // The View's own condition, over any filter box for the same thing (the List hides that box).
+    if (filter?.[0] === 'status_id') {
+      // The Status Label named Damaged, found by name in any case, ignoring outer spaces, as the Damaged Report finds it.
+      const label = (await statusLabels()).find((l) => l.name.trim().toLowerCase() === filter[1].toLowerCase())
+      if (!label) return { total: 0, rows: [], why: `Snipe-IT has no Status Label named ${filter[1]}, so no Asset is ${filter[1]}.` }
+      params.set('status_id', String(label.id))
+    } else if (filter) params.set(...filter)
     // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
     const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
     if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
-    const page = await request<{ total: number; rows: unknown[] }>(`${spec.path}?${params}`, undefined, undefined, timeout)
+    const page = await request<{ total: number; rows: unknown[] }>(`${path}?${params}`, undefined, undefined, timeout)
     if (isError(page)) throw new Error(reason(page.messages))
     const now = today()
     return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
@@ -1060,12 +1094,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return typeof pdf === 'string' && pdf.startsWith('JVBERi') ? pdf : null
     },
 
-    async statusLabels(): Promise<StatusLabel[]> {
-      // ponytail: first 500 status labels; a school has a handful.
-      const body = await request<{ rows: StatusLabel[] }>('/statuslabels?limit=500')
-      if (isError(body)) throw new Error(reason(body.messages))
-      return body.rows.map(({ id, name }) => ({ id, name }))
-    },
+    statusLabels,
 
     // One page of a List.
     async list<K extends ListKind>(kind: K, query: ListQuery = {}): Promise<ListPage<K>> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exportTable, shownColumns, toCsv } from './export'
+import { exportTable, shownColumns, toCsv, viewColumns } from './export'
 
 describe('CSV export', () => {
   it('quotes every cell, doubles quotes, keeps commas and line breaks, and marks it UTF-8 for Excel', () => {
@@ -49,5 +49,22 @@ describe('a Saved Report opened again', () => {
   it('shows its Columns in the List order, always the first, without ones the List no longer has', () => {
     expect(shownColumns('assets', ['serial', 'gone', 'status'])).toEqual(['assetTag', 'status', 'serial'])
     expect(shownColumns('users', null)).toEqual(['name', 'username', 'department', 'location', 'assets'])
+  })
+})
+
+describe('Assets Columns', () => {
+  it('a first-time Operator sees Asset Tag, Status, Asset Model, Assignee and Location', () => {
+    expect(exportTable('assets', shownColumns('assets', null), []).columns).toEqual(['Asset Tag', 'Status', 'Asset Model', 'Assignee', 'Location'])
+  })
+
+  it("an Operator's stored Column choice is kept, and Last audited and Next audit can be picked", () => {
+    expect(shownColumns('assets', ['name', 'category', 'lastAudited', 'nextAudit'])).toEqual(['assetTag', 'name', 'category', 'lastAudited', 'nextAudit'])
+  })
+
+  it("a View's column shows in its View even when hidden under Columns, and only there", () => {
+    expect(viewColumns(['assetTag', 'status'], 'auditLate')).toEqual(['assetTag', 'status', 'nextAudit'])
+    expect(viewColumns(['assetTag', 'status'], 'checkedOut')).toEqual(['assetTag', 'status', 'expectedCheckin'])
+    expect(viewColumns(['assetTag', 'nextAudit'], 'auditDue')).toEqual(['assetTag', 'nextAudit'])
+    expect(viewColumns(['assetTag', 'status'], 'all')).toEqual(['assetTag', 'status'])
   })
 })
