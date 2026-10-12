@@ -14,6 +14,9 @@ export type Asset = {
   statusId: number | null
   /** Snipe-IT's status_meta: deployed, deployable, pending, archived, undeployable */
   statusMeta: string
+  /** The Status Label's own type (status_type): deployable, pending, archived, undeployable. Unlike status_meta, which
+   *  says 'deployed' for any checked-out Asset, it still shows a Pending or Broken label on one that's out. */
+  statusType: string
   assignee: Assignee | null
   /** Checkout allowed: no Assignee and a deployable status */
   checkoutAllowed: boolean
@@ -499,6 +502,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     status: raw.status_label?.name ?? '',
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
+    statusType: raw.status_label?.status_type ?? '',
     assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
@@ -811,6 +815,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
+  // The Asset with exactly this Asset Tag, or null; no search fallback, so a Workflow scan never acts on a near match.
+  async function assetByTag(tag: string): Promise<Asset | null> {
+    if (typeof tag !== 'string' || !tag) throw new Error('Invalid Asset Tag')
+    const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
+    // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
+    return isError(body) ? null : toAsset(body, today())
+  }
+
   // ponytail: pages through a whole list and counts in the app; fine under ~5k rows (~10 requests). Users may be the largest list.
   // Past that, ask Snipe-IT for counts instead (e.g. limit=1 and read `total` per status or filter).
   // The first page gives the total and the page size (a server may cap pages below PAGE_LIMIT); the rest are fetched
@@ -995,12 +1007,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async locations(): Promise<StatusLabel[]> {
       return (await allRows<StatusLabel>('/locations')).map(({ id, name }) => ({ id, name }))
     },
+    assetByTag,
     async lookup(query: string): Promise<LookupResult> {
       const tag = query.trim()
       if (!tag) return { exact: false, assets: [], others: [] }
-      const body = await request<RawAsset>(`/hardware/bytag/${encodeURIComponent(tag)}`)
-      // Snipe-IT answers an unknown Asset Tag with a 404 or a 200-with-error, depending on version.
-      if (!isError(body)) return { exact: true, assets: [toAsset(body, today())] }
+      const exact = await assetByTag(tag)
+      if (exact) return { exact: true, assets: [exact] }
       // Snipe-IT's search covers an Asset's fields, related names (Asset Model, Assignee, Location…), notes and
       // unencrypted custom fields. The other kinds are searched alongside; one the key can't read says so without hiding the rest.
       const [found, ...others] = await Promise.all([

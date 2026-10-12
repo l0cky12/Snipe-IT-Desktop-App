@@ -60,7 +60,9 @@ button, input, select { font-family: inherit; }
 .nav.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
 .nav:disabled { opacity: .45; cursor: default; }
 /* Key hints. */
-.find kbd { margin-left: auto; }
+.find kbd, .nav kbd { margin-left: auto; }
+/* A Workflow, listed under the Workflows item. */
+.nav.sub { padding-left: 20px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
 .settings-nav { margin-top: auto; }
@@ -349,3 +351,33 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .saved-reports .history td { vertical-align: middle; }
 /* A Report's schedule and last send, or the form changing it. */
 .schedule { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; white-space: normal; }
+
+/* Workflows: the page of cards, and a Workflow's field, Running list and Keys panel. */
+.workflow-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 20px 28px; }
+.workflow-card { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                 color: var(--text); font: 13px var(--sans); cursor: pointer; transition: border-color var(--fast); }
+.workflow-card:hover, .workflow-card:focus-visible { border-color: var(--primary); }
+.card-title { display: flex; align-items: center; gap: 8px; font: 600 14px var(--sans); }
+.card-title kbd { margin-left: auto; }
+.workflow { display: grid; grid-template-columns: minmax(0, 1fr) 248px; min-height: 100%; }
+.workflow-field { padding: 16px 28px 0; }
+.workflow-field .search { width: 100%; padding-left: 12px; }
+.workflow-field .message { min-height: 1.4em; }
+.pick-list { list-style: none; margin: 8px 28px; padding: 0; max-width: 480px; }
+.pick-list li { display: flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 6px; cursor: pointer; }
+.pick-list li:hover { background: var(--hover); }
+.pick-list li.sel { background: var(--hover); font-weight: 600; box-shadow: inset 3px 0 0 var(--mark); }
+.running-head { display: flex; align-items: center; justify-content: space-between; }
+.running td { white-space: nowrap; }
+.running td:last-child { white-space: normal; }
+.running tbody tr:first-child { background: var(--selrow); }
+/* A refused or failed row: a red edge, and the reason in words. */
+.running tr.failed td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+.keys { border-left: 1px solid var(--line); padding: 16px; }
+.keys h2 { margin: 0 0 10px; font: 600 12px var(--sans); color: var(--dim); }
+.keys dl { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.keys dl div { display: flex; align-items: center; gap: 8px; }
+.keys dt { min-width: 64px; }
+.keys dd { margin: 0; }
+.keys p { margin: 14px 0 0; font-size: 12px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

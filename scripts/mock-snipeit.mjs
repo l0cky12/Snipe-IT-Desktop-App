@@ -73,6 +73,9 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
 })
+// A checked-out Asset someone set to Pending while it was out: Bulk return checks it in but keeps the label.
+// Snipe-IT's status_meta says 'deployed' for any checked-out Asset; status_type keeps the label's own type.
+assets[1].status_label = { ...statuses[4], status_meta: 'deployed' }
 // The stocked kinds, a few of each.
 const stock = (list) => list.map((r, i) => ({ id: i + 1, notes: null, manufacturer: null, category: null, ...r }))
 const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, notes: 'Renews each July' }])
