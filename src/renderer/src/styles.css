@@ -161,6 +161,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .section-bar { display: flex; align-items: baseline; gap: 16px; scroll-margin-top: 80px; }
 .section-bar label { display: inline-flex; align-items: center; gap: 6px; font: 400 13px var(--sans); cursor: pointer; }
 .history .flag { margin-left: 8px; }
+.history td > .flag:first-child { margin-left: 0; }
 
 /* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
 .history { border-collapse: collapse; width: 100%; }
@@ -227,6 +228,31 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .bars g.go { cursor: pointer; }
 .bars g.go:focus-visible { outline: none !important; }
 .bars g.go:focus-visible .hit { stroke: var(--mark); stroke-width: 2; }
+/* Upcoming audits: always the full row. Audit late and Audit due pinned left of today, as status dots with the count in text colour.
+   The Audit due band is a neutral wash: status colours stay off a series chart. The 2px --bg stroke rings each marker (r 5: 8px of blue). */
+.charts > .chart-card.wide { grid-column: 1 / -1; }
+.audit-next { margin: 0 0 6px; color: var(--text); }
+.audit-next .link { font-variant-numeric: tabular-nums; }
+.audit-strip { display: flex; align-items: flex-end; gap: 12px; }
+.audit-now { flex: none; list-style: none; margin: 0 0 22px; padding: 0 12px 0 0; border-right: 1px solid var(--line); display: grid; gap: 2px; }
+.audit-now li { display: flex; align-items: center; min-height: 28px; white-space: nowrap; }
+.audit-now .chip { font-weight: 400; min-height: 24px; }
+.audit-now b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.timeline { flex: 1; min-width: 0; height: 150px; }
+.timeline text { font: 12px var(--sans); font-variant-numeric: tabular-nums; fill: var(--dim); }
+.timeline .tick line { stroke: var(--line2); }
+.timeline .axis { stroke: var(--line); }
+.timeline .due { fill: var(--hover); }
+.timeline .stem { stroke: var(--series-1); stroke-width: 1; opacity: .5; }
+.timeline .day circle { fill: var(--series-1); stroke: var(--bg); stroke-width: 2; }
+.timeline .day circle.ring { fill: none; stroke: none; }
+.timeline .day { cursor: pointer; }
+/* Only each day's .hit area takes the pointer: a marker can spill past its own area into a close neighbour's. */
+.timeline .day :not(.hit) { pointer-events: none; }
+.timeline .day:hover circle:not(.ring) { opacity: .8; }
+.timeline .day:focus-visible { outline: none !important; }
+.timeline .day:focus-visible circle.ring { stroke: var(--mark); stroke-width: 2; }
+.timeline .cap { fill: var(--text); text-anchor: middle; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* Health warnings: one line each with the tone as its edge and dot (red: fix now, amber: keep an eye on it), words in text colours. */
 .health { display: grid; gap: 6px; padding: 14px 16px 0; }

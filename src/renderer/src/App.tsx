@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
@@ -15,7 +15,7 @@ import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
 import { createBulkCheckout, createBulkReturn, NOT_ALLOWED } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
-import { Bars, ChartCard, Donut, chartRows, type ChartPiece } from './Charts'
+import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -302,6 +302,7 @@ export function App() {
   }
 
   const selected = view ? (opensAt(view, showSettings).docked ? panel?.asset.id : undefined) : asset?.id
+  const onAuditDay = (d: AuditDay) => showAuditDay(d, cancel, (m) => (setPanelOpen(true), setMatches(m), setOthers([]), setMessage({ text: '' })))
   const go = (page: ListKind, drill?: Drill, report?: SavedReport, assetView?: AssetView) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, assetView, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -419,7 +420,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
         : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} />
@@ -744,7 +745,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
 
 
 const pieceName: Record<DashboardPiece, string> = {
-  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location',
+  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location', audits: 'Upcoming audits',
   licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
   overdue: 'Overdue', expiring: 'Warranty expiring',
 }
@@ -757,7 +758,7 @@ const splitNames = {
 const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
 type Group = (typeof GROUPS)[number]
 const pieceGroup: Record<DashboardPiece, Group> = {
-  assets: 'Charts', categories: 'Charts', locations: 'Charts',
+  assets: 'Charts', categories: 'Charts', locations: 'Charts', audits: 'Charts',
   licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
   overdue: 'Tables', expiring: 'Tables',
 }
@@ -876,9 +877,18 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onDrill, onTemp
   )
 }
 
+/** An Upcoming audits day lists its Assets in the panel (there's no List filter by next audit date); the dashboard stays put,
+ * so the Operator can click through several days in turn. A lookup or Asset open still loading is discarded first, so it
+ * can't replace the day's Assets or leave the dashboard. */
+export function showAuditDay(d: AuditDay, cancel: () => void, show: (m: { label: string; assets: AssetSummary[] }) => void) {
+  cancel()
+  show({ label: `Next audit ${longDay(d.day)} (${d.assets.length})`, assets: d.assets })
+}
+
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onAssetView, onDrill, onSettings, statusLabels, locations, defaultLocation }: {
+function DashboardView({ onPick, onAssetView, onDrill, onAuditDay, onSettings, statusLabels, locations, defaultLocation }: {
   onPick: (id: number) => void
+  onAuditDay: (d: AuditDay) => void
   onAssetView: (v: AssetView) => void
   onDrill: (list: ListKind, drill: Drill) => void
   onSettings: () => void
@@ -892,7 +902,7 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings, statusLabels,
   const [loadedAt, setLoadedAt] = useState('')
   const [loading, setLoading] = useState(false)
   const latest = useRef(0)
-  // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
+  // The last Health check, kept whole: the Upcoming audits timeline shows its audit totals rather than fetching its own.
   const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
   // GitHub's latest Snipe-IT release, asked for beside the Health check so neither waits on the other.
   const [release, setRelease] = useState<Release | null>(null)
@@ -955,6 +965,21 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings, statusLabels,
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
   const drillAssets = (d: Drill) => onDrill('assets', d)
+  function audits() {
+    const entry = data.audits
+    const days = entry && !('error' in entry) ? entry : []
+    const checked = health && !('error' in health) ? health : undefined
+    const timeline = (
+      <Timeline days={days} late={checked?.auditLate} due={checked?.auditDue} dueThrough={checked?.dueThrough ?? null}
+        onDay={onAuditDay} onView={onAssetView} />
+    )
+    return (
+      <ChartCard key="audits" title={pieceName.audits} column="Next audit" wide rows={entry && !('error' in entry) ? auditRows(entry) : entry}
+        onDrill={drillAssets} onRow={(r) => onAuditDay(days.find((d) => d.day === r.key)!)} empty={timeline}>
+        {() => timeline}
+      </ChartCard>
+    )
+  }
   function chart(piece: ChartPiece) {
     const entry = data[piece]
     const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
@@ -1113,7 +1138,7 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings, statusLabels,
           ))}
         </div>
       )}
-      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => chart(piece as ChartPiece))}</div>}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => (piece === 'audits' ? audits() : chart(piece as ChartPiece)))}</div>}
       {bars.length > 0 && (
         <section className="card inventory" aria-label="Inventory Chart">
           <header><h2>Inventory Chart</h2></header>
