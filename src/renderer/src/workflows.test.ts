@@ -2678,6 +2678,27 @@ describe('Incoming repair', () => {
     expect(flow.runner.askUndo()).toBe('')
   })
 
+  it("a permission-only 403 on the Resume re-read finishes the return too; a refused key pauses again", async () => {
+    const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    const usual = bridge.updateStatus.getMockImplementation()!
+    bridge.updateStatus.mockImplementationOnce(async (id, statusId) => { await usual(id, statusId); throw { message: "Can't reach Snipe-IT.", kind: 'unreachable' } })
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    expect(flow.runner.confirmOpen()).toBe('')
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    const denied = { message: "This key can't do that.", kind: 'forbidden' }
+    bridge.openMaintenances.mockRejectedValueOnce(denied)
+    bridge.keyRefused.mockResolvedValueOnce(true)
+    await flow.runner.resume()
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    bridge.openMaintenances.mockRejectedValueOnce(denied)
+    await flow.runner.resume()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'version', 'note 1 [Incoming repair]'])
+    expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, sub: ['Maintenance left as is'] })
+    expect(flow.runner.askUndo()).toBe('')
+  })
+
   describe('Assets that are not Damaged', () => {
     it('refuses checked out, Archived, already ready, and a key that may not edit it, writing nothing', async () => {
       const { flow, calls, failed } = await opened([

@@ -1269,8 +1269,10 @@ export function createIncomingRepair(
       // A read that fails for a reason that pauses pauses again; any other failure still finishes the return without it.
       const stale = await unchanged().then(
         (same) => (same ? '' : 'the Maintenance changed while paused'),
-        (e: Partial<Failure>) => {
-          if (e?.kind && ['unreachable', 'timeout', 'key', 'rateLimited', 'forbidden'].includes(e.kind)) throw e
+        async (e: Partial<Failure>) => {
+          if (['unreachable', 'timeout', 'key', 'rateLimited'].includes(e?.kind ?? '')) throw e
+          // A 403 pauses only when the key itself is refused (said as 'key', so it isn't asked again); a permission-only one doesn't.
+          if (e?.kind === 'forbidden' && (await bridge.keyRefused().catch(() => false))) throw { ...e, kind: 'key' }
           return `the Maintenance couldn't be read again (${e?.message ?? String(e)})`
         })
       return rest(text, mine, stale)
