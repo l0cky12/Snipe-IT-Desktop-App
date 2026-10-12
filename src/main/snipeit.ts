@@ -3,7 +3,8 @@ import type { Release } from './release'
 
 export type Config = { baseUrl: string; apiKey: string }
 
-export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string }
+/** username, employeeNum: a User Assignee's, when Snipe-IT sends them (only to a key that may view Users). */
+export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string; username?: string; employeeNum?: string }
 
 export type Asset = {
   id: number
@@ -44,6 +45,8 @@ export type Asset = {
   purchaseCost: string | null
   /** How late, or null when not Overdue */
   overdue: Lateness | null
+  /** An outstanding Temp checkout; only where the app looked it up (Assets List rows, the dashboard's Overdue list). */
+  temp?: boolean
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
   /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
@@ -163,13 +166,21 @@ export const PERMISSIONS: [area: string, keys: string[]][] = [
 ]
 /** The Assets List's built-in Views: each a fixed condition that the search and filter boxes narrow. path: Snipe-IT's route,
  * if not /hardware. filter: the Snipe-IT filter the View fixes (status_id names a Status Label, found by name). column: shown
- * in its View whatever the Operator picked under Columns. sort: where picking the View starts the sort. */
-export type AssetView = 'all' | 'checkedOut' | 'available' | 'damaged' | 'auditDue' | 'auditLate'
-export const ASSET_VIEWS: Record<AssetView, { name: string; path?: string; filter?: [string, string]; column?: keyof Asset; sort?: { key: keyof Asset; order: 'asc' | 'desc' } }> = {
+ * in its View whatever the Operator picked under Columns. sort: where picking the View starts the sort. keep: a View Snipe-IT
+ * can't express, so the app fetches the route's whole set and keeps these rows, then sorts and pages them itself. */
+export type AssetView = 'all' | 'checkedOut' | 'available' | 'damaged' | 'outOnTemp' | 'overdue' | 'auditDue' | 'auditLate'
+export const ASSET_VIEWS: Record<AssetView, {
+  name: string; path?: string; filter?: [string, string]; column?: keyof Asset; sort?: { key: keyof Asset; order: 'asc' | 'desc' }; keep?: (a: Asset) => boolean
+}> = {
   all: { name: 'All' },
   checkedOut: { name: 'Checked out', filter: ['status', 'Deployed'], column: 'expectedCheckin' },
   available: { name: 'Available', filter: ['status', 'RTD'] },
   damaged: { name: 'Damaged', filter: ['status_id', 'Damaged'] },
+  // Every checked-out Asset the outstanding Temp checkout lookup counts (#61 §2).
+  outOnTemp: { name: 'Out on temp', filter: ['status', 'Deployed'], column: 'expectedCheckin', sort: { key: 'expectedCheckin', order: 'asc' }, keep: (a) => !!a.temp },
+  // Snipe-IT counts a date-only Expected Checkin late from midnight; the app's rule (toAsset's overdue, as the dashboard and
+  // the Overdue Report use) from the end of that date, so the ones due today are dropped.
+  overdue: { name: 'Overdue', path: '/hardware/checkins/overdue', column: 'expectedCheckin', sort: { key: 'expectedCheckin', order: 'asc' }, keep: (a) => a.overdue !== null },
   // The same routes as the audit Reports, so a View and a Report never disagree; Snipe-IT applies the filter boxes to them too.
   auditDue: { name: 'Audit due', path: '/hardware/audit/due', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
   auditLate: { name: 'Audit late', path: '/hardware/audit/overdue', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
@@ -178,14 +189,16 @@ export const ASSET_VIEWS: Record<AssetView, { name: string; path?: string; filte
  * view: an Assets View (All when left out). */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number; view?: AssetView }
 /** Each row carries what the Operator may do to it (its available_actions), so a Bulk Action is offered only when allowed.
- * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged). */
-export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string }
+ * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged).
+ * tempError: why Asset rows carry no Temp marks (say the Activity Report is refused). */
+export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string; tempError?: string }
 
-/** The dashboard pieces: the charts (assets is Assets by Status Label), the five Inventory Chart bars, then the two tables. */
-export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+/** The dashboard pieces: the charts (assets is Assets by Status Label, audits is Upcoming audits), the five Inventory Chart
+ * bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'audits', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
-export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'overdue', 'expiring']
+export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'audits', 'overdue', 'expiring']
 /** Health warnings worked out from lists the dashboard fetches anyway (the Asset list, the Licenses list): asked for beside
  * the pieces so each list is fetched once, and even when its pieces are hidden. Not in Customize. */
 export const HEALTH_PIECES = ['missing', 'runningOut'] as const
@@ -202,14 +215,17 @@ export type StatusTally = Tally & { type: string; color: string | null }
 export type Failed = { error: string }
 /** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
 export type Split = { used: number; available: number }
+/** One day of the Upcoming audits timeline: the Assets whose next audit date it is ("YYYY-MM-DD"). */
+export type AuditDay = { day: string; assets: AssetSummary[] }
 
 /**
  * One entry per requested piece: its data, or { error } with the reason it couldn't load.
- * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
+ * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out),
+ * Upcoming audits soonest first.
  */
 export type Dashboard = {
   [K in DashboardPiece | HealthPiece]?: Failed | {
-    assets: StatusTally[]; categories: Tally[]; locations: Tally[]
+    assets: StatusTally[]; categories: Tally[]; locations: Tally[]; audits: AuditDay[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
@@ -227,13 +243,16 @@ export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly 
  * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
  * dashboard's Overdue list instead). probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
- * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
+ * Audit due totals are Snipe-IT's own (its /hardware/audit routes), shared with the Upcoming audits timeline. dueThrough is
+ * the latest next audit date among the Audit due Assets (null when none, or the check failed): Snipe-IT's Audit warning
+ * setting can't be read, so this is how far the timeline shades Audit due.
  * deactivated: the Assets checked out to deactivated Users, and how many Users hold them.
  */
 export type Health = {
   probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
   auditLate: number | Failed
   auditDue: number | Failed
+  dueThrough: string | null
   deactivated: { assets: number; users: number } | Failed
 }
 /** One line of the Health warnings strip, or why its check couldn't run. */
@@ -254,7 +273,7 @@ export const MIN_SNIPEIT = [8, 7] as const
  * Overdue counts the dashboard's Overdue list (none until it has loaded). missing and runningOut come with the dashboard's
  * lists; still loading (left out), they add no line yet.
  */
-export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Health & Pick<Dashboard, HealthPiece>, release?: Release | null, overdue?: Dashboard['overdue']): HealthLine[] {
+export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Omit<Health, 'dueThrough'> & Pick<Dashboard, HealthPiece>, release?: Release | null, overdue?: Dashboard['overdue']): HealthLine[] {
   if ('warning' in probe) return [probe]
   const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
@@ -432,7 +451,7 @@ type RawAsset = {
   location: Named
   rtd_location: Named
   // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
-  assigned_to: { id: number; name: string; type: Assignee['type']; employee_number?: string | null } | null
+  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
   last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
@@ -609,6 +628,23 @@ function overdueOf(now: Date, due: string): Lateness | null {
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
 
+/** The Upcoming audits timeline's days: from today to the same date 12 months ahead, both included, soonest first.
+ * ponytail: every Asset due in the window crosses IPC as a summary, so a day opens with no request; fetch a day's
+ * Assets on click instead if a fleet ever makes that payload slow. */
+function auditDays(assets: Asset[], today: Date): AuditDay[] {
+  const last = daysFrom(today, `${today.getFullYear() + 1}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`)
+  const days = new Map<string, AssetSummary[]>()
+  for (const a of assets) {
+    // Archived Assets are never Audit due, even when "show archived in list" puts them in the Asset list.
+    if (!a.nextAudit || a.statusMeta === 'archived') continue
+    const ahead = daysFrom(today, a.nextAudit)
+    if (ahead < 0 || ahead > last) continue
+    if (!days.has(a.nextAudit)) days.set(a.nextAudit, [])
+    days.get(a.nextAudit)!.push(toSummary(a))
+  }
+  return [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, assets]) => ({ day, assets }))
+}
+
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
   const warrantyEnd = raw.warranty_expires?.date ?? null
@@ -622,7 +658,10 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
     statusType: raw.status_label?.status_type ?? '',
-    assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
+    assignee: raw.assigned_to && {
+      type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name,
+      username: raw.assigned_to.username || undefined, employeeNum: raw.assigned_to.employee_number || undefined,
+    },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
     defaultLocation: raw.rtd_location?.name ?? '',
@@ -1051,7 +1090,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (view !== undefined && (kind !== 'assets' || !Object.hasOwn(ASSET_VIEWS, view))) throw new Error(`Unknown View: ${view}`)
     const spec = LISTS[kind]
     const { path = spec.path, filter } = view ? ASSET_VIEWS[view] : {}
-    const params = new URLSearchParams({ limit: String(limit), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
+    const from = Number.isSafeInteger(offset) && offset > 0 ? offset : 0
+    const params = new URLSearchParams({ limit: String(limit), offset: String(from) })
     if (search?.trim()) params.set('search', search.trim())
     for (const [key, value] of Object.entries(filters)) {
       if (value === '' || value === undefined) continue
@@ -1074,11 +1114,32 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } else if (filter) params.set(...filter)
     // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
     const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
-    if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
+    const sorted = sort !== undefined && Object.hasOwn(sorts, sort)
+    const now = today()
+    const keep = view && ASSET_VIEWS[view].keep
+    if (keep) {
+      // ponytail: the whole set fetched, then sorted, paged and selected here, and fetched again for each page, Select all
+      // and Export. Overdue's set is tens of Assets, but Out on temp's is every checked-out one matching the boxes (most of
+      // the fleet in a 1:1 school). Move to server paging (or cache the set) if either grows past a few hundred rows.
+      params.delete('limit'), params.delete('offset')
+      const fetched = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+      const { rows, tempError } = await markTemp(fetched, view === 'outOnTemp')
+      const kept = rows.filter(keep)
+      if (sorted) {
+        const value = (a: Asset) => String((sort === 'assignee' ? a.assignee?.name : a[sort as keyof Asset]) ?? '')
+        kept.sort((a, b) => value(a).localeCompare(value(b), undefined, { numeric: true }) * (order === 'asc' ? 1 : -1))
+      }
+      return { total: kept.length, rows: kept.slice(from, from + limit), ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
+    }
+    if (sorted) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
     const page = await request<{ total: number; rows: unknown[] }>(`${path}?${params}`, undefined, undefined, timeout)
     if (isError(page)) throw new Error(reason(page.messages))
-    const now = today()
-    return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
+    const rows = page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows']
+    // The All View flags Temp checkouts in each row's Status (Overdue and Out on temp mark theirs above).
+    // ponytail: one Activity Report request per page with a time-of-day Checkout on it, Select all and Export pages too.
+    if (kind !== 'assets' || (view && view !== 'all')) return { total: page.total, rows }
+    const { rows: marked, tempError } = await markTemp(rows as unknown as Asset[])
+    return { total: page.total, rows: marked, ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
   }
 
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
@@ -1140,7 +1201,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
   // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
   // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
-  // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
+  // ponytail: the dashboard and the Assets List call it yet; the End-of-day reminder and Automatic check-in will.
   // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
   // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
@@ -1163,6 +1224,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       offset += page.rows.length
       if (!page.rows.length || offset >= page.total) return temp
     }
+  }
+
+  // The Assets with their Temp marks. If the lookup fails, they come back unmarked with the reason; with must (Out on temp,
+  // which can't be shown without the marks) the failure is thrown instead.
+  async function markTemp<T extends Asset>(assets: T[], must = false): Promise<{ rows: (T & { temp: boolean })[]; tempError?: string }> {
+    const temp = await outstandingTemp(assets).catch((e: Error) => {
+      if (must) throw e
+      return e
+    })
+    const rows = assets.map((a) => ({ ...a, temp: temp instanceof Set && temp.has(a.id) }))
+    return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
   }
 
   return {
@@ -1684,12 +1756,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // The Health warnings' checks: four small requests at once, each failing on its own. Runs on open and Refresh only.
     async health(): Promise<Health> {
       const failed = (e: Error): Failed => ({ error: e.message })
-      const total = async (path: string) => {
-        const body = await request<{ total?: unknown }>(`${path}?limit=1`)
+      // A list's total and its first row (all limit=1 asks for).
+      const peek = async (path: string, sort = '') => {
+        const body = await request<{ total?: unknown; rows?: RawAsset[] }>(`${path}?limit=1${sort}`)
         if (isError(body)) throw new Error(reason(body.messages))
         if (typeof body.total !== 'number') throw new Error(`Snipe-IT didn't send a total for ${path.slice(1)}.`)
-        return body.total
+        return { total: body.total, rows: body.rows ?? [] }
       }
+      // Latest first, so the one row it sends is where Audit due ends, without a second request.
+      const due = peek('/hardware/audit/due', '&sort=next_audit_date&order=desc')
       // Deactivated Users, most Assets first, counted until one holds none: usually one page. Only Assets count, not seats.
       const countDeactivated = async () => {
         let assets = 0, users = 0
@@ -1705,7 +1780,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           if (!page.rows.length || offset >= page.total) return { assets, users }
         }
       }
-      const [probe, auditLate, auditDue, deactivated] = await Promise.all([
+      const [probe, auditLate, auditDue, dueThrough, deactivated] = await Promise.all([
         request<{ version?: unknown }>('/version').then(
           (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
             : typeof body.version === 'string' ? { version: body.version } : { error: "Snipe-IT didn't say which version it runs." },
@@ -1714,11 +1789,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             // /version needs no permission, so a 403 on it is about the whole key (since v8.8: 2FA not enrolled, or User-Agent blocked).
             : e.kind === 'key' || e.kind === 'forbidden' ? { warning: 'key', message: e.message }
             : failed(e)),
-        total('/hardware/audit/overdue').catch(failed),
-        total('/hardware/audit/due').catch(failed),
+        peek('/hardware/audit/overdue').then((b) => b.total, failed),
+        due.then((b) => b.total, failed),
+        due.then((b) => dayOf(b.rows[0]?.next_audit_date), () => null),
         countDeactivated().catch(failed),
       ])
-      return { probe, auditLate, auditDue, deactivated }
+      return { probe, auditLate, auditDue, dueThrough, deactivated }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
@@ -1729,7 +1805,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const wants = (...p: (DashboardPiece | HealthPiece)[]) => p.some((x) => pieces.includes(x))
       // The charts, the tables and the missing fields all come from the Asset list, so it's fetched once for them all.
       const raw = wants(...ASSET_PIECES, 'missing') ? allRows<RawAsset>('/hardware') : undefined
-      const assets = wants('overdue', 'expiring', 'missing') ? raw!.then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      const assets = wants('audits', 'overdue', 'expiring', 'missing') ? raw!.then((rows) => rows.map((r) => toAsset(r, now))) : undefined
       // The Licenses bar and Running out share one Licenses list.
       const licenses = wants('licenses', 'runningOut') ? allRows<Record<string, unknown>>('/licenses') : undefined
       // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the Status Label chart
@@ -1767,14 +1843,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
+        entry('audits', async () => auditDays(await assets!, now)),
         // The Temp marks failing (say a 403 on the Activity Report) leaves the list, unmarked, with the reason.
         entry('overdue', async () => {
-          const list = await assets!
-          const temp = await outstandingTemp(list).catch((e: Error) => e)
-          const rows = list
-            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue, temp: temp instanceof Set && temp.has(a.id) }]))
+          const { rows: marked, tempError } = await markTemp(await assets!)
+          const rows = marked
+            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue }]))
             .sort((a, b) => b.overdue.minutes - a.overdue.minutes)
-          return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
+          return tempError ? { rows, tempError } : { rows }
         }),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))

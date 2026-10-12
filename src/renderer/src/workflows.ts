@@ -1,17 +1,18 @@
 // The Workflows shell (#56): each Workflow's scan queue and Running list, and the Workflows built on it.
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
-import type { Asset, Assignee, Failure, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, Assignee, CheckoutOptions, Failure, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
 import { parseWorkflowNote, undoNote, workflowNote } from '../../main/notes'
 import type { Outcome } from './BatchView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
 export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 
-/** A Running list row's result: Batch's outcome states, plus waiting its turn in the queue, open in a confirm, put back
- *  by Undo last, neutral (nothing written, nothing wrong: "Already theirs", "Skipped: not confirmed"), and a write that
- *  may have gone through before the connection dropped (unsure, waiting for Resume to check). Refused and failed are both 'failed'. */
-export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'undone' } | { state: 'neutral'; text: string } | { state: 'unsure'; reason: string } | Outcome
+/** A Running list row's result: Batch's outcome states, plus waiting its turn in the queue, open in a confirm or a
+ *  choice, put back by Undo last, neutral (nothing written, nothing wrong: "Already theirs", "Skipped: not confirmed"),
+ *  and a write that may have gone through before the connection dropped (unsure, waiting for Resume to check). Refused,
+ *  failed and stopped are all 'failed'. */
+export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'choice' } | { state: 'undone' } | { state: 'neutral'; text: string } | { state: 'unsure'; reason: string } | Outcome
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
  *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
  *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true. */
@@ -34,9 +35,13 @@ export type Done = { text: string; what?: string; undo?: Undo | string }
 export type Write = { write: (now: Asset, text: string) => Promise<Done>; left?: (now: Asset) => Done | null }
 /** A confirm step (#56 §3): its Write, run once confirmed. needs: the text it can't go without (e.g. "what happened"), if any. */
 export type Confirm = Write & { needs?: string }
-/** What a Workflow's step does to one scanned Asset: done at once, a neutral row, a confirm first, or a write sent at once
- *  (send); or a throw with the refusal. Only the Write is sent again or checked after a pause. */
-export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { send: Write }>
+/** A choice step (#56 §3): an Asset that can't go through as scanned, and its Write, the fix-it action, run once picked.
+ *  fix: the fix-it button's label; blocked: why it's off ('' when it isn't); stop: what's in the way, for "Stopped: <stop>".
+ *  Only an explicit pick runs it: Enter and a same-tag rescan never do. */
+export type Choice = Write & { fix: string; blocked: string; stop: string }
+/** What a Workflow's step does to one scanned Asset: done at once, a neutral row, a confirm or choice first, or a write
+ *  sent at once (send); or a throw with the refusal. Only the Write is sent again or checked after a pause. */
+export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { choice: Choice; what?: string } | { send: Write }>
 export const SKIPPED = 'Skipped: not confirmed'
 export const NOT_SENT = 'Skipped: not sent'
 export const NOT_SURE = 'Not sure it went through'
@@ -62,7 +67,7 @@ const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'wor
 const same = (a: Asset, b: Asset) =>
   a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId && a.expectedCheckin === b.expectedCheckin
   && a.lastCheckout === b.lastCheckout
-const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
+export const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 const found = (a: Asset) => `${a.assignee ? `checked out to ${assigneeName(a.assignee)}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
 
 // The least time between one queued Asset starting and the next: a Bulk return is 3 requests, so 1.5s keeps a fast
@@ -87,8 +92,9 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
   // Undo last: the row whose confirm is open, and the undo in flight (queued scans wait for it).
   let confirming: Row<C> | null = null
   let undoing: Promise<void> | null = null
-  // The confirm step that's open (at most one), the text typed into it, and each confirmed row's write, run in its turn.
-  let opened: { key: number; confirm: Confirm; text: string } | null = null
+  // The confirm or choice step that's open (at most one of either), the text typed into a confirm, and each confirmed
+  // (or fixed) row's write, run in its turn.
+  let opened: { key: number; confirm?: Confirm; choice?: Choice; text: string } | null = null
   // unsure: why a write that was sent may not have gone through; Resume checks the Asset before sending it again.
   const writes = new Map<number, { write: Write; text: string; unsure?: string }>()
   // Off the Workflow's page: a confirm that would open is skipped, so nothing waits for an Operator who isn't looking.
@@ -181,15 +187,16 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
         const step = await act(asset, row.ctx)
         if (mine !== generation) return
         if ('send' in step) await send(asset, { write: step.send, text: '' })
-        else if ('confirm' in step) {
-          // At most one open: a newer one skips the one still waiting, as a different scan would. Latest wins: a newer
-          // scan (or line) since this one, whatever came of it, means this confirm never opens. Not for a scan that
-          // waited through a pause: those come up in turn on Resume.
+        else if ('confirm' in step || 'choice' in step) {
+          // At most one open: a newer one skips or stops the one still waiting, as a different scan would. Latest wins: a
+          // newer scan (or line) since this one, whatever came of it, means this confirm or choice never opens. Not for a
+          // scan that waited through a pause: those come up in turn on Resume.
           skipOpen()
-          if (away || (!wasHeld && row.key !== next)) settle(row, { state: 'neutral', text: SKIPPED }, { what: step.what ?? '' })
+          const shut = 'choice' in step ? stopped(step.choice) : ({ state: 'neutral', text: SKIPPED } as const)
+          if (away || (!wasHeld && row.key !== next)) settle(row, shut, { what: step.what ?? '' })
           else {
-            opened = { key: row.key, confirm: step.confirm, text: '' }
-            update(row.key, { what: step.what ?? '', result: { state: 'confirm' } })
+            opened = 'choice' in step ? { key: row.key, choice: step.choice, text: '' } : { key: row.key, confirm: step.confirm, text: '' }
+            update(row.key, { what: step.what ?? '', result: { state: 'choice' in step ? 'choice' : 'confirm' } })
           }
         } else if ('neutral' in step) settle(row, { state: 'neutral', text: step.neutral }, { what: step.what ?? '' })
         else settle(row, { state: 'done', text: step.text }, { what: step.what ?? '', undo: step.undo })
@@ -237,27 +244,36 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
   }
 
   const openRow = () => (opened ? rows.find((r) => r.key === opened!.key) : undefined)
-  // Closes the open confirm without writing anything.
+  // A stopped choice is a red row with the error sound, so the Operator can find it and fix it by hand.
+  const stopped = (c: Choice) => ({ state: 'failed', reason: `Stopped: ${c.stop}` }) as const
+  // Closes the open confirm (skipped) or choice (stopped) without writing anything.
   function skipOpen() {
     if (!opened) return
     const row = openRow()!
+    const { choice } = opened
     opened = null
-    settle(row, { state: 'neutral', text: SKIPPED })
+    settle(row, choice ? stopped(choice) : { state: 'neutral', text: SKIPPED })
     // The next held scan's turn.
     drain()
   }
-  // Confirms the open confirm: its write joins the queue. Returns what's missing ('' when it went).
-  function confirmOpen(): string {
-    if (!opened) return ''
-    const { confirm, text } = opened
+  // The open step's write joins the queue.
+  function queueWrite(write: Write, text: string) {
     const row = openRow()!
-    if (confirm.needs && !text.trim()) return `Type ${confirm.needs} first`
     opened = null
-    writes.set(row.key, { write: confirm, text: text.trim() })
+    writes.set(row.key, { write, text })
     // Ahead of scans held by a pause: it was scanned before them.
     queue.unshift(row)
     update(row.key, { result: { state: 'waiting' } })
     drain()
+  }
+  // Enter on the empty field, or a same-tag rescan: confirms the open confirm, and never picks a choice's fix-it action.
+  // Returns what's missing ('' when it went).
+  function confirmOpen(): string {
+    if (!opened) return ''
+    const { confirm, choice, text } = opened
+    if (choice) return `${openRow()!.tag}: pick ${choice.fix} or Stop`
+    if (confirm!.needs && !text.trim()) return `Type ${confirm!.needs} first`
+    queueWrite(confirm!, text.trim())
     return ''
   }
 
@@ -270,7 +286,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
   // Why Undo last is off ('' when it isn't): it waits for the queue and any open confirm, so "last" is well defined.
   const undoBlocked = () => {
     if (paused) return 'Undo waits until the Workflow resumes'
-    if (opened) return 'Undo waits for the open confirm'
+    if (opened) return `Undo waits for the open ${opened.choice ? 'choice' : 'confirm'}`
     if (waits()) return 'Undo waits until nothing is waiting or working'
     if (confirming) return 'Undo is waiting for Enter or Esc'
     const undo = undoTarget()?.undo
@@ -311,15 +327,22 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     get clearBlocked() { return waits() ? 'Waits until nothing is waiting or working' : '' },
     /** The open Undo last confirm's text, or null. */
     get confirm() { return confirming && `Undo: ${(confirming.undo as Undo).says}? Enter to undo, Esc to cancel.` },
-    /** The open confirm step: its row, the text it needs (if any) and the text typed so far; or null. */
-    get open() { return opened && { row: openRow()!, needs: opened.confirm.needs, text: opened.text } },
+    /** The open confirm or choice step: its row, the text a confirm needs (if any) and the text typed so far, or the choice; or null. */
+    get open() { return opened && { row: openRow()!, needs: opened.confirm?.needs, text: opened.text, choice: opened.choice } },
     /** The open confirm's text, as typed. */
     setText(text: string) {
       if (opened) opened.text = text
     },
     /** Enter on the empty field: confirms the open confirm. Returns what's missing ('' when it went). */
     confirmOpen,
-    /** Esc, Done or leaving: the open confirm's Asset is skipped, never written. */
+    /** The open choice's fix-it button, clicked (or Tab, then Enter): its write joins the queue. Returns why not ('' when it went). */
+    fixOpen(): string {
+      if (!opened?.choice) return ''
+      if (opened.choice.blocked) return opened.choice.blocked
+      queueWrite(opened.choice, '')
+      return ''
+    },
+    /** Esc, Done or leaving: the open confirm's Asset is skipped, or the open choice's stopped; never written. */
     cancelOpen: skipOpen,
     /** Enter in a confirm's text field. One word is checked as an Asset Tag first, and is a scan of it if it is one;
      *  anything else is the text, and confirms. Returns what the status line should say. */
@@ -336,7 +359,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       opened.text = raw
       return confirmOpen()
     },
-    /** Leaving the Workflow's page: an open confirm or Undo confirm closes without writing; the queue keeps running. */
+    /** Leaving the Workflow's page: an open confirm, choice or Undo confirm closes without writing; the queue keeps running. */
     leave() {
       away = true
       skipOpen()
@@ -401,11 +424,12 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     scan(raw: string, ctx: C): string {
       const tag = cleanTag(raw)
       if (!tag) return ''
-      // Rescanning the tag a confirm is open for confirms it (scanner-only work).
+      // Rescanning the tag a confirm is open for confirms it (scanner-only work); a choice's, never.
       if (openRow()?.tag.toUpperCase() === tag.toUpperCase()) return confirmOpen()
       const twin = rows.find((r) => busy(r) && r.tag.toUpperCase() === tag.toUpperCase())
       if (twin) return `${twin.tag} is already scanned`
-      // A different tag skips the Asset waiting in a confirm; a scan closes an open Undo confirm: "last" is about to change.
+      // A different tag skips the Asset waiting in a confirm, or stops the one in a choice; a scan closes an open Undo
+      // confirm: "last" is about to change.
       skipOpen()
       confirming = null
       // Paused, it waits with no lookup; its confirm comes up on Resume.
@@ -549,32 +573,99 @@ export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
 const NO_OPTIONS: CheckoutSession = { expectedCheckin: '', note: '' }
 
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
-export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+// Someone else's Asset opens a choice instead: Move to this User, or Stop.
+export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkCheckoutStep = { step: 'user' }
   let options = NO_OPTIONS
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
-  // Bumped by reset (another server), so a Checkout or Undo still in flight never counts on the new server.
+  // Bumped by reset (Settings pointing at another server): a Checkout or Undo still in flight never counts on the new
+  // server, and a two-call write stops before its second call, which would go there with the old server's ids.
   let session = 0
   // The header's "holds N Assets" follows each Checkout and Undo while that User is still the one being served.
   const held = (userId: number, by: number, from: number) => {
     if (from === session && step.step === 'scan' && step.user.id === userId) step = { ...step, user: { ...step.user, assets: step.user.assets + by } }
+  }
+  const sameSession = (mine: number) => {
+    if (mine !== session) throw new Error('Stopped: Settings changed')
   }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
     const mine = session
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
-    // ponytail: someone else's Asset is refused for now; the choice step (Move to this User / Stop) is #91.
-    if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}`)
+    // Checked before a choice too: a Move checks out again, so it needs a deployable label and a key that may check out.
     if (a.statusType !== 'deployable') throw new Error(`"${a.assetTag}" is "${a.status}", which can't be checked out`)
     if (!a.can.checkout) throw new Error(NOT_ALLOWED)
-    // Scanned for a User who's since been Done: no confirm opens for a round that's over.
-    if (step.step !== 'scan' || step.round !== round) return { neutral: SKIPPED, what }
+    const was = a.assignee
+    const stop = was && `checked out to ${assigneeName(was)}`
+    // Scanned for a User who's since been Done: no confirm or choice opens for a round that's over.
+    if (step.step !== 'scan' || step.round !== round) {
+      if (stop) throw new Error(`Stopped: ${stop}`)
+      return { neutral: SKIPPED, what }
+    }
+    // Undo's guard: it's still checked out to this User.
+    const stillTheirs = (now: Asset) => {
+      if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+    }
+    // guard: what Checkout's own last read must still find.
+    const checkout = (guard: Pick<CheckoutOptions, 'fromStatusId' | 'fromLocationId'> = {}) =>
+      bridge.checkout(a.id, { targetType: 'user', targetId: user.id, ...guard, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+    // As a Checkout (or Move) leaves it: to this User, the Status Label kept, and the Expected Checkin it set (or none).
+    // Found so on Resume, it went through: the User's count goes up as for any Checkout.
+    const left = (done: Done) => (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === expectedCheckin ? (held(user.id, 1, mine), done) : null)
+    if (was) {
+      // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
+      const from = assigneeName(was)
+      // Whether it's a Temp checkout, for the undo: a time of day alone doesn't make one (an ordinary Checkout can have
+      // one too), so History says, as for Bulk return's undo. History that can't be read counts as an ordinary Checkout.
+      // The Move finds it before its Checkin, so it's known by the time Resume can find the Move went through.
+      let temp = false
+      // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
+      // had. A Temp checkout is made one again.
+      const run = async (now: Asset) => {
+        stillTheirs(now)
+        // A label changed (or made non-deployable) since couldn't be checked out again.
+        if (now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} is '${now.status}' now`)
+        // Both calls must be allowed before the first, so a refused Checkout never leaves it checked in.
+        if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
+        const { expectedCheckin: due } = a
+        const mine = session
+        await bridge.checkin(a.id, { note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined })
+        sameSession(mine)
+        await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, fromStatusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote('Bulk checkout', temp ? due! : undefined) })
+          .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
+        held(user.id, -1, mine)
+      }
+      const done: Done = { text: 'Checked out', what: `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
+      const move = async (now: Asset): Promise<Done> => {
+        // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
+        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
+        if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
+        const mine = session
+        if (a.expectedCheckin && a.expectedCheckin.length > 10) {
+          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
+          sameSession(mine)
+          temp = !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
+        }
+        // The Checkin's and Checkout's own last reads check the Assignee and Status Label again.
+        await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }), fromAssignee: { type: was.type, id: was.id }, fromStatusId: a.statusId ?? undefined })
+        sameSession(mine)
+        // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
+        // A Checkout that lost the connection or timed out may have gone through, so it pauses the queue and Resume checks
+        // the Asset (left); any other failure is this row's, since sending the Move again would find it checked in.
+        await checkout({ fromStatusId: a.statusId ?? undefined }).catch((e: Failure) => {
+          throw { kind: e.kind === 'unreachable' || e.kind === 'timeout' ? e.kind : 'refused', message: `Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}` } satisfies Failure
+        })
+        held(user.id, 1, mine)
+        return done
+      }
+      return { what, choice: { fix: 'Move to this User', blocked: a.can.checkin ? '' : NOT_ALLOWED, stop: stop!, write: move, left: left(done) } }
+    }
     // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
     const run = async (now: Asset) => {
-      if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
+      stillTheirs(now)
       // A label someone set since the Checkout isn't overwritten with the old one.
       if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
       // Another Expected Checkin means a newer Checkout to the same User; that one isn't undone.
@@ -590,14 +681,11 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
     const done: Done = { text: 'Checked out', undo: byHand ? `Snipe-IT would check ${a.assetTag} in to its Default Location, ${a.defaultLocation}, not back to no Location. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} → ${user.name}`, run } }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      await checkout({ fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId })
       held(user.id, 1, mine)
       return done
     }
-    // As this Checkout leaves it: to this User, the Status Label kept, and the Expected Checkin it set (or none).
-    // Found so on Resume, it went through: the User's count goes up as for any Checkout.
-    const left = (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === expectedCheckin ? (held(user.id, 1, mine), done) : null)
-    return { what, confirm: { write, left } }
+    return { what, confirm: { write, left: left(done) } }
   }, events, now, pace)
 
   function choose(user: UserCard) {

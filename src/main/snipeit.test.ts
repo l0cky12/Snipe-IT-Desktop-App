@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { allMatching } from '../renderer/src/ListView'
 import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
 
@@ -131,7 +132,7 @@ describe('lookup', () => {
         name: 'CB-LIB-012',
         status: 'Deployed',
         statusMeta: 'deployed',
-        assignee: { type: 'user', id: 311, name: 'Jordan Reyes' },
+        assignee: { type: 'user', id: 311, name: 'Jordan Reyes', username: 'jreyes' },
         can: { checkout: true, checkin: true, update: true, delete: true },
         matched: 'Assignee',
       },
@@ -280,6 +281,13 @@ describe('getAsset', () => {
     const asset = await snipeItWith(escaped).getAsset(4812)
     expect(asset.name).toBe('Cart "B" & charger')
     expect(asset.model).toBe("Dell 3100 '2-in-1'")
+  })
+
+  it("a User Assignee carries their username and employee number, when Snipe-IT sends them (the key may view Users)", async () => {
+    const withNumber = { ...chromebook, assigned_to: { ...chromebook.assigned_to, employee_number: '20417' } }
+    expect((await snipeItWith(withNumber).getAsset(4812)).assignee).toEqual({ type: 'user', id: 311, name: 'Jordan Reyes', username: 'jreyes', employeeNum: '20417' })
+    const denied = { ...chromebook, assigned_to: { id: 311, name: 'Jordan Reyes', type: 'user' } }
+    expect((await snipeItWith(denied).getAsset(4812)).assignee).toEqual({ type: 'user', id: 311, name: 'Jordan Reyes' })
   })
 
   it('Assignee keeps its kind: a Location Assignee is a Location', async () => {
@@ -899,25 +907,24 @@ describe('dashboard (today is 2026-09-24)', () => {
     id, action_type: 'checkout', created_at: { datetime: when }, created_by: { id: 5, name: 'Demo Operator' },
     target: { id: 311, name: 'Jordan Reyes', type: 'user' }, note, item: { id: item, name: `NOMMA-${item}`, type: 'asset' },
   })
-  const tempFleet = (pageMax?: number) => fleet({
-    hardware: [
-      checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
-      checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
-      checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
-      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
-      checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
-    ],
-    // Newest first, as asked for.
-    'reports/activity': [
-      logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
-      logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
-      logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
-      logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
-      logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
-      logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
-      logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
-    ],
-  }, pageMax)
+  const tempHardware = [
+    checkedOut(1, '2026-09-23 14:50:00', '2026-09-23 09:05:12'), // its tagged Checkout is the current one
+    checkedOut(2, '2026-09-22 14:50:00', '2026-09-23 10:00:00'), // checked in and out again in the web UI since its tag
+    checkedOut(3, '2026-09-20 00:00:00', '2026-09-19 08:00:00'), // date-only Expected Checkin
+    checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // Bulk return, then its undo put the Temp tag back
+    checkedOut(5, '2026-09-23 15:30:00', '2026-09-23 07:00:00'), // a time of day, but not a Temp checkout
+  ]
+  // Newest first, as asked for.
+  const tempLog = [
+    logged(16, 4, '2026-09-23 12:00:01', '[Undo] Bulk return [Temp checkout | due: 2026-09-23 14:50]'),
+    logged(15, 1, '2026-09-23 09:05:13', '[Temp  checkout | due: 2026-09-23 14:50] Charger included'), // typed by hand in the web UI
+    logged(14, 4, '2026-09-23 09:00:00', '[Temp checkout | due: 2026-09-23 14:50]'),
+    logged(13, 5, '2026-09-23 07:00:00', '[Bulk checkout] Temp checkout of the cart'),
+    logged(12, 2, '2026-09-22 08:00:00', '[Temp checkout | due: 2026-09-22 14:50]'),
+    logged(11, 3, '2026-09-19 08:00:00', '[Temp checkout | due: 2026-09-20 14:50]'),
+    logged(10, 2, '2026-09-18 08:00:00', '[Temp checkout | due: 2026-09-18 14:50]'),
+  ]
+  const tempFleet = (pageMax?: number) => fleet({ hardware: tempHardware, 'reports/activity': tempLog }, pageMax)
   const temps = (overdue: Dashboard['overdue']) => (overdue && 'rows' in overdue ? overdue.rows.filter((a) => a.temp).map((a) => a.id).sort() : overdue)
 
   it('marks Overdue Temp checkouts: a tagged current Checkout or an undo-restored tag, not a later Checkout or a date-only one', async () => {
@@ -959,6 +966,84 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
     expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0, deactivated: { assets: 0, users: 0 } }, null, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+  })
+
+  describe('the Out on temp and Overdue Views, computed in the app', () => {
+    it('Out on temp keeps the checked-out Assets the Temp lookup counts, fetched whole with the boxes, then sorted here', async () => {
+      const { snipeIt, urls } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': tempLog })
+      const page = await snipeIt.list('assets', { view: 'outOnTemp', search: 'nomma', filters: { location_id: '9' }, sort: 'assetTag', order: 'desc' })
+      expect(page).toMatchObject({ total: 2, rows: [{ id: 4, temp: true }, { id: 1, temp: true }] })
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware').map((u) => Object.fromEntries(u.searchParams))).toEqual([
+        { search: 'nomma', location_id: '9', status: 'Deployed', limit: '500', offset: '0', sort: 'id', order: 'asc' },
+      ])
+    })
+
+    it("Out on temp can't be shown without the Temp lookup, so the Activity Report refused fails it", async () => {
+      const refused = { status: 403, body: { status: 'error', messages: 'You do not have permission to view the Activity Report.' } }
+      const { snipeIt } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': refused })
+      await expect(snipeIt.list('assets', { view: 'outOnTemp' })).rejects.toThrow('permission to view the Activity Report')
+    })
+
+    it("the All View marks the page's Temp checkouts; a refused Activity Report leaves them unmarked, saying why", async () => {
+      const marked = await fleet({ hardware: tempHardware, 'reports/activity': tempLog }).snipeIt.list('assets')
+      expect(marked.rows.filter((a) => a.temp).map((a) => a.id)).toEqual([1, 4])
+      expect(marked).not.toHaveProperty('tempError')
+      const refused = { status: 403, body: { status: 'error', messages: 'No Activity Report for you.' } }
+      const unmarked = await fleet({ hardware: tempHardware, 'reports/activity': refused }).snipeIt.list('assets')
+      expect(unmarked).toMatchObject({ total: 5, tempError: 'Snipe-IT returned HTTP 403: No Activity Report for you.' })
+      expect(unmarked.rows.some((a) => a.temp)).toBe(false)
+    })
+
+    // Today is 2026-09-24 and it's 3 pm. Snipe-IT's /hardware/checkins/overdue answers what its own rule counts: a checked-out
+    // Asset whose Expected Checkin is before now, a date-only one from its midnight.
+    const afternoon = () => new Date(2026, 8, 24, 15, 0)
+    const due = [
+      checkedOut(1, '2026-09-24 00:00:00', '2026-09-20 08:00:00'), // date-only, due today: Snipe-IT says late, the app not yet
+      checkedOut(2, '2026-09-24 14:50:00', '2026-09-24 08:00:00'), // a time of day already past
+      checkedOut(3, '2026-09-23 00:00:00', '2026-09-20 08:00:00'), // date-only, due yesterday
+      checkedOut(4, '2026-09-23 14:50:00', '2026-09-23 12:00:00'), // a Temp checkout put back by an undo
+      checkedOut(5, '2026-09-24 15:30:00', '2026-09-24 08:00:00'), // due later today
+      asset(6, { expected_checkin: { datetime: '2026-09-01 00:00:00' }, assigned_to: null }), // checked in
+    ]
+    const snipeItLate = due.slice(0, 4) // what Snipe-IT's rule answers: checked out and due before 3 pm
+    const overdueFleet = (rows = snipeItLate) => {
+      const { fetch, urls } = fleet({ hardware: due, 'hardware/checkins/overdue': rows, 'reports/activity': tempLog })
+      return { snipeIt: createSnipeIt(config, fetch, afternoon), urls }
+    }
+
+    it('Overdue drops a date-only Asset due today and keeps a time of day past its time; Temp checkouts carry their mark', async () => {
+      const { snipeIt, urls } = overdueFleet()
+      const page = await snipeIt.list('assets', { view: 'overdue', search: 'nomma', filters: { category_id: '3' }, sort: 'expectedCheckin', order: 'asc' })
+      expect(page.rows.map((a) => [a.id, a.expectedCheckin, a.temp])).toEqual([[3, '2026-09-23', false], [4, '2026-09-23 14:50', true], [2, '2026-09-24 14:50', false]])
+      expect(page.total).toBe(3)
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').map((u) => Object.fromEntries(u.searchParams))).toEqual([
+        { search: 'nomma', category_id: '3', limit: '500', offset: '0', sort: 'id', order: 'asc' },
+      ])
+    })
+
+    it('the Overdue View, the dashboard Overdue list and the Overdue Report list the same Assets', async () => {
+      const { snipeIt } = overdueFleet()
+      const view = (await snipeIt.list('assets', { view: 'overdue' })).rows.map((a) => a.assetTag)
+      const { overdue } = await snipeIt.dashboard(['overdue'])
+      const report = (await snipeIt.report('overdue')).rows.map((r) => r[0])
+      expect(view.sort()).toEqual(['NOMMA-2', 'NOMMA-3', 'NOMMA-4'])
+      expect(overdue && 'rows' in overdue && overdue.rows.map((a) => a.assetTag).sort()).toEqual(view)
+      expect(report.sort()).toEqual(view)
+    })
+
+    it('sorts and pages the whole set here, and "Select all N matching" gets every one of it', async () => {
+      const many = Array.from({ length: 60 }, (_, i) => checkedOut(i + 1, `2026-09-${String(1 + (i % 20)).padStart(2, '0')} 00:00:00`, '2026-08-31 08:00:00'))
+      const { snipeIt, urls } = overdueFleet(many)
+      const second = await snipeIt.list('assets', { view: 'overdue', sort: 'expectedCheckin', order: 'desc', offset: 50 })
+      expect(second.total).toBe(60)
+      // Three Assets due each day from the 1st to the 20th, latest first: the last ten are due on the 4th to the 1st.
+      expect(second.rows.map((a) => a.expectedCheckin!.slice(8))).toEqual(['04', '03', '03', '03', '02', '02', '02', '01', '01', '01'])
+      // End to end: the List's own Select all, paging through this View as the window does.
+      const all = await allMatching((offset) => snipeIt.list('assets', { view: 'overdue', sort: 'id', order: 'asc', offset }))
+      expect([...all!.keys()]).toEqual(many.map((a) => a.id))
+      // Each page asks Snipe-IT for the whole set again, never for a page of it.
+      expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').every((u) => u.searchParams.get('offset') === '0')).toBe(true)
+    })
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
@@ -1062,6 +1147,33 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(offsets('hardware')).toEqual([0, 0])
   })
 
+  it('Upcoming audits: next audit dates grouped by day, today to 12 months ahead inclusive, soonest first', async () => {
+    const next = (date: string | null) => ({ next_audit_date: date && { date, formatted: date } })
+    const { snipeIt } = fleet({ hardware: [
+      asset(1, next('2026-12-01')), asset(2, next('2026-09-24')), asset(3, next('2026-12-01')), asset(4, next('2026-09-23')),
+      asset(5, next('2027-09-24')), asset(6, next('2027-09-25')), asset(7, next(null)),
+    ] })
+    const { audits } = await snipeIt.dashboard(['audits'])
+    expect(audits).toMatchObject([
+      { day: '2026-09-24', assets: [{ id: 2, assetTag: 'NOMMA-2' }] },
+      { day: '2026-12-01', assets: [{ id: 1 }, { id: 3 }] },
+      { day: '2027-09-24', assets: [{ id: 5 }] },
+    ])
+  })
+
+  it('Upcoming audits leaves out Archived Assets, which "show archived in list" puts in the Asset list', async () => {
+    const next = (date: string) => ({ next_audit_date: { date, formatted: date } })
+    const archived = { status_label: { id: 4, name: 'Archived', status_meta: 'archived' }, assigned_to: null }
+    const { snipeIt } = fleet({ hardware: [asset(1, next('2026-12-01')), asset(2, { ...next('2026-12-01'), ...archived }), asset(3, { ...next('2027-01-12'), ...archived })] })
+    expect((await snipeIt.dashboard(['audits'])).audits).toMatchObject([{ day: '2026-12-01', assets: [{ id: 1 }] }])
+  })
+
+  it("Upcoming audits reads the Asset list only; the Audit late and Audit due totals come from the Health check", async () => {
+    const { snipeIt, listsAsked } = fleet({ hardware: [asset(1)] })
+    await snipeIt.dashboard(['audits', 'categories'])
+    expect(listsAsked()).toEqual(['hardware'])
+  })
+
   it('a connection failure keeps its clear message, on every piece', async () => {
     const offline = (async () => {
       throw new TypeError('fetch failed')
@@ -1145,11 +1257,17 @@ describe('Health warnings', () => {
 
   const noneDeactivated = { '/users': { body: { total: 0, rows: [] } } }
 
-  it('probes /version for the version, and reads both audit totals with limit=1', async () => {
+  it('probes /version for the version, and reads both audit totals with limit=1 (Audit due latest first)', async () => {
     const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits, ...noneDeactivated })
-    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, deactivated: { assets: 0, users: 0 } })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, dueThrough: null, deactivated: { assets: 0, users: 0 } })
     expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/users', '/version'])
-    expect(queries.filter((q) => q.limit === '1')).toHaveLength(2)
+    expect(queries.filter((q) => q.limit === '1')).toEqual(expect.arrayContaining([{ limit: '1' }, { limit: '1', sort: 'next_audit_date', order: 'desc' }]))
+  })
+
+  it("the Audit due check's one row is the latest Audit due date, where the timeline's Audit due shading ends", async () => {
+    const latest = { '/hardware/audit/due': { body: { total: 3, rows: [{ ...chromebook, next_audit_date: { date: '2026-10-19', formatted: '2026-10-19' } }] } } }
+    const { fetch } = fakeFetch({ '/version': { body: { version: 'v8.8.0' } }, ...audits, ...latest, ...noneDeactivated })
+    expect(await createSnipeIt(config, fetch).health()).toMatchObject({ auditDue: 3, dueThrough: '2026-10-19' })
   })
 
   // Shaped like Snipe-IT's /users rows (trimmed).
@@ -1192,7 +1310,7 @@ describe('Health warnings', () => {
   it('a check that fails says why on its own, leaving the others', async () => {
     const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'], ...noneDeactivated })
     expect(await createSnipeIt(config, fetch).health()).toEqual({
-      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, deactivated: { assets: 0, users: 0 },
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, dueThrough: null, deactivated: { assets: 0, users: 0 },
     })
   })
 
