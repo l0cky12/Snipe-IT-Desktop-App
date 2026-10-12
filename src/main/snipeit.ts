@@ -1,4 +1,5 @@
 import { liveEntries, parseAppNote, parseWorkflowNote } from './notes'
+import type { Release } from './release'
 
 export type Config = { baseUrl: string; apiKey: string }
 
@@ -221,21 +222,32 @@ export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
   | { warning: 'tooOld'; version: string }
   | { warning: 'auditLate' | 'auditDue'; count: number }
+  | { warning: 'newer'; release: Release; running: string }
   | { warning: 'tooOld' | 'auditLate' | 'auditDue'; error: string }
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
-/** The strip's lines, in order: none at 0. Snipe-IT unreachable or the key failing shows only that line. */
-export function healthLines({ probe, auditLate, auditDue }: Health): HealthLine[] {
+/**
+ * The strip's lines, red before amber: none at 0. Snipe-IT unreachable or the key failing shows only that line. release:
+ * GitHub's latest Snipe-IT release, from the main process's daily check (createReleaseCheck), if one is known and not hidden.
+ */
+export function healthLines({ probe, auditLate, auditDue }: Health, release?: Release | null): HealthLine[] {
   if ('warning' in probe) return [probe]
-  const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
-  const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
+  const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
-    : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
-    : older ? [{ warning: 'tooOld', version: probe.version }] : []
+    : !running ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
+    : olderThan(running, MIN_SNIPEIT) ? [{ warning: 'tooOld', version: probe.version }] : []
+  const latest = release && versionParts(release.tag)
+  const newer: HealthLine[] = running && latest && olderThan(running, latest) && 'version' in probe ? [{ warning: 'newer', release, running: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
     typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue)]
+  return [...tooOld, ...total('auditLate', auditLate), ...newer, ...total('auditDue', auditDue)]
+}
+// "v8.8.0", "8.8" or "v8.8.0 build 120 (g1a2b3c)" → [8, 8, 0]; null when it isn't a version.
+const versionParts = (v: string) => /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(v)?.slice(1).map((n) => Number(n ?? 0)) ?? null
+const olderThan = (a: readonly number[], b: readonly number[]) => {
+  const i = a.findIndex((n, i) => n !== (b[i] ?? 0))
+  return i >= 0 && a[i] < (b[i] ?? 0)
 }
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history and Damaged. */
