@@ -1689,19 +1689,20 @@ describe('Incoming repair', () => {
     fake.bridge.statusLabels.mockImplementation(async () => (fake.calls.push('statusLabels'), [...LABELS, DAMAGED]))
     fake.bridge.repairTypeId.mockImplementation(async (fallback) => (fake.calls.push(`repair type ${fallback}`), typeId))
     fake.bridge.openMaintenances.mockImplementation(async (id) => (fake.calls.push(`open maintenances ${id}`), open[id] ?? []))
-    // Each Maintenance as Snipe-IT keeps it, edited, created and read back, open or completed.
+    // Each Maintenance as Snipe-IT keeps it, edited, created and read back, open or completed. Like Snipe-IT, a cost of 0 is kept as none.
+    const stored = (cost: string | null | undefined) => (cost && Number(cost) ? cost : null)
     const kept = new Map(Object.values(open).flat().map((m) => [m.id, { ...m }]))
     fake.bridge.maintenance.mockImplementation(async (id) => (fake.calls.push(`read maintenance ${id}`), { ...kept.get(id)! }))
     fake.bridge.createMaintenance.mockImplementation(async (m) => {
       fake.calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}${m.supplierId ? ` supplier ${m.supplierId}` : ''}${m.cost ? ` cost ${m.cost}` : ''}`)
-      kept.set(61, maintenance(61, { type: { id: m.typeId, name: 'Repair' }, startDate: m.startDate, notes: m.notes, supplier: m.supplierId ? ACME : null, cost: m.cost ?? null }))
+      kept.set(61, maintenance(61, { type: { id: m.typeId, name: 'Repair' }, startDate: m.startDate, notes: m.notes, supplier: m.supplierId ? ACME : null, cost: stored(m.cost) }))
       return 61
     })
     fake.bridge.updateMaintenance.mockImplementation(async (id, c) => {
       fake.calls.push(`edit maintenance ${id} ${JSON.stringify(c)}`)
       const m = kept.get(id)!
       if ('supplierId' in c) m.supplier = c.supplierId ? ACME : null
-      if ('cost' in c) m.cost = c.cost ?? null
+      if ('cost' in c) m.cost = stored(c.cost)
     })
     // A status change shows on the next lookup, as in Snipe-IT; the Asset the Workflow was given stays as it was.
     fake.bridge.updateStatus.mockImplementation(async (id, statusId) => {
@@ -2010,6 +2011,18 @@ describe('Incoming repair', () => {
       calls.length = 0
       expect((await undo(flow)).result).toEqual({ state: 'undone' })
       expect(calls.slice(-1)).toEqual(['edit maintenance 52 {"cost":null}'])
+    })
+
+    it('a free repair (Repair cost 0, which Snipe-IT keeps as none) is still undone: the Maintenance reopened, or deleted if it was created', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      await back(flow, 'NOMMA-1', '0')
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
+      expect(calls.slice(-1)).toEqual(['edit maintenance 51 {"cost":null,"reopen":true}'])
+      await back(flow, 'NOMMA-2', '0')
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
+      expect(calls.slice(-1)).toEqual(['delete maintenance 61'])
     })
 
     it("stops when the status change fails, or the Asset isn't as it was left: the row stays done and says why", async () => {

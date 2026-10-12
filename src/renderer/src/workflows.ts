@@ -812,6 +812,8 @@ const newest = (list: OpenMaintenance[]) => list.reduce<OpenMaintenance | null>(
 export type IncomingCtx = { supplier: StatusLabel | null; cost: string; found?: { open: OpenMaintenance | null; others: number; typeId: number | null; damaged: boolean } }
 // A Repair cost as typed: '' when none, else `45.00`; throws with a message when it isn't a number.
 const costOf = (raw: string) => (raw.trim() ? repairCost(raw) : '')
+// Snipe-IT stores a Repair cost of 0 as none, so null, '' and 0.00 all read back as no cost.
+const noCost = (c: string | null) => (c && Number(c) !== 0 ? c : null)
 const wrong = (f: () => unknown) => { try { return f(), '' } catch (e) { return (e as Error).message } }
 // "(Acme Device Repair, $45.00)", or '' with neither.
 const given = (supplier: StatusLabel | null, cost: string) => {
@@ -939,7 +941,7 @@ export function createIncomingRepair(
           try {
             const m = await bridge.maintenance(id)
             sameSession(mine)
-            if ((m.supplier?.id ?? null) !== wrote.supplier || m.cost !== wrote.cost || (m.type?.id ?? null) !== wrote.type || m.startDate !== wrote.startDate || m.notes !== wrote.notes) throw new Error('it was changed since the return, so it was left as is')
+            if ((m.supplier?.id ?? null) !== wrote.supplier || noCost(m.cost) !== noCost(wrote.cost) || (m.type?.id ?? null) !== wrote.type || m.startDate !== wrote.startDate || m.notes !== wrote.notes) throw new Error('it was changed since the return, so it was left as is')
             if (created !== null) await bridge.deleteMaintenance(created)
             else await bridge.updateMaintenance(open!.id, { ...('supplierId' in change && { supplierId: open!.supplier?.id ?? null }), ...('cost' in change && { cost: open!.cost }), ...(closed && { reopen: true }) })
           } catch (e) {
