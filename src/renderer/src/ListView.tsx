@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type CheckinOptions, type CheckoutOptions, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, REPORT_MAX, toSummary, type Asset, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
-import { CheckinForm, CheckoutForm, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, statusChoices } from './App'
+import { AssetSheet, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
@@ -95,8 +95,45 @@ export const picking = (view: AssetView): ListState => ({ view, search: '', filt
 export const listQuery = (kind: ListKind, { view, search, filters, sort }: ListState): ListQuery =>
   ({ search, filters, sort: sort?.key, order: sort?.order, ...(kind === 'assets' && { view }) })
 
-type Quick = { id: number; action: 'checkin' | 'checkout' | 'status' }
 type Row = ListPage<ListKind>['rows'][number]
+
+/** What a key does on the Assets List: move the focused row (and the open Asset panel with it), open it, tick, or close. */
+export type ListKey = 'up' | 'down' | 'open' | 'tick' | 'close'
+// ↑/↓ work anywhere but a field; Enter and Space only where they'd do nothing else (not in a field, not on a button or checkbox);
+// Esc anywhere but a field outside the Asset panel, whose own Esc (a filter box's list, the report name) comes first.
+export function listKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>, place: KeyPlace, inPanel: boolean): ListKey | null {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null
+  switch (e.key) {
+    case 'ArrowUp': case 'ArrowDown': return place === 'field' ? null : e.key === 'ArrowUp' ? 'up' : 'down'
+    case 'Enter': return place === 'none' ? 'open' : null
+    case ' ': return place === 'none' ? 'tick' : null
+    case 'Escape': return place !== 'field' || inPanel ? 'close' : null
+    default: return null
+  }
+}
+/** Whether ↑/↓ take the Asset panel along and Esc closes it: while it shows, or while an open is still loading (the first, before
+ * any panel shows), so that open can't land after and pull the focused row back, or open a panel the Operator dismissed. */
+export const panelLive = (shown: boolean, loading: boolean) => shown || loading
+/** The panel's Asset to reload when a Bulk Action ends: only the open that showed as the run began (n), and only if the run changed
+ * it without deleting it. An open made mid-run (a Quick Action's form) is newer and keeps its inputs. */
+export const panelToRefresh = (startN: number | undefined, panel: { n: number; id: number } | null, run: { deletes?: true; records: { id: number }[] } | null) =>
+  panel && panel.n === startN && !run?.deletes && run?.records.some((r) => r.id === panel.id) ? panel.id : undefined
+/** The row focused after ↑ (-1) or ↓ (1): the next one on the page, stopping at either end; from none, the first or the last. */
+export function moveCursor(ids: number[], at: number | null, by: -1 | 1): number | null {
+  if (!ids.length) return null
+  const i = at === null ? -1 : ids.indexOf(at)
+  return i < 0 ? ids[by > 0 ? 0 : ids.length - 1] : ids[Math.min(ids.length - 1, Math.max(0, i + by))]
+}
+/** Gives the List's row for id DOM focus (it's focusable, but not in the Tab order), so after ↑/↓ Enter and Space act on the row shown
+ * rather than a button on the row focus was left on. */
+export const focusRow = (table: Pick<ParentNode, 'querySelector'> | null, id: number) =>
+  table?.querySelector<HTMLElement>(`tr[data-id="${id}"]`)?.focus({ preventScroll: true })
+/** Starts opening a row's Asset in the Asset panel (its first column or a Quick Action): the focused row moves onto it at once, not when
+ * the fetch lands, so ↑/↓ meanwhile move on from it. */
+export const openRow = (setCursor: (id: number) => void, onOpenAsset: (id: number, form?: SheetForm) => void) => (id: number, form?: SheetForm) =>
+  (setCursor(id), onOpenAsset(id, form))
+/** The Asset docked in the Asset panel (App owns it, so a scan can open it), with the form a Quick Action opened. */
+export type ListPanel = { n: number; form?: SheetForm; sheet: SheetProps }
 
 /** The Records ticked in the open List, by id, across its pages; kept with their rows so a Bulk Action has what it needs. */
 export type Selection<T extends { id: number } = { id: number }> = Map<number, T>
@@ -161,8 +198,16 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 // report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, defaultLocation, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk }: {
+export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, panelLoading, onRefreshPanel, onDropPanel }: {
   onNew: (kind: EditKind) => void
+  // The Asset panel (Assets only): what it shows, and closing it.
+  panel: ListPanel | null
+  onClosePanel: () => void
+  // A lookup or open still loading, which ↑/↓ supersede.
+  panelLoading: boolean
+  // When a Bulk Action ends: reload the panel's Asset, or close the panel after a delete; neither cancels an open still loading.
+  onRefreshPanel: (id: number, n: number) => void
+  onDropPanel: (id: number) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
   onBulk: (action: BulkAction, run: BulkRun) => void
@@ -178,8 +223,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   assetView?: AssetView
   statusLabels: StatusLabel[]
   locations: StatusLabel[]
-  defaultLocation: StatusLabel | null
-  onOpenAsset: (id: number) => void
+  // On the Assets List an Asset opens in the Asset panel; form: the form a Quick Action opens there.
+  onOpenAsset: (id: number, form?: SheetForm) => void
   onOpenRecord: (kind: RecordKind, id: number) => void
 }) {
   const [start] = useState(() => (assetView ? picking(assetView) : opening(drill, report)))
@@ -198,7 +243,11 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const [saved, setSaved] = useState(report ?? null)
   const [naming, setNaming] = useState<string | null>(null)
   const [customizing, setCustomizing] = useState(false)
-  const [quick, setQuick] = useState<Quick | null>(null)
+  // The row ↑/↓ have moved to (Assets only), by id.
+  const [cursor, setCursor] = useState<number | null>(null)
+  const openAsset = openRow(setCursor, onOpenAsset)
+  // The id of the panel's Asset once it's found outside the open View; kept while a reload checks again, so the notice doesn't blink.
+  const [outside, setOutside] = useState<number | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   // The Selection lives with this List, across its Views; leaving it (or opening another) starts the next one empty.
   const [selection, setSelection] = useState<Selection<Row>>(new Map())
@@ -215,12 +264,21 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     if (!mine?.deletes) return
     const gone = new Set(mine?.records.filter((r) => r.outcome?.state === 'done').map((r) => r.id))
     if (gone.size) setSelection((s) => ([...gone].some((id) => s.has(id)) ? new Map([...s].filter(([id]) => !gone.has(id))) : s))
+    // A deleted Asset can't stay in the Asset panel.
+    if (panel && gone.has(panel.sheet.asset.id)) onDropPanel(panel.sheet.asset.id)
   }, [mine])
-  // The List refreshes when its run ends (finished or stopped).
+  // The List refreshes when its run ends (finished or stopped), and so does the Asset panel if the run included its Asset.
   const running = !!mine?.busy
   const wasRunning = useRef(running)
+  // The panel's open (n) as the run began.
+  const startN = useRef<number>(undefined)
   useEffect(() => {
-    if (wasRunning.current && !running) setReloads((n) => n + 1)
+    if (!wasRunning.current && running) startN.current = panel?.n
+    if (wasRunning.current && !running) {
+      setReloads((n) => n + 1)
+      const shown = panelToRefresh(startN.current, panel && { n: panel.n, id: panel.sheet.asset.id }, mine)
+      if (shown !== undefined) onRefreshPanel(shown, startN.current!)
+    }
     wasRunning.current = running
   }, [running])
   // One page of this List as searched, filtered and sorted now, in its View; "select all" pages it in id order instead.
@@ -240,7 +298,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     fetchPage(offset).then(
       (p) => {
         if (stale) return
-        // A Quick Action can shrink the List under the current page; step back to the last page that has rows.
+        // An action in the Asset panel can shrink the List under the current page; step back to the last page that has rows.
         if (offset > 0 && offset >= p.total) return setOffset(Math.max(0, Math.ceil(p.total / LIST_PAGE) - 1) * LIST_PAGE)
         setPage(p)
         setSelection((s) => refreshed(s, p.rows))
@@ -278,19 +336,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   }
   const toggleSort = (key: string) => (setSort((s) => (s?.key === key && s.order === 'asc' ? { key, order: 'desc' } : { key, order: 'asc' })), setOffset(0))
 
-  // A rejected Quick Action keeps its form open with the typed inputs; Snipe-IT's reason shows above the List.
-  const act = async (done: string, work: Promise<void>) => {
-    try {
-      await work
-      setQuick(null)
-      setMessage({ text: done })
-      setReloads((n) => n + 1)
-    } catch (e) {
-      setMessage({ text: (e as Error).message, error: true })
-    }
-  }
-  const checkin = (a: Asset) => (id: number, o: CheckinOptions) => act(`Checked in ${a.assetTag}`, window.snipeIt.checkin(id, o))
-  const checkout = (a: Asset) => (o: CheckoutOptions) => act(`Checked out ${a.assetTag}`, window.snipeIt.checkout(a.id, o))
+  const reload = () => setReloads((n) => n + 1)
 
   const selectionRun = (): BulkRun => {
     const records = [...selection.values()].map((r) => ({ id: r.id, name: rowName(r) }))
@@ -339,7 +385,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
   function open(row: Row): (() => void) | undefined {
-    if (kind === 'assets') return () => onOpenAsset(row.id)
+    if (kind === 'assets') return () => openAsset(row.id)
     if (kind !== 'activity') return () => onOpenRecord(kind, row.id)
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
@@ -376,178 +422,233 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const tickedHere = rows.filter((r) => selection.has(r.id)).length
   // A View that fixes a filter (Checked out, Available, Damaged) has no box for it.
   const filterBar = filtersFor(kind, names, statusLabels, locations).filter((f) => f.key !== viewSpec?.filter?.[0])
+
+  const panelAsset = panel?.sheet.asset
+  // The panel's Asset as a row of the Selection: its row on this page if it has one, else the panel's copy without its History.
+  const panelRow = (): Row | undefined => {
+    if (!panelAsset) return undefined
+    const { history: _h, historyError: _e, fields: _f, ...a } = panelAsset
+    return rows.find((r) => r.id === a.id) ?? a
+  }
+  // Ticks or unticks one row; false when there's none to tick.
+  const tickRow = (row?: Row) => !!row && (setSelection((s) => tick(s, [row])), true)
+  // The focused row follows the panel: its row when it opens on one of this page, else none (so Space ticks the panel's Asset).
+  useEffect(() => { if (panelAsset) setCursor(rows.some((r) => r.id === panelAsset.id) ? panelAsset.id : null) }, [panel?.n])
+  // The panel's Asset is outside the View when it's not among the rows and searching the View for its Asset Tag doesn't find it;
+  // the List's own search and filter boxes don't count. ponytail: one search per check; a tag that matches 50+ others reads as outside.
+  useEffect(() => {
+    if (!panelAsset || !page) return
+    if (view === 'all' || page.rows.some((r) => r.id === panelAsset.id)) return setOutside(null)
+    let stale = false
+    window.snipeIt.list('assets', listQuery('assets', { view, search: panelAsset.assetTag, filters: {}, sort: null }))
+      .then((p) => !stale && setOutside(p.rows.some((r) => r.id === panelAsset.id) ? null : panelAsset.id), () => {})
+    return () => { stale = true }
+  }, [panelAsset, view, page])
+  // ↑/↓, Enter, Space and Esc on the Assets List (listKey); always the latest render's handler, so it sees the rows and panel shown.
+  const onKey = useRef<(e: KeyboardEvent) => void>(() => {})
+  onKey.current = (e) => {
+    const k = e.defaultPrevented ? null : listKey(e, keyPlace(e.target), e.target instanceof Element && !!e.target.closest('.asset-panel'))
+    const ids = rows.map((r) => r.id)
+    if (k === 'up' || k === 'down') {
+      const next = moveCursor(ids, cursor, k === 'up' ? -1 : 1)
+      if (next === null) return
+      setCursor(next)
+      focusRow(table.current, next)
+      // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
+      if (panelLive(!!panel, panelLoading)) onOpenAsset(next)
+    } else if (k === 'open') {
+      if (cursor === null || !ids.includes(cursor)) return
+      onOpenAsset(cursor)
+    } else if (k === 'tick') {
+      // The focused row, which the panel follows (and which ↑/↓ move before the panel catches up); with none, the panel's Asset (a scan, then Space).
+      if (!tickRow(rows.find((r) => r.id === cursor) ?? panelRow())) return
+    } else if (k === 'close') {
+      if (!panelLive(!!panel, panelLoading)) return
+      onClosePanel()
+    } else return
+    e.preventDefault()
+  }
+  useEffect(() => {
+    if (kind !== 'assets') return
+    const listener = (e: KeyboardEvent) => onKey.current(e)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [kind])
+  const table = useRef<HTMLTableElement>(null)
+  useEffect(() => { table.current?.querySelector('tr.cursor')?.scrollIntoView({ block: 'nearest' }) }, [cursor])
+  // After an action in the panel the List reloads its page; an Asset that leaves the View loses its row and the panel stays on it.
+  const reloading = <A extends unknown[]>(f: (...a: A) => Promise<void>) => (...a: A) => f(...a).then(reload)
   return (
-    <>
-      {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
-      <header className="head topbar">
-        <h1>{saved ? <><span className="dim">{listName[kind]} / </span>{saved.name}</> : listName[kind]}</h1>
-        <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
-        <div className="actions">
-          <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
-          {/* ponytail: a Saved Report can't remember its View yet, so only All can be saved; #107 adds the View. */}
-          <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
-            disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
-          <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
-            onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
-            {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
-          </button>
-          <button className="quiet" onClick={() => setReloads((n) => n + 1)} disabled={loading}>Refresh</button>
-          {editable(kind) && <button onClick={() => onNew(kind)}>New {singular(kind)}</button>}
-        </div>
-      </header>
-      {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
-      <div className="list-top">
-        {/* The Assets Views; only the open one shows its count. */}
-        {kind === 'assets' && (
-          <div className="view-tabs" role="tablist" aria-label="Views">
-            {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => (
-              <button key={v} role="tab" aria-selected={v === view} className={v === view ? 'on' : undefined} onClick={() => v !== view && pickView(v)}>
-                {ASSET_VIEWS[v].name}
-                {v === view && page && !loading && <span className="count">{total.toLocaleString()}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-        {customizing && (
-          <div className="customize">
-            <ol aria-label="Columns">
-              <li className="k">Columns</li>
-              {all.slice(1).map((c) => (
-                <li key={c.key}>
-                  <label>
-                    <input type="checkbox" checked={showing.includes(c.key)} disabled={c.key === viewColumn} onChange={() => pickColumn(c.key)} />
-                    {c.label}{c.key === viewColumn && <span className="dim"> (this View's)</span>}
-                  </label>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
-        {naming !== null && (
-          <form className="toolbar actions" onSubmit={(e) => (e.preventDefault(), saveReport(false))}>
-            <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
-            <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
-            {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
-            <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
-            <span className="dim">Saves this List's search, filters, sort and Columns.</span>
-          </form>
-        )}
-        {/* The toolbar: search and filters, then the Selection bar at its right end while rows are ticked. */}
-        <div className="toolbar actions">
-          <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
-          {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
-          {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
-          {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
-            <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
-              {drill?.label ?? 'Filtered'} ×
+    <div className="docked">
+      <div className="docked-list">
+        {/* The 44px top bar: the breadcrumb (a Saved Report under its List), the count, and the List's own buttons. */}
+        <header className="head topbar">
+          <h1>{saved ? <><span className="dim">{listName[kind]} / </span>{saved.name}</> : listName[kind]}</h1>
+          <span className="dim">{loading ? 'Loading…' : page && total.toLocaleString()}</span>
+          <div className="actions">
+            <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
+            {/* ponytail: a Saved Report can't remember its View yet, so only All can be saved; #107 adds the View. */}
+            <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}
+              disabled={view !== 'all'} title={view !== 'all' ? 'Only the All View can be saved as a Saved Report for now' : undefined}>Save report…</button>
+            <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
+              onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
+              {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
             </button>
-          ))}
-          {selectable && (selection.size > 0 || selectingAll) && (
-            <div className="selection-bar" role="region" aria-label="Selection">
-              {/* Ticks on other pages, or hidden by the filter, still count; the bar says how many are here. */}
-              <b>{selection.size.toLocaleString()} selected</b>
-              {tickedHere < selection.size && <span className="dim">{tickedHere.toLocaleString()} on this page</span>}
-              {selectingAll === 'asking' ? (
-                <span className="confirm" role="alertdialog" aria-label={`Select all ${total.toLocaleString()} ${listName[kind]}?`}>
-                  <span>Select all {total.toLocaleString()} matching {listName[kind]}?</span>
-                  <button autoFocus onClick={selectAll}>Select all</button>
-                  <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
-                </span>
-              ) : total > rows.length && (
-                <button className="quiet" disabled={selectingAll === 'fetching' || bulk?.busy} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
-                  {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+            <button className="quiet" onClick={() => (reload(), panelAsset && onOpenAsset(panelAsset.id))} disabled={loading}>Refresh</button>
+            {editable(kind) && <button onClick={() => onNew(kind)}>New {singular(kind)}</button>}
+          </div>
+        </header>
+        {/* Everything between the top bar and the table stays in view when a wide List scrolls sideways. */}
+        <div className="list-top">
+          {/* The Assets Views; only the open one shows its count. */}
+          {kind === 'assets' && (
+            <div className="view-tabs" role="tablist" aria-label="Views">
+              {(Object.keys(ASSET_VIEWS) as AssetView[]).map((v) => (
+                <button key={v} role="tab" aria-selected={v === view} className={v === view ? 'on' : undefined} onClick={() => v !== view && pickView(v)}>
+                  {ASSET_VIEWS[v].name}
+                  {v === view && page && !loading && <span className="count">{total.toLocaleString()}</span>}
                 </button>
-              )}
-              {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
-              {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
-              {mayEdit(kind, [...selection.values()]) && (
-                <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
-              )}
-              {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
-                <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
-                  <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
-                  <button className="danger" autoFocus onClick={deleteSelection}>Delete</button>
-                  <button className="quiet" onClick={() => setConfirmingDelete(false)}>Cancel</button>
-                </span>
-              ) : <button className="quiet danger" disabled={bulk?.busy || !!selectingAll} onClick={() => setConfirmingDelete(true)}>Delete…</button>)}
-              <button className="quiet" onClick={clear}>Clear</button>
+              ))}
             </div>
           )}
-        </div>
-        {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
-        {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
-        {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
-        {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
-        {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
-      </div>
-      <table className="history list-table">
-        <thead>
-          <tr>
-            {selectable && (
-              <th className="tick">
-                {/* The label fills the cell, so the whole cell ticks the box. */}
-                <label><input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
-                  onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" /></label>
-              </th>
-            )}
-            {columns.map((c) => (
-              <th key={c.key} className={numeric.has(c.key) ? 'num' : undefined} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
-                {Object.hasOwn(sortable, c.key)
-                  ? <button className="sort" onClick={() => toggleSort(c.key)}>{c.label}{sort?.key === c.key ? (sort.order === 'asc' ? ' ▲' : ' ▼') : ''}</button>
-                  : c.label}
-              </th>
+          {customizing && (
+            <div className="customize">
+              <ol aria-label="Columns">
+                <li className="k">Columns</li>
+                {all.slice(1).map((c) => (
+                  <li key={c.key}>
+                    <label>
+                      <input type="checkbox" checked={showing.includes(c.key)} disabled={c.key === viewColumn} onChange={() => pickColumn(c.key)} />
+                      {c.label}{c.key === viewColumn && <span className="dim"> (this View's)</span>}
+                    </label>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {naming !== null && (
+            <form className="toolbar actions" onSubmit={(e) => (e.preventDefault(), saveReport(false))}>
+              <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
+              <button disabled={!naming.trim()}>{saved ? 'Save' : 'Save report'}</button>
+              {saved && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveReport(true)}>Save as new</button>}
+              <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
+              <span className="dim">Saves this List's search, filters, sort and Columns.</span>
+            </form>
+          )}
+          {/* The toolbar: search and filters, then the Selection bar at its right end while rows are ticked. */}
+          <div className="toolbar actions">
+            <input value={text} onChange={(e) => setText(e.target.value)} placeholder={`Search ${listName[kind]}…`} aria-label={`Search ${listName[kind]}`} />
+            {filterBar.map((f) => <FilterBox key={f.key} filter={f} value={filters[f.key] ?? ''} onPick={(v) => setFilter(f.key, v)} />)}
+            {/* A drilled-into filter with no box of its own (e.g. a User's, a Manufacturer's) shows as a chip that removes it. */}
+            {Object.keys(drill?.filters ?? {}).filter((k) => filters[k] && !filterBar.some((f) => f.key === k)).map((k) => (
+              <button key={k} className="quiet" onClick={() => setFilter(k, '')} aria-label={`Remove filter: ${drill?.label ?? k}`}>
+                {drill?.label ?? 'Filtered'} ×
+              </button>
             ))}
-            {kind === 'assets' && <th className="quick">Quick Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const a = row as Asset
-            const q = kind === 'assets' && quick?.id === row.id ? quick : null
-            const toggle = (action: Quick['action']) => (setQuick(q?.action === action ? null : { id: row.id, action }), setMessage({ text: '' }))
-            const inBatch = batch.some((b) => b.id === a.id)
-            return [
-              <tr key={row.id} className={q ? 'sel' : selection.has(row.id) ? 'ticked' : undefined}>
-                {selectable && (
-                  <td className="tick">
-                    <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
-                      aria-label={`Select ${rowName(row)}`} /></label>
-                  </td>
+            {selectable && (selection.size > 0 || selectingAll) && (
+              <div className="selection-bar" role="region" aria-label="Selection">
+                {/* Ticks on other pages, or hidden by the filter, still count; the bar says how many are here. */}
+                <b>{selection.size.toLocaleString()} selected</b>
+                {tickedHere < selection.size && <span className="dim">{tickedHere.toLocaleString()} on this page</span>}
+                {selectingAll === 'asking' ? (
+                  <span className="confirm" role="alertdialog" aria-label={`Select all ${total.toLocaleString()} ${listName[kind]}?`}>
+                    <span>Select all {total.toLocaleString()} matching {listName[kind]}?</span>
+                    <button autoFocus onClick={selectAll}>Select all</button>
+                    <button className="quiet" onClick={() => setSelectingAll(null)}>Cancel</button>
+                  </span>
+                ) : total > rows.length && (
+                  <button className="quiet" disabled={selectingAll === 'fetching' || bulk?.busy} onClick={() => (confirmSelectAll(total) ? setSelectingAll('asking') : selectAll())}>
+                    {selectingAll === 'fetching' ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+                  </button>
                 )}
-                {columns.map((c, i) => cell(c, row, i === 0))}
-                {kind === 'assets' && (
-                  <td className="quick">
-                    <button disabled={!a.assignee || !a.can.checkin} onClick={() => toggle('checkin')} className={q?.action === 'checkin' ? 'on' : undefined}
-                      title={checkinReason(a)}>Checkin</button>
-                    <button disabled={!a.checkoutAllowed || !a.can.checkout} onClick={() => toggle('checkout')} className={q?.action === 'checkout' ? 'on' : undefined}
-                      title={checkoutReason(a)}>Checkout</button>
-                    <button disabled={!a.can.update} onClick={() => toggle('status')} className={q?.action === 'status' ? 'on' : undefined} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
-                    <button disabled={inBatch} onClick={() => onBatch([toSummary(a)])}>{inBatch ? 'In batch' : 'Batch'}</button>
-                  </td>
+                {kind === 'assets' && <button className="quiet" onClick={() => onBatch([...selection.values()].map((a) => toSummary(a as Asset)))}>Add to Batch</button>}
+                {kind === 'assets' && <PrintLabel baseUrl={baseUrl} assets={[...selection.values()] as Asset[]} disabled={!!selectingAll} />}
+                {mayEdit(kind, [...selection.values()]) && (
+                  <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
                 )}
-              </tr>,
-              q && (
-                <tr key={`${row.id}-quick`} className="quick-form">
-                  <td colSpan={columns.length + 1 + (selectable ? 1 : 0)}>
-                    {q.action === 'checkin' && <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a)} />}
-                    {q.action === 'checkout' && <CheckoutForm defaultLocation={defaultLocation} onCheckout={checkout(a)} />}
-                    {q.action === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => act(`Changed ${a.assetTag}'s status`, window.snipeIt.updateStatus(a.id, statusId))} />}
-                  </td>
-                </tr>
-              ),
-            ]
-          })}
-        </tbody>
-      </table>
-      {page && rows.length === 0 && <p className="empty">{page.why ?? 'Nothing matches'}</p>}
-      {total > LIST_PAGE && (
-        <div className="pager actions">
-          <span className="dim">{(offset + 1).toLocaleString()}–{Math.min(offset + LIST_PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
-          <button className="quiet" disabled={offset === 0 || loading} onClick={() => setOffset((o) => Math.max(0, o - LIST_PAGE))}>Previous</button>
-          <button className="quiet" disabled={offset + LIST_PAGE >= total || loading} onClick={() => setOffset((o) => o + LIST_PAGE)}>Next</button>
+                {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
+                  <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
+                    <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
+                    <button className="danger" autoFocus onClick={deleteSelection}>Delete</button>
+                    <button className="quiet" onClick={() => setConfirmingDelete(false)}>Cancel</button>
+                  </span>
+                ) : <button className="quiet danger" disabled={bulk?.busy || !!selectingAll} onClick={() => setConfirmingDelete(true)}>Delete…</button>)}
+                <button className="quiet" onClick={clear}>Clear</button>
+              </div>
+            )}
+          </div>
+          {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
+          {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
+          {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
+          {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
+          {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
         </div>
+        <table ref={table} className="history list-table">
+          <thead>
+            <tr>
+              {selectable && (
+                <th className="tick">
+                  {/* The label fills the cell, so the whole cell ticks the box. */}
+                  <label><input type="checkbox" checked={ticks === 'all'} ref={(el) => { if (el) el.indeterminate = ticks === 'some' }} disabled={!rows.length}
+                    onChange={() => setSelection((s) => tick(s, rows))} aria-label="Select this page" /></label>
+                </th>
+              )}
+              {columns.map((c) => (
+                <th key={c.key} className={numeric.has(c.key) ? 'num' : undefined} aria-sort={sort?.key === c.key ? (sort.order === 'asc' ? 'ascending' : 'descending') : undefined}>
+                  {Object.hasOwn(sortable, c.key)
+                    ? <button className="sort" onClick={() => toggleSort(c.key)}>{c.label}{sort?.key === c.key ? (sort.order === 'asc' ? ' ▲' : ' ▼') : ''}</button>
+                    : c.label}
+                </th>
+              ))}
+              {kind === 'assets' && <th className="quick">Quick Actions</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const a = row as Asset
+              // Open in the Asset panel, focused by ↑/↓, ticked.
+              const docked = kind === 'assets' && panelAsset?.id === row.id
+              const quickProps = (form: SheetForm) => ({ onClick: () => openAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
+              const inBatch = batch.some((b) => b.id === a.id)
+              return (
+                <tr key={row.id} {...(kind === 'assets' && { 'data-id': row.id, tabIndex: -1 })} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
+                  {selectable && (
+                    <td className="tick">
+                      <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}
+                        aria-label={`Select ${rowName(row)}`} /></label>
+                    </td>
+                  )}
+                  {columns.map((c, i) => cell(c, row, i === 0))}
+                  {kind === 'assets' && (
+                    <td className="quick">
+                      {/* Each opens the Asset panel with its form ready. */}
+                      <button disabled={!!checkinReason(a)} {...quickProps('checkin')} title={checkinReason(a)}>Checkin</button>
+                      <button disabled={!!checkoutReason(a)} {...quickProps('checkout')} title={checkoutReason(a)}>Checkout</button>
+                      <button disabled={!a.can.update} {...quickProps('status')} title={a.can.update ? undefined : NOT_ALLOWED}>Status</button>
+                      <button disabled={inBatch} onClick={() => onBatch([toSummary(a)])}>{inBatch ? 'In batch' : 'Batch'}</button>
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        {page && rows.length === 0 && <p className="empty">{page.why ?? 'Nothing matches'}</p>}
+        {total > LIST_PAGE && (
+          <div className="pager actions">
+            <span className="dim">{(offset + 1).toLocaleString()}–{Math.min(offset + LIST_PAGE, total).toLocaleString()} of {total.toLocaleString()}</span>
+            <button className="quiet" disabled={offset === 0 || loading} onClick={() => setOffset((o) => Math.max(0, o - LIST_PAGE))}>Previous</button>
+            <button className="quiet" disabled={offset + LIST_PAGE >= total || loading} onClick={() => setOffset((o) => o + LIST_PAGE)}>Next</button>
+          </div>
+        )}
+      </div>
+      {kind === 'assets' && panel && panelAsset && (
+        <AssetSheet key={panel.n} {...panel.sheet} form={panel.form} onCheckin={reloading(panel.sheet.onCheckin)} onCheckout={reloading(panel.sheet.onCheckout)}
+          onStatus={reloading(panel.sheet.onStatus)}
+          onDeleted={() => (setSelection((s) => (s.has(panelAsset.id) ? new Map([...s].filter(([id]) => id !== panelAsset.id)) : s)), reload(), panel.sheet.onDeleted())}
+          docked={{ ticked: selection.has(panelAsset.id), notInView: outside === panelAsset.id, onClose: onClosePanel, onTick: () => tickRow(panelRow()) }} />
       )}
-    </>
+    </div>
   )
 }
 
@@ -623,27 +724,5 @@ function FilterBox({ filter: f, value, onPick }: { filter: Filter; value: string
         {options.map((o) => <option key={o.value} value={o.label} />)}
       </datalist>
     </>
-  )
-}
-
-function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void> }) {
-  const [statusId, setStatusId] = useState(a.statusId)
-  const [busy, setBusy] = useState(false)
-  const labels = statusChoices(statusLabels, a)
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (statusId === null) return
-    setBusy(true)
-    await onSave(statusId)
-    setBusy(false)
-  }
-  return (
-    <form className="actions" onSubmit={onSubmit}>
-      <select autoFocus value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
-        {statusId === null && <option value="" disabled>Choose a status</option>}
-        {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-      </select>
-      <button disabled={busy || statusId === null || statusId === a.statusId}>{busy ? 'Saving…' : 'Save status'}</button>
-    </form>
   )
 }

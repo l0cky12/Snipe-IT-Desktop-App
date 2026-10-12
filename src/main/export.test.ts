@@ -35,6 +35,16 @@ describe('Export CSV', () => {
   })
 })
 
+describe('Purchase cost and End of life', () => {
+  it('are Columns the Operator can show on the Assets List, and export as shown', () => {
+    expect(shownColumns('assets', null)).not.toContain('purchaseCost')
+    expect(shownColumns('assets', ['purchaseCost', 'endOfLife'])).toEqual(['assetTag', 'purchaseCost', 'endOfLife'])
+    const asset = { id: 1, assetTag: 'NOMMA-1', purchaseCost: '1234.56', endOfLife: '2029-08-01' }
+    expect(exportTable('assets', ['assetTag', 'purchaseCost', 'endOfLife'], [asset, { ...asset, purchaseCost: null, endOfLife: null }]))
+      .toEqual({ columns: ['Asset Tag', 'Purchase cost', 'End of life'], rows: [['NOMMA-1', '1234.56', '2029-08-01'], ['NOMMA-1', '', '']] })
+  })
+})
+
 describe('a Saved Report opened again', () => {
   it('shows its Columns in the List order, always the first, without ones the List no longer has', () => {
     expect(shownColumns('assets', ['serial', 'gone', 'status'])).toEqual(['assetTag', 'status', 'serial'])
