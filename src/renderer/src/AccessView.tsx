@@ -153,7 +153,7 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
   return (
     <form onSubmit={save}>
       <header className="head">
-        <h1>{group?.name ?? 'Permission group'}<span className="sub">Permission group</span></h1>
+        <h1><span className="dim">Permission groups{group && ' / '}</span>{group?.name}</h1>
         <div className="actions">
           <button type="button" className="quiet" onClick={() => onDone(null)}>Back</button>
           <button disabled={busy || !group}>{busy ? 'Saving…' : 'Save'}</button>

@@ -1,9 +1,10 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
+import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, missingWhat, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -479,9 +480,9 @@ function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGr
       <div className="records">
         {(Object.keys(listName) as ListKind[]).map((k) => {
           const Icon = listIcon[k]
-          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={20} />{listName[k]}</button>
+          return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={18} />{listName[k]}</button>
         })}
-        <button className="record-kind" onClick={onGroups}><ShieldCheck size={20} />Permission groups</button>
+        <button className="record-kind" onClick={onGroups}><ShieldCheck size={18} />Permission groups</button>
       </div>
     </>
   )
@@ -692,38 +693,30 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     setForm(null)
     root.current?.focus()
   }
-  const facts: [string, string, boolean?][] = [
+  // Overdue and Warranty flag the fact they're about.
+  const facts: [string, React.ReactNode][] = [
+    ['Name', a.name || 'Unnamed Asset'],
+    ['Asset Model', a.model],
+    ['Status', <StatusChip asset={a} />],
     ['Assignee', a.assignee?.name ?? 'Unassigned'],
-    ['Type', a.assignee ? kind[a.assignee.type] : ''],
-    ['Expected checkin', a.expectedCheckin ?? ''],
+    ['Type', a.assignee && kind[a.assignee.type]],
+    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>],
     ['Location', a.location],
     ['Last audited', a.lastAudited ?? 'Never'],
-    ['Next audit', a.nextAudit ?? ''],
-    ['Serial', a.serial, true],
+    ['Next audit', a.nextAudit],
     ['Category', a.category],
-    ['Purchased', a.purchaseDate ?? ''],
-    ['Warranty ends', a.warrantyEnd ?? ''],
+    ['Serial', a.serial && <span className="mono">{a.serial}</span>],
+    ['Purchased', a.purchaseDate],
+    ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
+      ? <span className="flag c-grey">Warranty expired</span>
+      : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>],
   ]
   const canCheckout = !checkoutReason(a)
   return (
     <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
       <header className="head">
-        <span className="tag">{a.assetTag}</span>
-        <h1>
-          {a.name || 'Unnamed Asset'}
-          <span className="sub">{a.model}</span>
-        </h1>
+        <h1><span className="dim">Assets / </span><span className="mono">{a.assetTag}</span></h1>
         {docked && <button className="panel-close" aria-label="Close the Asset panel" title="Close (Esc)" onClick={docked.onClose}><X size={16} /></button>}
-        <div className="sheet-status-line">
-          <StatusChip asset={a} />
-          {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
-          {a.warranty &&
-            (a.warranty.expired ? (
-              <span className="flag c-grey">Warranty expired</span>
-            ) : (
-              <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>
-            ))}
-        </div>
         <div className="actions">
           <button className={checkinReason(a) ? 'quiet' : undefined} disabled={!!checkinReason(a)} title={checkinReason(a)} aria-expanded={form === 'checkin'} onClick={() => toggle('checkin')}>Checkin</button>
           <button className={canCheckout ? undefined : 'quiet'} disabled={!canCheckout} title={checkoutReason(a)} aria-expanded={form === 'checkout'} onClick={() => toggle('checkout')}>Checkout…</button>
@@ -742,15 +735,12 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
           {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} autoFocus={takesFocus} />}
         </div>
       )}
-      <div className="grid">
-        {facts.map(([k, v, mono]) => (
-          <div className="cell" key={k}>
-            <div className="k">{k}</div>
-            <span className={mono ? 'mono' : undefined}>{v || '—'}</span>
-          </div>
-        ))}
+      <div className="asset-top">
+        <dl className="facts">
+          {facts.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}</dd></Fragment>)}
+        </dl>
+        <AssetCodes baseUrl={baseUrl} asset={a} />
       </div>
-      <AssetCodes baseUrl={baseUrl} asset={a} />
       {/* Every field Snipe-IT sent, custom fields included; related records link to their page. */}
       <details className="all-fields">
         <summary className="section">All fields ({a.fields.length})</summary>
@@ -774,7 +764,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
               <td>{h.operator}</td>
               <td>
                 {h.detail}
-                {h.note && <>{h.detail && ' '}<span className="note">{h.note}</span></>}
+                {h.note && <span className="note">{h.note}</span>}
               </td>
             </tr>
           ))}
@@ -857,27 +847,34 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 const healthName: Record<HealthLine['warning'], string> = {
   unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
   missing: 'Missing fields', deactivated: 'Deactivated Users', runningOut: 'Licenses Running out',
+  newer: 'Newer Snipe-IT available',
 }
 // red: fix it now; amber: keep an eye on it.
 const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = {
-  unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', missing: 'amber', deactivated: 'red', runningOut: 'amber',
+  unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', missing: 'amber', deactivated: 'red', runningOut: 'amber', newer: 'amber',
 }
 const many = (n: number, one: string, more: string) => <><b>{n.toLocaleString()}</b> {n === 1 ? one : more}</>
 
 // The Health warnings: pinned above the dashboard, outside Customize. One line each, in #67's order; "All clear" when none.
 // lists: the warnings worked out from the dashboard's lists, which arrive with its pieces.
-function HealthStrip({ health, lists, onRetry, onSettings, onAssetView, onDrill }: {
+function HealthStrip({ health, lists, release, onRetry, onSettings, onAssetView, onDrill, onHideRelease }: {
   health: (Health & { at: string }) | Failed | null
   lists: Pick<Dashboard, HealthPiece>
+  release: Release | null
   onRetry: () => void
   onSettings: () => void
   onAssetView: (v: AssetView) => void
   onDrill: (list: ListKind, drill: Drill) => void
+  onHideRelease: (tag: string) => Promise<void>
 }) {
+  // Why the release notes didn't open, or the release couldn't be hidden.
+  const [releaseFailed, setReleaseFailed] = useState('')
+  const failed = (e: Error) => setReleaseFailed(e.message)
+  const tryRelease = (action: () => Promise<void>) => (setReleaseFailed(''), action().catch(failed))
   if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
     return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
-  const lines = healthLines({ ...health, ...lists })
+  const lines = healthLines({ ...health, ...lists }, release)
   const line = (l: HealthLine) => {
     if ('error' in l) return <><b>{l.warning === 'tooOld' ? 'Snipe-IT version' : healthName[l.warning]}</b> <span>Couldn't check: {l.error}</span></>
     if ('message' in l)
@@ -887,6 +884,14 @@ function HealthStrip({ health, lists, onRetry, onSettings, onAssetView, onDrill 
           {l.warning === 'unreachable' && <button onClick={onRetry}>Retry</button>}
           <button onClick={onSettings}>Settings</button>
         </span>
+      </>
+    if ('release' in l)
+      return <>
+        <button className="link" onClick={() => tryRelease(() => window.releases.open(l.release.url))} title="Opens the release notes in your browser">
+          <b>{healthName.newer}</b> {l.release.tag} is out; your Snipe-IT runs {l.running}.
+        </button>
+        {releaseFailed && <span>{releaseFailed}</span>}
+        <span className="health-actions"><button onClick={() => tryRelease(() => onHideRelease(l.release.tag))}>Hide until the next release</button></span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
     if (l.warning === 'deactivated')
@@ -926,6 +931,8 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings }: {
   const latest = useRef(0)
   // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
   const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
+  // GitHub's latest Snipe-IT release, asked for beside the Health check so neither waits on the other.
+  const [release, setRelease] = useState<Release | null>(null)
   const latestHealth = useRef(0)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
 
@@ -935,8 +942,11 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings }: {
     window.snipeIt.health().then(
       (h) => mine === latestHealth.current && setHealth({ ...h, at: new Date().toLocaleTimeString() }),
       (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
+    window.releases.latest().then((r) => mine === latestHealth.current && setRelease(r), () => {})
   }
   useEffect(check, [])
+  // Kept on this PC until a newer release; the line goes now, without checking again.
+  const hideRelease = (tag: string) => window.releases.hide(tag).then(() => setRelease(null))
 
   function load() {
     const mine = ++latest.current
@@ -1065,7 +1075,7 @@ function DashboardView({ onPick, onAssetView, onDrill, onSettings }: {
           <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
-      <HealthStrip health={health} lists={{ missing: data.missing, runningOut: data.runningOut }} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onDrill={onDrill} />
+      <HealthStrip health={health} lists={{ missing: data.missing, runningOut: data.runningOut }} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onDrill={onDrill} release={release} onHideRelease={hideRelease} />
       {customizing && (
         <div className="customize">
           {GROUPS.map((group) => (

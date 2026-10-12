@@ -1,4 +1,5 @@
 import { liveEntries, parseAppNote, parseWorkflowNote } from './notes'
+import type { Release } from './release'
 
 export type Config = { baseUrl: string; apiKey: string }
 
@@ -232,27 +233,32 @@ export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
   | { warning: 'tooOld'; version: string }
   | { warning: 'auditLate' | 'auditDue' | 'runningOut'; count: number }
+  | { warning: 'newer'; release: Release; running: string }
   | { warning: 'missing'; field: MissingField; count: number }
   | { warning: 'deactivated'; assets: number; users: number }
   | { warning: 'tooOld' | 'auditLate' | 'auditDue' | 'missing' | 'deactivated' | 'runningOut'; error: string }
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
-/** The strip's lines, in #67's order: none at 0. Snipe-IT unreachable or the key failing shows only that line. missing and
- * runningOut come with the dashboard's lists; still loading (left out), they add no line yet. */
-export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Health & Pick<Dashboard, HealthPiece>): HealthLine[] {
+/**
+ * The strip's lines: none at 0. Snipe-IT unreachable or the key failing shows only that line. missing and runningOut come
+ * with the dashboard's lists; still loading (left out), they add no line yet. release: GitHub's latest Snipe-IT release,
+ * from the main process's daily check (createReleaseCheck), if one is known and not hidden.
+ */
+export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Health & Pick<Dashboard, HealthPiece>, release?: Release | null): HealthLine[] {
   if ('warning' in probe) return [probe]
-  const [, major, minor] = ('version' in probe && /^v?(\d+)\.(\d+)/.exec(probe.version)) || []
-  const older = Number(major) < MIN_SNIPEIT[0] || (Number(major) === MIN_SNIPEIT[0] && Number(minor) < MIN_SNIPEIT[1])
+  const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
-    : major === undefined ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
-    : older ? [{ warning: 'tooOld', version: probe.version }] : []
+    : !running ? [{ warning: 'tooOld', error: `Snipe-IT's version, ${probe.version}, isn't one this app can read.` }]
+    : olderThan(running, MIN_SNIPEIT) ? [{ warning: 'tooOld', version: probe.version }] : []
+  const latest = release && versionParts(release.tag)
+  const newer: HealthLine[] = running && latest && olderThan(running, latest) && 'version' in probe ? [{ warning: 'newer', release, running: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue' | 'runningOut', t: number | Failed | undefined): HealthLine[] =>
     t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
   const missingLines: HealthLine[] = !missing ? [] : 'error' in missing ? [{ warning: 'missing', error: missing.error }]
     : MISSING_FIELDS.flatMap((field) => (missing[field] ? [{ warning: 'missing' as const, field, count: missing[field] }] : []))
   const deactivatedLine: HealthLine[] = 'error' in deactivated ? [{ warning: 'deactivated', error: deactivated.error }] : deactivated.assets ? [{ warning: 'deactivated', ...deactivated }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('auditDue', auditDue), ...missingLines, ...deactivatedLine, ...total('runningOut', runningOut)]
+  return [...tooOld, ...total('auditLate', auditLate), ...newer, ...total('auditDue', auditDue), ...missingLines, ...deactivatedLine, ...total('runningOut', runningOut)]
 }
 
 /** How many listed Assets miss a Serial (a blank one too) or an Asset Model, checked out or not, or a Location while not
@@ -272,6 +278,12 @@ export function runningOut(licenses: { free_seats_count?: unknown; min_amt?: unk
     if (typeof free !== 'number') throw new Error(`Snipe-IT didn't send "free_seats_count" for licenses; it may be too old for this warning.`)
     return min !== 0 && free < (typeof min === 'number' ? min : 1)
   }).length
+}
+// "v8.8.0", "8.8" or "v8.8.0 build 120 (g1a2b3c)" → [8, 8, 0]; null when it isn't a version.
+const versionParts = (v: string) => /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(v)?.slice(1).map((n) => Number(n ?? 0)) ?? null
+const olderThan = (a: readonly number[], b: readonly number[]) => {
+  const i = a.findIndex((n, i) => n !== (b[i] ?? 0))
+  return i >= 0 && a[i] < (b[i] ?? 0)
 }
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history and Damaged. */
