@@ -225,6 +225,8 @@ for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
 lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date >= day(0) && a.next_audit_date.date <= day(30)) }
 lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
+// Snipe-IT's Overdue route: checked out and due before now, a date-only Expected Checkin from its midnight; never Archived Assets.
+lists['hardware/checkins/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => a.assigned_to && a.expected_checkin && a.expected_checkin.datetime < minutesAgo(0) && a.status_label.status_meta !== 'archived') }
 // More Maintenances, after the Damaged ones above, shaped like Snipe-IT v8.7+ (cost as formatted text, the type under maintenance_type): one every few days
 // over the last four months, mostly Repairs, the newest still open.
 const maintenanceTypes = ['Repair', 'Repair', 'Repair', 'Upgrade', 'Software Support']
@@ -315,7 +317,7 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/audit\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],

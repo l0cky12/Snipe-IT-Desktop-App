@@ -45,6 +45,8 @@ export type Asset = {
   purchaseCost: string | null
   /** How late, or null when not Overdue */
   overdue: Lateness | null
+  /** An outstanding Temp checkout; only where the app looked it up (Assets List rows, the dashboard's Overdue list). */
+  temp?: boolean
   /** Expiring (ends within 90 days) or expired; null when neither, or when Snipe-IT has no warranty date */
   warranty: { expired: false; daysLeft: number } | { expired: true } | null
   /** What Snipe-IT lets the Operator's key do to this Asset (its available_actions); true when Snipe-IT doesn't say. */
@@ -164,13 +166,21 @@ export const PERMISSIONS: [area: string, keys: string[]][] = [
 ]
 /** The Assets List's built-in Views: each a fixed condition that the search and filter boxes narrow. path: Snipe-IT's route,
  * if not /hardware. filter: the Snipe-IT filter the View fixes (status_id names a Status Label, found by name). column: shown
- * in its View whatever the Operator picked under Columns. sort: where picking the View starts the sort. */
-export type AssetView = 'all' | 'checkedOut' | 'available' | 'damaged' | 'auditDue' | 'auditLate'
-export const ASSET_VIEWS: Record<AssetView, { name: string; path?: string; filter?: [string, string]; column?: keyof Asset; sort?: { key: keyof Asset; order: 'asc' | 'desc' } }> = {
+ * in its View whatever the Operator picked under Columns. sort: where picking the View starts the sort. keep: a View Snipe-IT
+ * can't express, so the app fetches the route's whole set and keeps these rows, then sorts and pages them itself. */
+export type AssetView = 'all' | 'checkedOut' | 'available' | 'damaged' | 'outOnTemp' | 'overdue' | 'auditDue' | 'auditLate'
+export const ASSET_VIEWS: Record<AssetView, {
+  name: string; path?: string; filter?: [string, string]; column?: keyof Asset; sort?: { key: keyof Asset; order: 'asc' | 'desc' }; keep?: (a: Asset) => boolean
+}> = {
   all: { name: 'All' },
   checkedOut: { name: 'Checked out', filter: ['status', 'Deployed'], column: 'expectedCheckin' },
   available: { name: 'Available', filter: ['status', 'RTD'] },
   damaged: { name: 'Damaged', filter: ['status_id', 'Damaged'] },
+  // Every checked-out Asset the outstanding Temp checkout lookup counts (#61 §2).
+  outOnTemp: { name: 'Out on temp', filter: ['status', 'Deployed'], column: 'expectedCheckin', sort: { key: 'expectedCheckin', order: 'asc' }, keep: (a) => !!a.temp },
+  // Snipe-IT counts a date-only Expected Checkin late from midnight; the app's rule (toAsset's overdue, as the dashboard and
+  // the Overdue Report use) from the end of that date, so the ones due today are dropped.
+  overdue: { name: 'Overdue', path: '/hardware/checkins/overdue', column: 'expectedCheckin', sort: { key: 'expectedCheckin', order: 'asc' }, keep: (a) => a.overdue !== null },
   // The same routes as the audit Reports, so a View and a Report never disagree; Snipe-IT applies the filter boxes to them too.
   auditDue: { name: 'Audit due', path: '/hardware/audit/due', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
   auditLate: { name: 'Audit late', path: '/hardware/audit/overdue', column: 'nextAudit', sort: { key: 'nextAudit', order: 'asc' } },
@@ -179,8 +189,9 @@ export const ASSET_VIEWS: Record<AssetView, { name: string; path?: string; filte
  * view: an Assets View (All when left out). */
 export type ListQuery = { search?: string; filters?: Record<string, string>; sort?: string; order?: 'asc' | 'desc'; offset?: number; view?: AssetView }
 /** Each row carries what the Operator may do to it (its available_actions), so a Bulk Action is offered only when allowed.
- * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged). */
-export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string }
+ * why: what an empty page says instead of "Nothing matches" (a Damaged View with no Status Label named Damaged).
+ * tempError: why Asset rows carry no Temp marks (say the Activity Report is refused). */
+export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string; tempError?: string }
 
 /** The dashboard pieces: the charts (assets is Assets by Status Label), the five Inventory Chart bars, then the two tables. */
 export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
@@ -1055,7 +1066,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (view !== undefined && (kind !== 'assets' || !Object.hasOwn(ASSET_VIEWS, view))) throw new Error(`Unknown View: ${view}`)
     const spec = LISTS[kind]
     const { path = spec.path, filter } = view ? ASSET_VIEWS[view] : {}
-    const params = new URLSearchParams({ limit: String(limit), offset: String(Number.isSafeInteger(offset) && offset > 0 ? offset : 0) })
+    const from = Number.isSafeInteger(offset) && offset > 0 ? offset : 0
+    const params = new URLSearchParams({ limit: String(limit), offset: String(from) })
     if (search?.trim()) params.set('search', search.trim())
     for (const [key, value] of Object.entries(filters)) {
       if (value === '' || value === undefined) continue
@@ -1078,11 +1090,32 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     } else if (filter) params.set(...filter)
     // Any List can also go in id order, which rows added meanwhile can't shift (for paging through all of it).
     const sorts: Record<string, string> = { id: 'id', ...LIST_SORTS[kind] }
-    if (sort && Object.hasOwn(sorts, sort)) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
+    const sorted = sort !== undefined && Object.hasOwn(sorts, sort)
+    const now = today()
+    const keep = view && ASSET_VIEWS[view].keep
+    if (keep) {
+      // ponytail: the whole set fetched, then sorted, paged and selected here, and fetched again for each page, Select all
+      // and Export. Overdue's set is tens of Assets, but Out on temp's is every checked-out one matching the boxes (most of
+      // the fleet in a 1:1 school). Move to server paging (or cache the set) if either grows past a few hundred rows.
+      params.delete('limit'), params.delete('offset')
+      const fetched = (await allRows<RawAsset>(params.size ? `${path}?${params}` : path)).map((r) => toAsset(r, now))
+      const { rows, tempError } = await markTemp(fetched, view === 'outOnTemp')
+      const kept = rows.filter(keep)
+      if (sorted) {
+        const value = (a: Asset) => String((sort === 'assignee' ? a.assignee?.name : a[sort as keyof Asset]) ?? '')
+        kept.sort((a, b) => value(a).localeCompare(value(b), undefined, { numeric: true }) * (order === 'asc' ? 1 : -1))
+      }
+      return { total: kept.length, rows: kept.slice(from, from + limit), ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
+    }
+    if (sorted) params.set('sort', sorts[sort]), params.set('order', order === 'asc' ? 'asc' : 'desc')
     const page = await request<{ total: number; rows: unknown[] }>(`${path}?${params}`, undefined, undefined, timeout)
     if (isError(page)) throw new Error(reason(page.messages))
-    const now = today()
-    return { total: page.total, rows: page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows'] }
+    const rows = page.rows.map((r) => ({ ...spec.row(r as never, now), can: canFrom((r as RawRow).available_actions) })) as ListPage<K>['rows']
+    // The All View flags Temp checkouts in each row's Status (Overdue and Out on temp mark theirs above).
+    // ponytail: one Activity Report request per page with a time-of-day Checkout on it, Select all and Export pages too.
+    if (kind !== 'assets' || (view && view !== 'all')) return { total: page.total, rows }
+    const { rows: marked, tempError } = await markTemp(rows as unknown as Asset[])
+    return { total: page.total, rows: marked, ...(tempError && { tempError }) } satisfies ListPage<'assets'> as unknown as ListPage<K>
   }
 
   // id arrives from the screen over IPC; check it before it becomes part of a URL.
@@ -1144,7 +1177,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
   // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
   // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
-  // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
+  // ponytail: the dashboard and the Assets List call it yet; the End-of-day reminder and Automatic check-in will.
   // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
   // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
   async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
@@ -1167,6 +1200,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       offset += page.rows.length
       if (!page.rows.length || offset >= page.total) return temp
     }
+  }
+
+  // The Assets with their Temp marks. If the lookup fails, they come back unmarked with the reason; with must (Out on temp,
+  // which can't be shown without the marks) the failure is thrown instead.
+  async function markTemp<T extends Asset>(assets: T[], must = false): Promise<{ rows: (T & { temp: boolean })[]; tempError?: string }> {
+    const temp = await outstandingTemp(assets).catch((e: Error) => {
+      if (must) throw e
+      return e
+    })
+    const rows = assets.map((a) => ({ ...a, temp: temp instanceof Set && temp.has(a.id) }))
+    return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
   }
 
   return {
@@ -1768,12 +1812,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
         // The Temp marks failing (say a 403 on the Activity Report) leaves the list, unmarked, with the reason.
         entry('overdue', async () => {
-          const list = await assets!
-          const temp = await outstandingTemp(list).catch((e: Error) => e)
-          const rows = list
-            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue, temp: temp instanceof Set && temp.has(a.id) }]))
+          const { rows: marked, tempError } = await markTemp(await assets!)
+          const rows = marked
+            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue }]))
             .sort((a, b) => b.overdue.minutes - a.overdue.minutes)
-          return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
+          return tempError ? { rows, tempError } : { rows }
         }),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
