@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceInput, StatusLabel, UserCard } from '../../main/snipeit'
-import { cleanTag, createBulkCheckout, createBulkReturn, createRepairIntake, createRunner, fieldKey, NOT_ALLOWED, NOT_SENT, pauseSays } from './workflows'
+import { parseCalendar, type SchoolTimes } from '../../main/calendar'
+import { cleanTag, createBulkCheckout, createBulkReturn, createRepairIntake, createRunner, createTempCheckout, fieldKey, NOT_ALLOWED, NOT_SENT, pauseSays } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
@@ -1244,8 +1245,8 @@ describe('Bulk checkout', () => {
     })
 
     describe('Undo last of a Move', () => {
-      // Moved, then re-read for the undo: checked out to Avery now.
-      const moved = (was: Asset) => ({ ...was, assignee: { type: 'user' as const, id: 7, name: 'Avery Testwell' }, expectedCheckin: '2027-06-04' })
+      // Moved, then re-read for the undo: checked out to Avery now, with the Move's Checkout (no Expected Checkin).
+      const moved = (was: Asset) => ({ ...was, assignee: { type: 'user' as const, id: 7, name: 'Avery Testwell' }, expectedCheckin: null })
       // Moved: what the Checkin's own last read finds is checked out to Avery too.
       async function moving(was = blakes('NOMMA-1')) {
         const f = await choosing([was])
@@ -1396,7 +1397,7 @@ describe('Bulk checkout', () => {
       flow.runner.askUndo()
       await flow.runner.undo()
       expect(checkins).toEqual([])
-      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'NOMMA-1 is due back 2026-11-02 now' })
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'NOMMA-1 was checked out to Avery Testwell again since' })
     })
 
     it("is by hand for an Asset that had no Location but has a Default Location: Snipe-IT's Checkin would send it there", async () => {
@@ -1757,6 +1758,30 @@ describe('Pause (#73)', () => {
       expect(flow.runner.rows[0].result).toMatchObject({ state: 'failed', reason: expect.stringMatching(/^Changed while paused: checked out to Avery Testwell/) })
       expect(flow.runner.undoBlocked).toBe('Nothing to undo')
     })
+
+    it("Temp checkout: a Checkout that timed out and went through is done on Resume, checked against the due time it sent", async () => {
+      const fake = fakeBridge([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusMeta: 'deployable', checkoutAllowed: true })])
+      const clock = { now: new Date(2026, 9, 12, 14, 0) }
+      const flow = createTempCheckout(fake.bridge, { changed: () => {} }, () => ({ endOfDay: '14:50', calendar: [] }), () => clock.now, 0)
+      fake.bridge.exactUsers.mockResolvedValueOnce([AVERY])
+      await flow.find('atestwell')
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+      failOnce(fake.bridge.checkout, failure('timeout'))
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+      // Resumed after the end-of-day time, when a due time worked out afresh would be tomorrow's.
+      clock.now = new Date(2026, 9, 12, 15, 0)
+      fake.bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { status: 'Ready to Deploy', statusId: 1, expectedCheckin: '2026-10-12 14:50' }))
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(flow.runner.open).toBeNull()
+      expect(fake.checkouts).toHaveLength(1)
+      expect(fake.checkouts[0][1].expectedCheckin).toBe('2026-10-12 14:50')
+      expect(flow.runner.rows[0]).toMatchObject({ what: 'Temp, due 2:50 pm', result: { state: 'done', text: 'Checked out: went through before the connection dropped' } })
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets + 1 } })
+      expect(flow.runner.undoBlocked).toBe('')
+    })
   })
 
   it('Resume by hand repeats the once-per-session lookups (the key may be new); a slow-down ending does not', async () => {
@@ -1808,6 +1833,185 @@ describe('Pause (#73)', () => {
     await settled(two.runner)
     expect(one.runner.paused).not.toBeNull()
     expect(two.runner.paused).toBeNull()
+  })
+})
+
+describe('Temp checkout', () => {
+  const ready = (tag: string, more: Partial<Asset> = {}) =>
+    asset(tag, { assignee: null, status: 'Ready to Deploy', statusId: 1, statusMeta: 'deployable', checkoutAllowed: true, ...more })
+  // Monday 12 October 2026, 9:00 am, unless a test moves the clock.
+  async function scanning(assets: Asset[], times: SchoolTimes = { endOfDay: '14:50', calendar: [] }) {
+    const fake = fakeBridge(assets)
+    const clock = { now: new Date(2026, 9, 12, 9, 0) }
+    const settings = { times }
+    const flow = createTempCheckout(fake.bridge, { changed: () => {} }, () => settings.times, () => clock.now, 0)
+    fake.bridge.exactUsers.mockResolvedValue([AVERY])
+    await flow.find('atestwell')
+    return { ...fake, flow, clock, settings }
+  }
+  const settled = async (flow: { runner: { pending: number } }) => vi.waitFor(() => expect(flow.runner.pending).toBe(0))
+  async function confirmed(flow: Awaited<ReturnType<typeof scanning>>['flow'], tag: string) {
+    expect(flow.scan(tag)).toBe('')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    flow.runner.confirmOpen()
+    await settled(flow)
+  }
+
+  it("checks out to the User due at today's end-of-day time, with the Temp checkout tag and any typed note", async () => {
+    const { flow, checkouts } = await scanning([ready('NOMMA-1'), ready('NOMMA-2')])
+    expect(flow.workflow).toBe('Temp checkout')
+    expect(flow.due).toBe('2026-10-12 14:50')
+    await confirmed(flow, 'NOMMA-1')
+    expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
+    expect(flow.runner.rows[0]).toMatchObject({ what: 'Temp, due 2:50 pm', result: { state: 'done', text: 'Checked out' } })
+    flow.done()
+    expect(flow.setOptions({ expectedCheckin: '', note: 'charger too' })).toBe('')
+    await flow.find('atestwell')
+    await confirmed(flow, 'NOMMA-2')
+    expect(checkouts[1][1].note).toBe('[Temp checkout | due: 2026-10-12 14:50] charger too')
+  })
+
+  it('works the due time out at each Checkout: past the end-of-day time it rolls to the next School day', async () => {
+    const { flow, checkouts, clock, settings } = await scanning([ready('NOMMA-1'), ready('NOMMA-2')])
+    clock.now = new Date(2026, 9, 12, 14, 55)
+    await confirmed(flow, 'NOMMA-1')
+    expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Temp checkout | due: 2026-10-13 14:50]' })
+    expect(flow.runner.rows[0].what).toBe('Temp, due Tue 2:50 pm')
+    // Settings are read each time: a half day saved for tomorrow applies to the next scan.
+    settings.times = { endOfDay: '14:50', calendar: parseCalendar('2026-10-13 half day 12:00 Early release') }
+    await confirmed(flow, 'NOMMA-2')
+    expect(checkouts[1][1].expectedCheckin).toBe('2026-10-13 12:00')
+  })
+
+  it("a confirm left open past the end-of-day time gets the next School day's: worked out as it's written", async () => {
+    const { flow, checkouts, clock } = await scanning([ready('NOMMA-1')])
+    clock.now = new Date(2026, 9, 12, 14, 49)
+    flow.scan('NOMMA-1')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    expect(flow.runner.open!.row.what).toBe('Temp, due 2:50 pm')
+    clock.now = new Date(2026, 9, 12, 14, 51)
+    flow.runner.confirmOpen()
+    await settled(flow)
+    expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Temp checkout | due: 2026-10-13 14:50]' })
+    expect(flow.runner.rows[0].what).toBe('Temp, due Tue 2:50 pm')
+  })
+
+  it('a due time changed while a confirm is open applies to it; one that has passed by then is refused, writing nothing', async () => {
+    const { flow, checkouts, clock } = await scanning([ready('NOMMA-1'), ready('NOMMA-2')])
+    flow.scan('NOMMA-1')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    expect(flow.setDue('2026-10-12 10:00')).toBe('')
+    flow.runner.confirmOpen()
+    await settled(flow)
+    expect(checkouts[0][1].expectedCheckin).toBe('2026-10-12 10:00')
+    clock.now = new Date(2026, 9, 12, 10, 5)
+    flow.scan('NOMMA-2')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    flow.runner.confirmOpen()
+    await settled(flow)
+    expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'The due time has passed. Change it, then scan again' })
+    expect(checkouts).toHaveLength(1)
+  })
+
+  it('an edited due time is used and noted until Done or a new User; one in the past or malformed is refused', async () => {
+    const { flow, checkouts } = await scanning([ready('NOMMA-1'), ready('NOMMA-2')])
+    expect(flow.setDue('2026-10-12 08:30')).toBe('That due time has already passed')
+    expect(flow.setDue('2026-10-12')).toBe('Choose a due date and time')
+    expect(flow.setDue('2026-10-12 12:00')).toBe('')
+    expect(flow.due).toBe('2026-10-12 12:00')
+    await confirmed(flow, 'NOMMA-1')
+    expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-12 12:00', note: '[Temp checkout | due: 2026-10-12 12:00]' })
+    expect(flow.runner.rows[0].what).toBe('Temp, due 12:00 pm')
+    flow.done()
+    expect(flow.due).toBe('2026-10-12 14:50')
+    expect(flow.setDue('2026-10-12 12:00')).toBe('Find the User first')
+    await flow.find('atestwell')
+    expect(flow.due).toBe('2026-10-12 14:50')
+    flow.setDue('2026-10-12 12:00')
+    await flow.pick(8)
+    expect(flow.due).toBe('2026-10-12 14:50')
+  })
+
+  it('no School day within a year: nothing is scanned, and the status line says why', async () => {
+    const { flow, calls } = await scanning([ready('NOMMA-1')], { endOfDay: '14:50', calendar: parseCalendar('2026-10-01 to 2027-12-31 Closed') })
+    expect(flow.due).toBeNull()
+    expect(flow.scan('NOMMA-1')).toBe('No School day in the next year. Check the School calendar in Settings.')
+    expect(calls).not.toContain('bytag NOMMA-1')
+  })
+
+  it("Move to this User checks it in with [Temp checkout | move], then out as a Temp checkout", async () => {
+    const { flow, checkins, checkouts } = await scanning([asset('NOMMA-4', { assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } })])
+    flow.scan('NOMMA-4')
+    await vi.waitFor(() => expect(flow.runner.open?.choice).toBeTruthy())
+    flow.runner.fixOpen()
+    await settled(flow)
+    expect(checkins).toEqual([[4, { note: '[Temp checkout | move]', fromAssignee: { type: 'user', id: 8 }, fromStatusId: 2 }]])
+    expect(checkouts).toEqual([[4, { targetType: 'user', targetId: 7, fromStatusId: 2, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
+    expect(flow.runner.rows[0].what).toBe('Temp, due 2:50 pm, moved from Blake Sampleton')
+  })
+
+  it('Undo last checks it in with [Undo] Temp checkout, putting back the Status Label and Location', async () => {
+    const a = ready('NOMMA-1')
+    const { flow, bridge, checkins } = await scanning([a])
+    await confirmed(flow, 'NOMMA-1')
+    // What Checkin's own last read finds: checked out to Avery.
+    a.assignee = { type: 'user', id: 7, name: 'Avery Testwell' }
+    const now = (expectedCheckin: string) => ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, statusMeta: 'deployed', location: 'Room 204', locationId: 4, expectedCheckin })
+    // Checked in and out to them again since (a later due time): not this row's Checkout, so nothing is undone.
+    bridge.assetByTag.mockResolvedValueOnce(now('2026-10-13 14:50'))
+    flow.runner.askUndo()
+    await flow.runner.undo()
+    expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 was checked out to Avery Testwell again since')
+    expect(checkins).toEqual([])
+    bridge.assetByTag.mockResolvedValueOnce(now('2026-10-12 14:50'))
+    expect(flow.runner.askUndo()).toBe('')
+    await flow.runner.undo()
+    expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Temp checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: false }]])
+    expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
+  })
+
+  it("a due time set for one User stays with that User's queued Checkouts after Done and another User", async () => {
+    const { flow, bridge, checkouts } = await scanning([ready('NOMMA-1')])
+    expect(flow.setDue('2026-10-12 12:00')).toBe('')
+    expect(flow.scan('NOMMA-1')).toBe('')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    // Its write waits its turn behind a slow lookup, while the Operator moves on.
+    let release = () => {}
+    bridge.assetByTag.mockImplementationOnce(() => new Promise((r) => { release = () => r(ready('NOMMA-1')) }))
+    flow.runner.confirmOpen()
+    flow.done()
+    await flow.find('atestwell')
+    expect(flow.setDue('2026-10-12 13:00')).toBe('')
+    release()
+    await settled(flow)
+    expect(checkouts[0][1].expectedCheckin).toBe('2026-10-12 12:00')
+  })
+
+  it("Undo refuses when the Asset had no Location and Snipe-IT would move it to its Default Location", async () => {
+    const { flow, bridge, checkins } = await scanning([ready('NOMMA-1', { location: '', locationId: null })])
+    await confirmed(flow, 'NOMMA-1')
+    bridge.assetByTag.mockResolvedValueOnce(ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, location: 'Room 204', locationId: 4, defaultLocation: 'IT Office', expectedCheckin: '2026-10-12 14:50' }))
+    flow.runner.askUndo()
+    await flow.runner.undo()
+    expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; a Checkin would move it to its Default Location, IT Office')
+    expect(checkins).toEqual([])
+  })
+
+  it('refuses a midnight due time, which would read back as date-only', async () => {
+    const { flow } = await scanning([])
+    expect(flow.setDue('2026-10-13 00:00')).toBe("A due time can't be midnight (00:00)")
+  })
+
+  it("a Move works the due time out again after its Checkin, which may have taken it past the end-of-day time", async () => {
+    const { flow, bridge, checkouts, clock } = await scanning([asset('NOMMA-4', { assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } })])
+    clock.now = new Date(2026, 9, 12, 14, 49)
+    flow.scan('NOMMA-4')
+    await vi.waitFor(() => expect(flow.runner.open?.choice).toBeTruthy())
+    bridge.checkin.mockImplementationOnce(async () => { clock.now = new Date(2026, 9, 12, 14, 51) })
+    flow.runner.fixOpen()
+    await settled(flow)
+    expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Temp checkout | due: 2026-10-13 14:50]' })
+    expect(flow.runner.rows[0].what).toBe('Temp, due Tue 2:50 pm, moved from Blake Sampleton')
   })
 })
 
