@@ -12,8 +12,9 @@ export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
  *  Refused and failed are both 'failed'. */
 export type Result = { state: 'waiting' } | { state: 'undone' } | Outcome
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
- *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. */
-export type Undo = { says: string; run: (now: Asset) => Promise<void> }
+ *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
+ *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true. */
+export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void> }
 /** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
  *  before: the Asset as the lookup found it, before the Workflow acted. undo: how to put it back, or why it can't be.
  *  undoFailed: why the last Undo of it didn't happen. */
@@ -146,7 +147,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         if (mine !== generation) return
         // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
         if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-        await run(now)
+        await run(now, () => mine === generation)
         if (mine !== generation) return
         announce = `${row.tag}: Undone`
         update(row.key, { result: { state: 'undone' }, undoFailed: undefined })
@@ -230,15 +231,22 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     // doesn't make one: an ordinary Checkout can have one too. So History says, only then: its newest Checkout is the one
     // returned (it's still checked in, as left). History that can't be read puts back an ordinary Checkout.
     const left = ready
-    const wasTemp = async () => {
-      const n = parseWorkflowNote((await bridge.getAsset(a.id)).history.find((h) => h.action === 'Checkout')?.note ?? null)
-      return !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
-    }
-    const run = async (now: Asset) => {
+    const still = (now: Asset) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
       // A label someone set since the return isn't overwritten with the old one.
       if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
-      const due = expectedCheckin && expectedCheckin.length > 10 && (await wasTemp()) ? expectedCheckin : undefined
+    }
+    const run = async (now: Asset, current: () => boolean) => {
+      still(now)
+      let due: string | undefined
+      if (expectedCheckin && expectedCheckin.length > 10) {
+        const read = await bridge.getAsset(a.id)
+        if (!current()) return
+        // The History read is also the last look at the Asset before the write: anything changed meanwhile still refuses.
+        still(read)
+        const n = parseWorkflowNote(read.history.find((h) => h.action === 'Checkout')?.note ?? null)
+        if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
+      }
       await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
     // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.

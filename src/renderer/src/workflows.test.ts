@@ -449,6 +449,31 @@ describe('Bulk return', () => {
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'Deployed' now" })
     })
 
+    it('refuses when the Status Label changed while History was being read, and writes nothing', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkout', note: '[Temp checkout | due: 2026-10-13 14:50]' }]
+      const read = fake.bridge.getAsset.getMockImplementation()!
+      fake.bridge.getAsset.mockImplementationOnce(async (id: number) => (Object.assign(one, { status: 'Deployed', statusId: 2 }), read(id)))
+      await fake.flow.runner.undo()
+      expect(fake.checkouts).toEqual([])
+      expect(fake.flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'Deployed' now" })
+    })
+
+    it('writes nothing when Settings points at another server while History is being read', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      const read = fake.bridge.getAsset.getMockImplementation()!
+      let release = () => {}
+      fake.bridge.getAsset.mockImplementationOnce((id: number) => new Promise((r) => { release = () => r(read(id)) }))
+      const undoing = fake.flow.runner.undo()
+      await vi.waitFor(() => expect(fake.bridge.getAsset).toHaveBeenCalled())
+      fake.flow.reset()
+      release()
+      await undoing
+      expect(fake.checkouts).toEqual([])
+    })
+
     it('refuses when the Asset is checked out again, and writes nothing', async () => {
       const one = asset('NOMMA-1')
       const { flow, checkouts } = await returned(one)
