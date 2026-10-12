@@ -249,6 +249,9 @@ export type Dashboard = {
 export type OverdueRow = Asset & { expectedCheckin: string; overdue: Lateness; temp: boolean }
 /** The dashboard Overdue list, or only its Temp checkouts (Health warning 5 counts that). */
 export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly ? rows.filter((r) => r.temp) : rows)
+/** The Overdue list's Temp checkouts, most late first, or why they can't be told apart; undefined until it has loaded. */
+export const overdueTemp = (overdue?: Dashboard['overdue']): OverdueRow[] | Failed | undefined =>
+  !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true)
 
 /**
  * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
@@ -294,11 +297,11 @@ export function healthLines({ probe, auditLate, auditDue, deactivated, missing, 
   const newer: HealthLine[] = running && latest && olderThan(running, latest) && 'version' in probe ? [{ warning: 'newer', release, running: probe.version }] : []
   const total = (warning: 'auditLate' | 'auditDue' | 'temp' | 'runningOut', t: number | Failed | undefined): HealthLine[] =>
     t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  const temp = !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true).length
+  const temp = overdueTemp(overdue)
   const missingLines: HealthLine[] = !missing ? [] : 'error' in missing ? [{ warning: 'missing', error: missing.error }]
     : MISSING_FIELDS.flatMap((field) => (missing[field] ? [{ warning: 'missing' as const, field, count: missing[field] }] : []))
   const deactivatedLine: HealthLine[] = 'error' in deactivated ? [{ warning: 'deactivated', error: deactivated.error }] : deactivated.assets ? [{ warning: 'deactivated', ...deactivated }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', temp), ...newer, ...total('auditDue', auditDue), ...missingLines, ...deactivatedLine, ...total('runningOut', runningOut)]
+  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', Array.isArray(temp) ? temp.length : temp), ...newer, ...total('auditDue', auditDue), ...missingLines, ...deactivatedLine, ...total('runningOut', runningOut)]
 }
 
 /** How many listed Assets miss a Serial (a blank one too) or an Asset Model, checked out or not, or a Location while not
@@ -1306,6 +1309,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       // Older servers or restricted tokens may not expose version information.
       const version = await request<{ version: string }>('/version').catch(() => null)
       return { version: version && !isError(version) && typeof version.version === 'string' ? version.version : 'Unavailable' }
+    },
+    // Whether a 403 is about the whole key (since v8.8: 2FA not enrolled, or the User-Agent blocked) rather than one
+    // permission: /version needs none, so the key is refused only if it's refused too. Anything else says no.
+    async keyRefused(): Promise<boolean> {
+      return request('/version').then(() => false, (e: Partial<Failure>) => e.kind === 'key' || e.kind === 'forbidden')
     },
     // Where Reports and the test email go: only ever the Operator's own address.
     async operatorEmail(): Promise<string> {

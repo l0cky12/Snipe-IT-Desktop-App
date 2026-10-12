@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,8 +6,9 @@ import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
+import { createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt, toWire } from './snipeit'
+import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
 
 // The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
@@ -16,6 +17,8 @@ const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
+/** unsent: how many scans Paused Workflows are keeping from Snipe-IT, so quitting can ask first. */
+export type WorkflowsApi = { unsent(count: number): Promise<void> }
 
 // A Label PDF in its own window, in Chromium's PDF viewer: its Print button opens the system print dialog, which can also
 // save it as a PDF, as can its Download button. ponytail: Electron 44 can't open that dialog for a PDF by itself
@@ -137,8 +140,33 @@ app.whenReady().then(() => {
     },
   })
   handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
-  // At launch, sending what came due while the app was closed, then every minute.
-  const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+  // Kept, so its click still opens the window after the notification would otherwise be garbage collected.
+  let reminderNote: Notification | null = null
+  const reminder = createEndOfDayReminder({
+    now: () => new Date(),
+    settings: store.get,
+    lastShown: store.lastReminder,
+    recordShown: store.recordReminder,
+    // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+    // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
+    outstanding: async () => {
+      const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
+      if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+      return temp.map((a) => a.assetTag)
+    },
+    // Even with the window open: at the end of the day it may be behind other windows.
+    notify: ({ title, body }) => {
+      if (!Notification.isSupported()) return
+      reminderNote = new Notification({ title, body })
+      reminderNote.on('click', () => { show(); win.webContents.send('reminder:open') })
+      reminderNote.show()
+    },
+  })
+  // At launch, sending what came due while the app was closed (and today's End-of-day reminder if its time has passed), then every minute.
+  const tick = () => {
+    scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+    reminder.tick().catch((e: Error) => console.error('End-of-day reminder:', e.message))
+  }
   tick()
   setInterval(tick, 60_000)
   handle('settings:saveBackground', (_e, input: Background) => {
@@ -162,7 +190,7 @@ app.whenReady().then(() => {
   handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
   handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
@@ -182,9 +210,25 @@ app.whenReady().then(() => {
   // tray quits. Logging out of Windows ends the app without asking.
   let tray: Tray | null = null
   let quitting = false
-  app.on('before-quit', () => { quitting = true })
+  // Windows logging out or shutting down: never held up by the prompt below.
+  win.on('session-end', () => { quitting = true })
+  // Quitting (the tray's Quit, Ctrl+Q, or closing the window out of tray mode) while a Paused Workflow holds scans asks
+  // first (#73); a moving queue quits without asking. In memory only, so quitting loses them.
+  let unsent = 0
+  handle('workflows:unsent', (_e, count: unknown) => { unsent = Number.isSafeInteger(count) && (count as number) > 0 ? count as number : 0 })
+  const quitAnyway = () => {
+    if (!unsent) return true
+    const ask = { type: 'warning' as const, buttons: ['Quit', 'Cancel'], defaultId: 1, cancelId: 1, message: `${unsent} scan${unsent === 1 ? " wasn't" : "s weren't"} sent to Snipe-IT. Quit anyway?` }
+    return (win.isVisible() ? dialog.showMessageBoxSync(win, ask) : dialog.showMessageBoxSync(ask)) === 0
+  }
+  app.on('before-quit', (e) => {
+    if (!quitting && !quitAnyway()) return e.preventDefault()
+    quitting = true
+  })
   win.on('close', (e) => {
-    if (!tray || quitting) return
+    if (quitting) return
+    // Closing the last window quits: asked here, while the window is still there to cancel.
+    if (!tray) return void (quitAnyway() ? (quitting = true) : e.preventDefault())
     e.preventDefault()
     win.getChildWindows().forEach((w) => w.close())
     win.hide()

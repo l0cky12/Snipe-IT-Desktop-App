@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { allMatching } from '../renderer/src/ListView'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, overdueTemp, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
 import { reportRunner } from './scheduler'
 import { userNotesLine } from './notes'
@@ -1047,6 +1047,11 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
     expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0, deactivated: { assets: 0, users: 0 } }, null, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+    // What the End-of-day reminder lists: the same Temp checkouts, or why it can't tell them apart.
+    expect(overdueTemp(overdue)).toEqual(overdueList(overdue.rows, true))
+    expect(overdueTemp({ rows: overdue.rows, tempError: 'HTTP 403' })).toEqual({ error: 'HTTP 403' })
+    expect(overdueTemp({ error: "Can't reach Snipe-IT" })).toEqual({ error: "Can't reach Snipe-IT" })
+    expect(overdueTemp(undefined)).toBeUndefined()
   })
 
   describe('the Out on temp and Overdue Views, computed in the app', () => {
@@ -2440,6 +2445,15 @@ describe('permissions', () => {
     await expect(createSnipeIt(config, oldServer.fetch).canManagePermissions()).rejects.toThrow('Not found')
     const refused = fakeFetch({ '/groups': { body: { status: 'error', messages: 'Something else went wrong.' } } })
     await expect(createSnipeIt(config, refused.fetch).canManagePermissions()).rejects.toThrow('Something else went wrong.')
+  })
+
+  it('a 403 is about the whole key only when /version, which needs no permission, is refused too', async () => {
+    const keyRefused = (route: { status?: number; body: unknown }) => createSnipeIt(config, fakeFetch({ '/version': route }).fetch).keyRefused()
+    expect(await keyRefused({ status: 403, body: { status: 'error', messages: 'Two-factor authentication is required.' } })).toBe(true)
+    expect(await keyRefused({ status: 401, body: { message: 'Unauthenticated.' } })).toBe(true)
+    expect(await keyRefused({ body: { version: 'v8.3.4' } })).toBe(false)
+    const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
+    expect(await createSnipeIt(config, offline).keyRefused()).toBe(false)
   })
 
   it("a User's own permissions (granted or denied, not inherited) and their groups", async () => {

@@ -1,7 +1,7 @@
 // The Workflows shell (#56): each Workflow's scan queue and Running list, and the Workflows built on it.
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
-import type { Asset, Assignee, CheckoutOptions, OpenMaintenance, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, Assignee, CheckoutOptions, Failure, OpenMaintenance, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
 import { dueAt, dueLabel, realDate, realTime, stamp, type SchoolTimes } from '../../main/calendar'
 import { localDate } from '../../main/export'
 import { cleanText, parseWorkflowNote, repairCost, undoNote, userNotesLine, workflowNote } from '../../main/notes'
@@ -11,9 +11,10 @@ import type { Outcome } from './ListView'
 export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 
 /** A Running list row's result: a Bulk Action's outcome states, plus waiting its turn in the queue, open in a confirm or a
- *  choice, put back by Undo last, and neutral (nothing written, nothing wrong: "Already theirs", "Skipped: not confirmed").
- *  Refused, failed and stopped are all 'failed'. */
-export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'choice' } | { state: 'undone' } | { state: 'neutral'; text: string } | Outcome
+ *  choice, put back by Undo last, neutral (nothing written, nothing wrong: "Already theirs", "Skipped: not confirmed"),
+ *  and a write that may have gone through before the connection dropped (unsure, waiting for Resume to check). Refused,
+ *  failed and stopped are all 'failed'. */
+export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'choice' } | { state: 'undone' } | { state: 'neutral'; text: string } | { state: 'unsure'; reason: string } | Outcome
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
  *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
  *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true.
@@ -34,35 +35,61 @@ export type Row<C = unknown> = {
 export type Events = { changed: () => void; failed?: () => void }
 /** A done row: its result text, "what" cell, how to undo it, and any sub-results and line to copy. */
 export type Done = { text: string; what?: string; undo?: Undo | string; sub?: string[]; copy?: string }
-/** A confirm step (#56 §3). needs: when it has text it can't go without, what the status line says while that's empty
- *  ("Say what happened"). says: what will be written, for the card. check: what's wrong with the text typed or the
- *  Workflow's other fields ('' when nothing), which keeps it open. write: the Workflow's Snipe-IT action once confirmed,
- *  given the Asset re-read just now and the text typed; it throws to refuse. */
-export type Confirm = { needs?: string; says?: string; check?: (text: string) => string; write: (now: Asset, text: string) => Promise<Done> }
-/** A choice step (#56 §3): an Asset that can't go through as scanned. fix: the fix-it button's label; blocked: why it's
- *  off ('' when it isn't); stop: what's in the way, for "Stopped: <stop>"; check: as a confirm's; write: the fix-it
- *  action, given the Asset re-read just now and any text typed; it throws to refuse. Only an explicit pick runs it: Enter
- *  and a same-tag rescan never do. */
-export type Choice = { fix: string; blocked: string; stop: string; check?: (text: string) => string; write: (now: Asset, text: string) => Promise<Done> }
-/** What a Workflow's step does to one scanned Asset: done at once, a neutral row, or a confirm or choice first; or a throw with the refusal. */
-export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { choice: Choice; what?: string }>
+/** A Workflow's write to Snipe-IT, run in the Asset's turn. write: the action, given the Asset just looked up (or re-read)
+ *  and the text typed; it throws to refuse. left: after a write that may not have gone through, the Done it would have
+ *  given if the Asset re-read now is already as this Workflow leaves it (Undo last's guard test), else null. A write of
+ *  several steps finishes the ones after its first there, given the text typed: they were never sent. */
+export type Write = { write: (now: Asset, text: string) => Promise<Done>; left?: (now: Asset, text: string) => Done | null | Promise<Done | null> }
+/** A confirm step (#56 §3): its Write, run once confirmed. needs: when it has text it can't go without, what the status
+ *  line says while that's empty ("Say what happened"). says: what will be written, for the card. check: what's wrong with
+ *  the text typed or the Workflow's other fields ('' when nothing), which keeps it open. */
+export type Confirm = Write & { needs?: string; says?: string; check?: (text: string) => string }
+/** A choice step (#56 §3): an Asset that can't go through as scanned, and its Write, the fix-it action, run once picked
+ *  with any text typed. fix: the fix-it button's label; blocked: why it's off ('' when it isn't); stop: what's in the
+ *  way, for "Stopped: <stop>"; check: as a confirm's. Only an explicit pick runs it: Enter and a same-tag rescan never do. */
+export type Choice = Write & { fix: string; blocked: string; stop: string; check?: (text: string) => string }
+/** What a Workflow's step does to one scanned Asset: done at once, a neutral row, a confirm or choice first, or a write
+ *  sent at once (send); or a throw with the refusal. Only the Write is sent again or checked after a pause. */
+export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { choice: Choice; what?: string } | { send: Write }>
 export const SKIPPED = 'Skipped: not confirmed'
+export const NOT_SENT = 'Skipped: not sent'
+export const NOT_SURE = 'Not sure it went through'
+
+/** Why a Workflow is Paused (#73): Snipe-IT can't be reached (or timed out), rejected the key, or asked the app to slow
+ *  down (until: when it carries on by itself). */
+export type Pause = { kind: 'unreachable' | 'key'; message: string } | { kind: 'rateLimited'; message: string; until: number }
+/** The pause bar's text, with the waiting count (and for a slow-down, the seconds left at `now`). */
+export function pauseSays(p: Pause, waiting: number, now = Date.now()) {
+  const n = `${waiting} scan${waiting === 1 ? ' is' : 's are'} waiting`
+  if (p.kind !== 'rateLimited') return `${p.message} ${n}; nothing more is sent until you resume.`
+  return `Snipe-IT asked the app to slow down. Carrying on in ${Math.max(0, Math.ceil((p.until - now) / 1000))} s. ${n}.`
+}
+// A slow-down with no readable Retry-After waits Snipe-IT's throttle window.
+const SLOW_DOWN_S = 60
 
 const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 // What a scanner or a stray key adds around an Asset Tag: control characters anywhere, whitespace at the ends.
 export const cleanTag = (raw: string) => raw.replace(/\p{Cc}/gu, '').trim()
-const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working'
+const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working' || r.result.state === 'unsure'
+// The fields a Workflow's write changes (or its undo puts back); an Asset whose fields all match its lookup is as it was when scanned.
+// lastCheckout tells a newer Checkout to the same Assignee, with the same fields, from the one that was looked up.
+const same = (a: Asset, b: Asset) =>
+  a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId && a.expectedCheckin === b.expectedCheckin
+  && a.lastCheckout === b.lastCheckout
+export const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
+const found = (a: Asset) => `${a.assignee ? `checked out to ${assigneeName(a.assignee)}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
 
 // The least time between one queued Asset starting and the next: a Bulk return is 3 requests, so 1.5s keeps a fast
 // scanner under Snipe-IT's default 120 requests a minute instead of turning the rest of the queue into throttled rows.
-// ponytail: fixed pace per Workflow; pausing and retrying on a 429 (or when two Workflows run at once) is #96.
+// ponytail: fixed pace per Workflow; a 429 anyway (say, two Workflows at once) pauses the queue until Retry-After.
 export const PACE_MS = 1500
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // One Workflow's queue and Running list. Scans queue and run one at a time in order (like a Bulk Action's eachInTurn, for a list
-// that keeps growing); a failure doesn't stop the next. In memory only: never saved or exported, like Recent scans.
+// that keeps growing); a refusal doesn't stop the next, a session-wide failure pauses the queue (#73). In memory only:
+// never saved or exported, like Recent scans. refresh: the once-per-session lookups, run again on Resume.
 // ponytail: one request in flight per Workflow; 2–3 requests per Asset stays well inside Snipe-IT's 120 a minute.
-export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: Act<C>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused'>, act: Act<C>, events: Events, now = () => new Date(), pace = PACE_MS, refresh?: () => Promise<void>) {
   let rows: Row<C>[] = []
   let queue: Row<C>[] = []
   let next = 0
@@ -77,11 +104,16 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
   // The confirm or choice step that's open (at most one of either), the text typed into a confirm, and each confirmed
   // (or fixed) row's write, run in its turn.
   let opened: { key: number; confirm?: Confirm; choice?: Choice; text: string } | null = null
-  const writes = new Map<number, { write: Confirm['write']; text: string }>()
+  // unsure: why a write that was sent may not have gone through; Resume checks the Asset before sending it again.
+  const writes = new Map<number, { write: Write; text: string; unsure?: string }>()
   // Off the Workflow's page: a confirm that would open is skipped, so nothing waits for an Operator who isn't looking.
   let away = false
   // Bumped by each field submission checked as a tag, so an older lookup never confirms or clears newer input.
   let typing = 0
+  let paused: Pause | null = null
+  // The rows that waited through a pause (by key): on Resume, each one's confirm comes up only once the one before is answered.
+  const held = new Set<number>()
+  let slowDown: ReturnType<typeof setTimeout> | undefined
 
   const update = (key: number, change: Partial<Row<C>>) => {
     rows = rows.map((r) => (r.key === key ? { ...r, ...change } : r))
@@ -93,29 +125,70 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     if (result.state === 'failed') events.failed?.()
   }
 
+  // Whether a failure is about the session rather than this Asset, and the pause it calls for. A 403 is about the key
+  // only when /version, which needs no permission, is refused too.
+  async function pauseFor(e: unknown): Promise<Pause | null> {
+    const { kind, message = String(e), retryAfter } = (e ?? {}) as Partial<Failure>
+    if (kind === 'unreachable' || kind === 'timeout') return { kind: 'unreachable', message }
+    if (kind === 'key') return { kind, message }
+    if (kind === 'rateLimited') return { kind, message, until: Date.now() + (retryAfter ?? SLOW_DOWN_S) * 1000 }
+    if (kind === 'forbidden' && (await bridge.keyRefused().catch(() => false))) return { kind: 'key', message }
+    return null
+  }
+  // Every row still in the queue waited through this pause. One error sound, not one per waiting scan.
+  function pause(p: Pause) {
+    paused = p
+    queue.forEach((r) => held.add(r.key))
+    announce = pauseSays(p, queue.length)
+    // A slow-down carries on by itself; nothing was written by the refused request.
+    if (p.kind === 'rateLimited') slowDown = setTimeout(() => resume(), p.until - Date.now())
+    events.changed()
+    events.failed?.()
+  }
+
   async function drain() {
     if (running) return
     running = true
     const mine = generation
-    for (let row = queue.shift(); row; row = queue.shift()) {
+    // Paused, nothing is sent. After a pause, the next held scan waits for the open confirm, so each comes up in turn.
+    while (queue.length && !paused && !(opened && held.has(queue[0].key))) {
+      const row = queue.shift()!
+      const wasHeld = held.delete(row.key)
       if (undoing) await undoing
       const wait = lastStart + pace - Date.now()
       if (wait > 0) await sleep(wait)
       if (mine !== generation) return
       lastStart = Date.now()
-      update(row.key, { result: { state: 'working' } })
-      const confirmed = writes.get(row.key)
+      const pending = writes.get(row.key)
       writes.delete(row.key)
+      update(row.key, { result: { state: 'working' } })
+      // The write being sent; a failure while sending it may mean it went through.
+      let sending: typeof pending = undefined
+      const send = async (asset: Asset, p: NonNullable<typeof pending>) => {
+        sending = p
+        const { text, what = row.what, undo, sub, copy } = await p.write.write(asset, p.text)
+        sending = undefined
+        if (mine !== generation) return
+        settle(row, { state: 'done', text }, { what, undo, sub, copy })
+      }
       try {
         const asset = await bridge.assetByTag(row.tag)
         if (mine !== generation) return
-        if (confirmed) {
-          // The confirm gave the Asset time to change; the write only ever touches the Asset that was confirmed.
-          const { assetId } = rows.find((r) => r.key === row.key)!
+        if (pending) {
+          // The confirm (or the pause) gave the Asset time to change; the write only ever touches the Asset that was scanned.
+          const { assetId, before } = rows.find((r) => r.key === row.key)!
           if (asset?.id !== assetId) throw new Error(asset ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-          const { text, what = row.what, undo, sub, copy } = await confirmed.write(asset, confirmed.text)
-          if (mine !== generation) return
-          settle(row, { state: 'done', text }, { what, undo, sub, copy })
+          if (pending.unsure) {
+            // Checked, never sent twice: already as this Workflow leaves it is done; unchanged is sent again; else refused.
+            const done = await pending.write.left?.(asset, pending.text)
+            if (mine !== generation) return
+            if (done) {
+              settle(row, { state: 'done', text: `${done.text}: went through before the connection dropped` }, { what: done.what ?? row.what, undo: done.undo, sub: done.sub, copy: done.copy })
+              continue
+            }
+            if (!before || !same(before, asset)) throw new Error(`Changed while paused: ${found(asset)}`)
+          }
+          await send(asset, pending)
           continue
         }
         if (!asset) {
@@ -125,12 +198,14 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         update(row.key, { assetId: asset.id, name: asset.name || asset.model, before: asset })
         const step = await act(asset, row.ctx)
         if (mine !== generation) return
-        if ('confirm' in step || 'choice' in step) {
+        if ('send' in step) await send(asset, { write: step.send, text: '' })
+        else if ('confirm' in step || 'choice' in step) {
           // At most one open: a newer one skips or stops the one still waiting, as a different scan would. Latest wins: a
-          // newer scan (or line) since this one, whatever came of it, means this confirm or choice never opens.
+          // newer scan (or line) since this one, whatever came of it, means this confirm or choice never opens. Not for a
+          // scan that waited through a pause: those come up in turn on Resume.
           skipOpen()
           const shut = 'choice' in step ? stopped(step.choice) : ({ state: 'neutral', text: SKIPPED } as const)
-          if (away || row.key !== next) settle(row, shut, { what: step.what ?? '' })
+          if (away || (!wasHeld && row.key !== next)) settle(row, shut, { what: step.what ?? '' })
           else {
             opened = 'choice' in step ? { key: row.key, choice: step.choice, text: '' } : { key: row.key, confirm: step.confirm, text: '' }
             update(row.key, { what: step.what ?? '', result: { state: 'choice' in step ? 'choice' : 'confirm' } })
@@ -139,10 +214,45 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         else settle(row, { state: 'done', text: step.text }, { what: step.what ?? '', undo: step.undo })
       } catch (e) {
         if (mine !== generation) return
-        settle(row, { state: 'failed', reason: (e as Error).message })
+        const p = await pauseFor(e)
+        if (mine !== generation) return
+        if (!p) {
+          settle(row, { state: 'failed', reason: (e as Error).message })
+          continue
+        }
+        // The scan goes back to the front. A write that lost the connection or timed out may have gone through; a 401,
+        // 403 or 429 is refused before Snipe-IT changes anything, and a failed read wrote nothing.
+        const sent = sending as typeof pending
+        const back = sent && p.kind === 'unreachable' ? { ...sent, unsure: sent.unsure ?? p.message } : pending
+        if (back) writes.set(row.key, back)
+        queue.unshift(row)
+        update(row.key, { result: back?.unsure ? { state: 'unsure', reason: back.unsure } : { state: 'waiting' } })
+        pause(p)
       }
     }
     running = false
+  }
+
+  // When the slow-down ends, or byHand: then the once-per-session lookups run again first (the key may have changed).
+  async function resume(byHand = false) {
+    if (!paused) return
+    clearTimeout(slowDown)
+    const was = paused
+    const mine = generation
+    if (byHand && refresh) {
+      try {
+        await refresh()
+      } catch (e) {
+        const p = await pauseFor(e)
+        // Drop waiting or another server while the lookups ran: that pause is over.
+        if (mine !== generation || paused !== was) return
+        return pause(p ?? { ...was, message: (e as Error).message } as Pause)
+      }
+      if (mine !== generation || paused !== was) return
+    }
+    paused = null
+    events.changed()
+    drain()
   }
 
   const openRow = () => (opened ? rows.find((r) => r.key === opened!.key) : undefined)
@@ -155,13 +265,16 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     const { choice } = opened
     opened = null
     settle(row, choice ? stopped(choice) : { state: 'neutral', text: SKIPPED })
+    // The next held scan's turn.
+    drain()
   }
   // The open step's write joins the queue.
-  function queueWrite(write: Confirm['write'], text: string) {
+  function queueWrite(write: Write, text: string) {
     const row = openRow()!
     opened = null
     writes.set(row.key, { write, text })
-    queue.push(row)
+    // Ahead of scans held by a pause: it was scanned before them.
+    queue.unshift(row)
     update(row.key, { result: { state: 'waiting' } })
     drain()
   }
@@ -174,7 +287,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     if (confirm!.needs && !text.trim()) return confirm!.needs
     const wrong = confirm!.check?.(text)
     if (wrong) return wrong
-    queueWrite(confirm!.write, text.trim())
+    queueWrite(confirm!, text.trim())
     return ''
   }
 
@@ -186,6 +299,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
   const waits = () => rows.some(busy) || !!undoing || !!opened
   // Why Undo last is off ('' when it isn't): it waits for the queue and any open confirm, so "last" is well defined.
   const undoBlocked = () => {
+    if (paused) return 'Undo waits until the Workflow resumes'
     if (opened) return `Undo waits for the open ${opened.choice ? 'choice' : 'confirm'}`
     if (waits()) return 'Undo waits until nothing is waiting or working'
     if (confirming) return 'Undo is waiting for Enter or Esc'
@@ -197,6 +311,28 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     get rows() { return rows },
     /** How many scans are waiting or working. */
     get pending() { return rows.filter(busy).length },
+    /** Why the queue is Paused, or null. */
+    get paused() { return paused },
+    /** Scans a pause is keeping from Snipe-IT, for the quit prompt; 0 while the queue moves. */
+    get unsent() { return paused ? rows.filter(busy).length : 0 },
+    /** Resume: the scan that hit the failure goes first. */
+    resume: () => resume(true),
+    /** Drop waiting: every waiting scan is "Skipped: not sent", nothing written, and the pause lifts. A write that may have
+     *  gone through says so, for the Operator to check. */
+    dropWaiting() {
+      if (!paused) return
+      clearTimeout(slowDown)
+      paused = null
+      for (const r of queue) {
+        const unsure = writes.get(r.key)?.unsure
+        update(r.key, { result: unsure ? { state: 'failed', reason: `${NOT_SURE}: ${unsure}` } : { state: 'neutral', text: NOT_SENT } })
+      }
+      queue = []
+      writes.clear()
+      held.clear()
+      announce = 'Waiting scans dropped'
+      events.changed()
+    },
     /** The newest result, for the polite live region. */
     get announce() { return announce },
     /** Why Undo last is off, or '' when it can be asked for. */
@@ -217,10 +353,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
     /** The open choice's fix-it button, clicked (or Tab, then Enter): its write joins the queue. Returns why not ('' when it went). */
     fixOpen(): string {
       if (!opened?.choice) return ''
-      const { blocked, check, write } = opened.choice
+      const { blocked, check } = opened.choice
       const wrong = blocked || check?.(opened.text)
       if (wrong) return wrong
-      queueWrite(write, opened.text.trim())
+      queueWrite(opened.choice, opened.text.trim())
       return ''
     },
     /** Esc, Done or leaving: the open confirm's Asset is skipped, or the open choice's stopped; never written. */
@@ -328,7 +464,9 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       // confirm: "last" is about to change.
       skipOpen()
       confirming = null
+      // Paused, it waits with no lookup; its confirm comes up on Resume.
       const row: Row<C> = { key: ++next, time: hhmm(now()), tag, assetId: null, name: '', what: '', ctx, result: { state: 'waiting' }, before: null }
+      if (paused) held.add(row.key)
       rows = [row, ...rows]
       queue.push(row)
       events.changed()
@@ -346,6 +484,9 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
       generation++
       // The old drain() returns at its next generation check without touching running, so a new one can start now.
       running = false
+      paused = null
+      held.clear()
+      clearTimeout(slowDown)
       confirming = null
       undoing = null
       opened = null
@@ -364,7 +505,7 @@ export const READY = 'Ready to Deploy'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
 // once, set to Ready to Deploy and sent there. No confirm; Undo last fixes mistakes.
-export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'statusLabels' | 'getAsset'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'statusLabels' | 'getAsset'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkReturnStep = { step: 'location' }
   // The Location picked last, highlighted when the next round starts.
   let last: StatusLabel | null = null
@@ -372,6 +513,7 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
   let ready: number | undefined
   // Bumped by every start, Done and reset, so a start still finding the label never lands after a newer pick or after leaving.
   let attempt = 0
+  const findReady = async () => (await bridge.statusLabels()).find((l) => l.name === READY)?.id
 
   const runner = createRunner<StatusLabel>(bridge, async (a, location) => {
     if (!a.can.checkin) throw new Error(NOT_ALLOWED)
@@ -383,28 +525,39 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     const keep = a.statusType !== 'deployable'
     const { assignee: was, statusId, expectedCheckin } = a
     const from = `${was.type === 'asset' ? 'Asset ' : ''}${was.name}`
-    await bridge.checkin(a.id, { statusId: keep ? undefined : ready, locationId: location.id, note: workflowNote('Bulk return') })
     // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
     // the Location; the old one isn't forced back. A Temp checkout is made one again (its tag back), but a time of day alone
     // doesn't make one: an ordinary Checkout can have one too. So History says, only then: its newest Checkout is the one
     // returned (it's still checked in, as left). History that can't be read puts back an ordinary Checkout.
-    const left = ready
+    const readyId = ready
     const run = async (now: Asset, current: () => boolean) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
       // A label someone set since the return isn't overwritten with the old one; Checkout's own last read checks it again.
-      if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
+      if (now.statusId !== readyId) throw new Error(`${now.assetTag} is '${now.status}' now`)
       let due: string | undefined
       if (expectedCheckin && expectedCheckin.length > 10) {
         const n = parseWorkflowNote((await bridge.getAsset(a.id)).history.find((h) => h.action === 'Checkout')?.note ?? null)
         if (!current()) return
         if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
       }
-      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, fromStatusId: left, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
+      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, fromStatusId: readyId, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
     // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.
     const undo = keep ? `Snipe-IT can't check out an Asset with status '${a.status}'. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} checked in from ${from}`, run }
-    return { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo }
-  }, events, now, pace)
+    const done: Done = { text: keep ? `Kept status '${a.status}'` : 'Checked in', what: `From ${from}`, undo }
+    return {
+      send: {
+        write: async () => (await bridge.checkin(a.id, { statusId: keep ? undefined : readyId, locationId: location.id, note: workflowNote('Bulk return') }), done),
+        left: (now) => (!now.assignee && now.statusId === (keep ? statusId : readyId) && now.locationId === location.id ? done : null),
+      },
+    }
+  }, events, now, pace, async () => {
+    // Resume: found again, in case it's another key now. ponytail: kept as it was if it's gone; the next Checkin says why.
+    // Not after Done or another server meanwhile (attempt moved): reset() forgets it, and the next start finds it.
+    const mine = attempt
+    const id = await findReady()
+    if (mine === attempt) ready = id ?? ready
+  })
 
   return {
     runner,
@@ -414,7 +567,7 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     async start(location: StatusLabel): Promise<string> {
       const mine = ++attempt
       if (ready === undefined) {
-        const id = (await bridge.statusLabels()).find((l) => l.name === READY)?.id
+        const id = await findReady()
         if (mine !== attempt) return ''
         if (id === undefined) return `No Status Label named '${READY}' in Snipe-IT`
         ready = id
@@ -451,10 +604,9 @@ export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
 export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
 const NO_OPTIONS: CheckoutSession = { expectedCheckin: '', note: '' }
-export const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 
 export const NO_SCHOOL_DAY = 'No School day in the next year. Check the School calendar in Settings.'
-type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard'>
+type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard'>
 
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
 // Someone else's Asset opens a choice instead: Move to this User, or Stop.
@@ -519,37 +671,25 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       if (due <= stamp(now())) throw new Error('The due time has passed. Change it, then scan again')
       return due
     }
+    // The Expected Checkin the last Checkout went out with, for Resume's check (left); null until one is sent.
+    let sent: string | null = null
     // guard: what Checkout's own last read must still find. Temp checkout's tag records the due time it sent (#63 §2).
-    const checkout = (due: string, guard: Pick<CheckoutOptions, 'fromStatusId' | 'fromLocationId'> = {}) =>
-      bridge.checkout(a.id, { targetType: 'user', targetId: user.id, ...guard, expectedCheckin: due || undefined, note: workflowNote(workflow, { text: note, due: times && due }) })
+    const checkout = (due: string, guard: Pick<CheckoutOptions, 'fromStatusId' | 'fromLocationId'> = {}) => {
+      sent = due
+      return bridge.checkout(a.id, { targetType: 'user', targetId: user.id, ...guard, expectedCheckin: due || undefined, note: workflowNote(workflow, { text: note, due: times && due }) })
+    }
+    // As a Checkout (or Move) leaves it: to this User, the Status Label kept, and the Expected Checkin it sent (or none).
+    // Found so on Resume, it went through: the User's count goes up as for any Checkout.
+    const left = (done: (due: string) => Done) => (now: Asset) => (sent !== null && now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === sent ? (held(user.id, 1, mine), done(sent)) : null)
     if (was) {
       // Someone else's: the choice step. Move checks it in from them (no Status Label change), then out to this User.
       const from = assigneeName(was)
-      const move = async (now: Asset): Promise<Done> => {
-        // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
-        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
-        if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
-        dueNow()
-        const mine = session
-        // Whether it's a Temp checkout, for the undo: a time of day alone doesn't make one (an ordinary Checkout can have
-        // one too), so History says, as for Bulk return's undo. History that can't be read counts as an ordinary Checkout.
-        let temp = false
-        if (a.expectedCheckin && a.expectedCheckin.length > 10) {
-          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
-          sameSession(mine)
-          temp = !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
-        }
-        // The Checkin's and Checkout's own last reads check the Assignee and Status Label again.
-        await bridge.checkin(a.id, { note: workflowNote(workflow, { move: true }), fromAssignee: { type: was.type, id: was.id }, fromStatusId: a.statusId ?? undefined })
-        sameSession(mine)
-        // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
-        // The due time is worked out again for the Checkout itself: the Checkin may have taken it past 2:50 pm.
-        const due = await (async () => {
-          const due = dueNow()
-          await checkout(due, { fromStatusId: a.statusId ?? undefined })
-          return due
-        })().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
-        held(user.id, 1, mine)
+      // Whether it's a Temp checkout, for the undo: a time of day alone doesn't make one (an ordinary Checkout can have
+      // one too), so History says, as for Bulk return's undo. History that can't be read counts as an ordinary Checkout.
+      // The Move finds it before its Checkin, so it's known by the time Resume can find the Move went through.
+      let temp = false
+      // due: the Expected Checkin the Move's Checkout sent.
+      const done = (due: string): Done => {
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
         // had. A Temp checkout is made one again.
         const run = async (now: Asset) => {
@@ -568,13 +708,40 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         }
         return { text: 'Checked out', what: times ? `${whatFor(user, due)}, moved from ${from}` : `Moved from ${from}`, undo: { says: `${a.assetTag} → ${user.name}, moved from ${from}`, run } }
       }
-      return { what, choice: { fix: 'Move to this User', blocked: a.can.checkin ? '' : NOT_ALLOWED, stop: stop!, write: move } }
+      const move = async (now: Asset): Promise<Done> => {
+        // Checked before the Checkin, so a Checkout that can't happen leaves nothing half done.
+        if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
+        if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
+        dueNow()
+        const mine = session
+        if (a.expectedCheckin && a.expectedCheckin.length > 10) {
+          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
+          sameSession(mine)
+          temp = !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
+        }
+        // The Checkin's and Checkout's own last reads check the Assignee and Status Label again.
+        await bridge.checkin(a.id, { note: workflowNote(workflow, { move: true }), fromAssignee: { type: was.type, id: was.id }, fromStatusId: a.statusId ?? undefined })
+        sameSession(mine)
+        // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
+        // The due time is worked out again for the Checkout itself: the Checkin may have taken it past 2:50 pm.
+        // A Checkout that lost the connection or timed out may have gone through, so it pauses the queue and Resume checks
+        // the Asset (left); any other failure is this row's, since sending the Move again would find it checked in.
+        const due = await (async () => {
+          const due = dueNow()
+          await checkout(due, { fromStatusId: a.statusId ?? undefined })
+          return due
+        })().catch((e: Failure) => {
+          throw { kind: e.kind === 'unreachable' || e.kind === 'timeout' ? e.kind : 'refused', message: `Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}` } satisfies Failure
+        })
+        held(user.id, 1, mine)
+        return done(due)
+      }
+      return { what, choice: { fix: 'Move to this User', blocked: a.can.checkin ? '' : NOT_ALLOWED, stop: stop!, write: move, left: left(done) } }
     }
-    const write = async (now: Asset): Promise<Done> => {
-      if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      const due = dueNow()
-      await checkout(due, { fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId })
-      held(user.id, 1, mine)
+    // Snipe-IT can't check in to no Location (it uses the Default Location instead), so that undo is by hand.
+    const byHand = a.locationId === null && a.defaultLocation
+    // due: the Expected Checkin the Checkout sent.
+    const done = (due: string): Done => {
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
         stillTheirs(now, due)
@@ -586,9 +753,16 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
         await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote(workflow), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined, noDefaultLocation: a.locationId === null })
         held(user.id, -1, mine)
       }
-      return { text: 'Checked out', what: whatFor(user, due), undo: { says: `${a.assetTag} → ${user.name}`, run } }
+      return { text: 'Checked out', what: whatFor(user, due), undo: byHand ? `Snipe-IT would check ${a.assetTag} in to its Default Location, ${a.defaultLocation}, not back to no Location. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} → ${user.name}`, run } }
     }
-    return { what, confirm: { write } }
+    const write = async (now: Asset): Promise<Done> => {
+      if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      const due = dueNow()
+      await checkout(due, { fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId })
+      held(user.id, 1, mine)
+      return done(due)
+    }
+    return { what, confirm: { write, left: left(done) } }
   }, events, now, pace)
 
   function choose(user: UserCard) {
@@ -772,8 +946,9 @@ function repairSetup(bridge: Pick<SnipeItBridge, 'statusLabels' | 'repairTypeId'
 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
-// notes line. Each step after the first runs only once the first worked, and none undoes an earlier one.
-export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'getAsset' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+// notes line. Each step after the first runs only once the first worked, and none undoes an earlier one. Only the
+// first step can pause the Workflow (#73); a later one that fails is its sub-result.
+export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'getAsset' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   const setup = repairSetup(bridge, [DAMAGED], events)
   // Bumped by reset: an intake still writing stops before its next step, which would go to the new server.
   let session = 0
@@ -806,13 +981,19 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'g
     const { statusId, statusType, status, expectedCheckin } = a
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee?.type !== held?.type || current.assignee?.id !== held?.id || current.statusId !== statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      // Checked before any write: a note Snipe-IT can't keep (a link) refuses the intake with nothing changed.
       const note = workflowNote('Repair intake', { text })
       const mine = session
-      const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
       // No Location is sent, so a checked-in Asset goes back to its Default Location, as any Checkin from the app does.
       // Checkin's own last read checks the Assignee and Status Label again, so a Checkout changed since isn't checked in.
       if (held) await bridge.checkin(a.id, { statusId: damaged, note, fromAssignee: { type: held.type, id: held.id }, fromStatusId: a.statusId ?? undefined })
       else await bridge.updateStatus(a.id, damaged)
+      return rest(text, mine)
+    }
+    // The steps after the first, which never pause: each failure is its sub-result.
+    const rest = async (text: string, mine: number): Promise<Done> => {
+      const note = workflowNote('Repair intake', { text })
+      const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
       const sub: string[] = []
       still()
       if (!held) await bridge.addAssetNote(a.id, note).catch((e: Error) => sub.push(`Asset note not added: ${e.message}`))
@@ -880,7 +1061,9 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'g
       typeId === null ? 'no Maintenance (no Repair type found)' : 'open a repair Maintenance',
       user && `add a line to ${user.name}'s notes`,
     ].filter(Boolean).join(', ')
-    return { what: held ? `From ${from}` : "Wasn't checked out", confirm: { needs: 'Say what happened', says, write } }
+    // A first step that lost the connection may have gone through: checked in (or marked) Damaged, the rest is sent then.
+    const left = (now: Asset, text: string) => (!now.assignee && now.statusId === damaged ? rest(text, session) : null)
+    return { what: held ? `From ${from}` : "Wasn't checked out", confirm: { needs: 'Say what happened', says, write, left } }
   }, events, now, pace)
 
   return {
@@ -938,9 +1121,10 @@ function planOf({ supplier, cost, found }: IncomingCtx): { plan: Plan; supplier:
 
 // Incoming repair (#60): pick who repaired them once ("Repaired by"), then each scanned Asset is confirmed (with an
 // optional Repair cost and note), made Ready to Deploy, its return noted in History, and its open Repair Maintenance
-// closed with the Supplier and cost. Nothing after the status change undoes it.
+// closed with the Supplier and cost. Nothing after the status change undoes it. Only the status change can pause the
+// Workflow (#73); a later step that fails is in the row's result.
 export function createIncomingRepair(
-  bridge: Pick<SnipeItBridge, 'assetByTag' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'repairTypeId' | 'openMaintenances' | 'maintenance' | 'createMaintenance' | 'updateMaintenance' | 'completeMaintenance' | 'deleteMaintenance' | 'supplierSelectlist'>,
+  bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'repairTypeId' | 'openMaintenances' | 'maintenance' | 'createMaintenance' | 'updateMaintenance' | 'completeMaintenance' | 'deleteMaintenance' | 'supplierSelectlist'>,
   events: Events, now = () => new Date(), pace = PACE_MS,
 ) {
   const setup = repairSetup(bridge, [DAMAGED, READY], events)
@@ -974,11 +1158,21 @@ export function createIncomingRepair(
       // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
       const fresh = newest(await openRepairs())
       if (fresh?.id !== open?.id || fresh?.supplier?.id !== open?.supplier?.id || fresh?.cost !== open?.cost) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
-      const { plan, supplier: s, cost } = planOf(ctx)
       // Built first, so a link in it refuses before anything is written.
-      const note = workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
+      noteFor(text)
       still()
       await bridge.updateStatus(a.id, ready)
+      return rest(text, mine)
+    }
+    const noteFor = (text: string) => {
+      const { plan, supplier: s, cost } = planOf(ctx)
+      return workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
+    }
+    // The steps after the status change, which never pause: each failure is in the result text or a sub-result.
+    const rest = async (text: string, mine: number): Promise<Done> => {
+      const still = () => sameSession(mine)
+      const { plan, supplier: s, cost } = planOf(ctx)
+      const note = noteFor(text)
       still()
       // "Ready, but <step> failed: <reason>" (#60 §2).
       const failed: string[] = []
@@ -1060,8 +1254,11 @@ export function createIncomingRepair(
     const what = backFrom(isDamaged ? (open?.supplier ?? ctx.supplier) : null, '')
     // A link in the note, or a Repair cost that isn't a number, keeps it open.
     const check = (text: string) => wrong(() => (workflowNote('Incoming repair', { text }), costOf(ctx.cost)))
-    if (isDamaged) return { what, confirm: { check, write } }
-    return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write } }
+    // A status change that lost the connection may have gone through: made Ready to Deploy, the rest is sent then. An
+    // Asset scanned as Ready already can't tell, so it's sent again whole: the Maintenance re-read, and the same label.
+    const left = (now: Asset, text: string) => (a.statusId !== ready && !now.assignee && now.statusId === ready ? rest(text, session) : null)
+    if (isDamaged) return { what, confirm: { check, write, left } }
+    return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write, left } }
   }, events, now, pace)
 
   const openCtx = () => runner.open?.row.ctx
