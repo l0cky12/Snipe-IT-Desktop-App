@@ -156,9 +156,9 @@ describe('the stored dashboard layout', () => {
   const before = (show: Record<string, boolean>) => JSON.stringify(['users', 'assets', 'licenses', 'accessories', 'consumables', 'components', 'expiring', 'overdue']
     .map((piece) => ({ piece, show: show[piece] ?? true })))
 
-  it("an Operator who hid the Assets bar has the Status Label chart hidden; the Category, Location and Upcoming audits charts are new, so they show", () => {
+  it("an Operator who hid the Assets bar has the Status Label chart hidden; the Checkouts, Category, Location and Upcoming audits charts are new, so they show", () => {
     expect(layoutFrom(before({ assets: false, licenses: false }))).toEqual([
-      { piece: 'assets', show: false }, { piece: 'categories', show: true }, { piece: 'locations', show: true }, { piece: 'audits', show: true },
+      { piece: 'assets', show: false }, { piece: 'checkouts', show: true }, { piece: 'categories', show: true }, { piece: 'locations', show: true }, { piece: 'audits', show: true },
       { piece: 'users', show: true }, { piece: 'licenses', show: false }, { piece: 'accessories', show: true }, { piece: 'consumables', show: true }, { piece: 'components', show: true },
       { piece: 'expiring', show: true }, { piece: 'overdue', show: true },
     ])
@@ -166,7 +166,7 @@ describe('the stored dashboard layout', () => {
 
   it('with nothing stored, every piece shows: Charts, then the Inventory Chart, then Tables', () => {
     expect(layoutFrom(null).map((p) => [p.piece, p.show])).toEqual([
-      ['assets', true], ['categories', true], ['locations', true], ['audits', true], ['licenses', true], ['accessories', true], ['consumables', true], ['components', true], ['users', true],
+      ['assets', true], ['checkouts', true], ['categories', true], ['locations', true], ['audits', true], ['licenses', true], ['accessories', true], ['consumables', true], ['components', true], ['users', true],
       ['overdue', true], ['expiring', true],
     ])
   })

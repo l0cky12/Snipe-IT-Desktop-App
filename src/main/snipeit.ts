@@ -204,9 +204,9 @@ export type ListQuery = { search?: string; filters?: Record<string, string>; sor
  * tempError: why Asset rows carry no Temp marks (say the Activity Report is refused). */
 export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string; tempError?: string }
 
-/** The dashboard pieces: the charts (assets is Assets by Status Label, audits is Upcoming audits), the five Inventory Chart
- * bars, then the two tables. */
-export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'audits', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+/** The dashboard pieces: the charts (assets is Assets by Status Label, checkouts is Checkouts over time, audits is Upcoming
+ * audits), the five Inventory Chart bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'checkouts', 'categories', 'locations', 'audits', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
 export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'audits', 'overdue', 'expiring']
@@ -222,6 +222,8 @@ export type MissingField = (typeof MISSING_FIELDS)[number]
 export type Tally = { id: number | null; name: string; count: number }
 /** type: the Status Label's kind (deployable, pending, undeployable, archived); color: Snipe-IT's color for it, or null. */
 export type StatusTally = Tally & { type: string; color: string | null }
+/** Asset Checkouts in one week: week is its Monday, "YYYY-MM-DD". */
+export type Week = { week: string; count: number }
 /** Why a dashboard piece couldn't load: Snipe-IT's reason, or the app's connection message. */
 export type Failed = { error: string }
 /** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
@@ -231,12 +233,12 @@ export type AuditDay = { day: string; assets: AssetSummary[] }
 
 /**
  * One entry per requested piece: its data, or { error } with the reason it couldn't load.
- * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out),
+ * Tallies most first, Checkouts oldest week first (the current week, so far, last), Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out),
  * Upcoming audits soonest first.
  */
 export type Dashboard = {
   [K in DashboardPiece | HealthPiece]?: Failed | {
-    assets: StatusTally[]; categories: Tally[]; locations: Tally[]; audits: AuditDay[]
+    assets: StatusTally[]; checkouts: Week[]; categories: Tally[]; locations: Tally[]; audits: AuditDay[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
@@ -558,6 +560,16 @@ function daysFrom(today: Date, date: string): number {
   const [y, m, d] = date.split('-').map(Number)
   return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5)
 }
+
+// The Monday ("YYYY-MM-DD") of the week the day falls in; month counts from 0, and a day past a month's end rolls over.
+function mondayOf(year: number, month: number, day: number): string {
+  const date = new Date(Date.UTC(year, month, day))
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7))
+  return date.toISOString().slice(0, 10)
+}
+// The last 12 months' weeks, oldest first, each at 0: 52 whole weeks, then the current one.
+const lastYearOfWeeks = (today: Date): Week[] =>
+  Array.from({ length: 53 }, (_, i) => ({ week: mondayOf(today.getFullYear(), today.getMonth(), today.getDate() - (52 - i) * 7), count: 0 }))
 
 // Snipe-IT HTML-escapes text fields; decode every string in a response before reshaping it.
 const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
@@ -1094,20 +1106,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
   }
 
-  // The Activity Report newest first, down to its first entry before `from`. Each page starts where the last one's rows
-  // ended: a server may cap pages below PAGE_LIMIT. An entry without a date can't be placed, and mustn't end it either.
+  // The Activity Report newest first, down to its first entry before `from`. An entry without a date can't be placed, and
+  // mustn't end it either.
   async function* activitySince(from?: string, actionType?: string, search?: string): AsyncGenerator<RawActivity> {
-    for (let offset = 0; ; ) {
-      const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })
-      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
-      if (isError(page)) throw new Error(reason(page.messages))
-      for (const r of page.rows) {
-        const day = dayOf(r.created_at)
-        if (from && day && day < from) return
-        yield r
-      }
-      offset += page.rows.length
-      if (!page.rows.length || offset >= page.total) return
+    for await (const r of activityLog({ ...(actionType && { action_type: actionType }), ...(search?.trim() && { search: search.trim() }) })) {
+      const day = dayOf(r.created_at)
+      if (from && day && day < from) return
+      yield r
     }
   }
 
@@ -1263,6 +1268,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }))
   }
 
+  // The Activity Report newest first, a page at a time: the next page is asked for only when the caller reads on past this
+  // one, so a caller that stops once it's past its start asks no further. Each page starts where the last one's rows ended:
+  // a server may cap pages below PAGE_LIMIT.
+  async function* activityLog(filters: Record<string, string>): AsyncGenerator<RawActivity> {
+    for (let offset = 0; ; ) {
+      const params = new URLSearchParams({ limit: String(PAGE_LIMIT), offset: String(offset), sort: 'created_at', order: 'desc', ...filters })
+      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      yield* page.rows
+      offset += page.rows.length
+      if (!page.rows.length || offset >= page.total) return
+    }
+  }
+
   // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
   // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
   // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
@@ -1274,21 +1293,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const temp = new Set<number>()
     if (!since.size) return temp
     const oldest = [...since.values()].sort()[0]
-    for (let offset = 0; ; ) {
-      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
-      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
-      if (isError(page)) throw new Error(reason(page.messages))
-      for (const r of page.rows) {
-        // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
-        const when = r.created_at?.datetime.slice(0, 16) ?? ''
-        if (when && when < oldest) return temp
-        const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
-        const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
-        if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
-      }
-      offset += page.rows.length
-      if (!page.rows.length || offset >= page.total) return temp
+    for await (const r of activityLog({ action_type: 'checkout', item_type: 'asset', search: 'Temp' })) {
+      // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
+      const when = r.created_at?.datetime.slice(0, 16) ?? ''
+      if (when && when < oldest) break
+      const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
+      const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
+      if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
     }
+    return temp
   }
 
   // The Assets with their Temp marks. If the lookup fails, they come back unmarked with the reason; with must (Out on temp,
@@ -2041,6 +2054,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             const type = label?.type ?? (s?.status_meta === 'deployed' ? 'deployable' : s?.status_meta ?? '')
             return s ? { id: s.id, name: s.name, type, color: label?.color ?? null } : { id: null, name: 'No Status Label', type, color: null }
           })
+        }),
+        // The Activity Report's paging, counted here by week: Snipe-IT can't count its log by date. ponytail: every load pages
+        // the whole year (about 20 requests at 10,000 Checkouts a year); keeping the past weeks between loads would cut it to one.
+        entry('checkouts', async () => {
+          const weeks = lastYearOfWeeks(now)
+          const byMonday = new Map(weeks.map((w) => [w.week, w]))
+          for await (const r of activityLog({ action_type: 'checkout' })) {
+            const day = r.created_at?.datetime.slice(0, 10)
+            if (!day) continue
+            if (day < weeks[0].week) break
+            // A date past today (a server clock ahead) has no week here.
+            const week = r.item?.type === 'asset' && byMonday.get(mondayOf(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10)))
+            if (week) week.count++
+          }
+          return weeks
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),

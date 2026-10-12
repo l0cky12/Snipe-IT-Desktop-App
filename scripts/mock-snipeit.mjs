@@ -128,6 +128,23 @@ for (const a of assets.slice(0, 90).reverse()) {
   const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
   act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
+// A school year of earlier Asset Checkouts, one week at a time, for the dashboard's Checkouts over time: busiest in August
+// and January, quiet over winter break and the summer.
+const perMonth = [40, 30, 30, 28, 34, 6, 4, 60, 45, 36, 30, 22]
+const thisMonday = new Date(new Date().setHours(0, 0, 0, 0))
+thisMonday.setDate(thisMonday.getDate() - ((thisMonday.getDay() + 6) % 7))
+for (let w = 52; w >= 1; w--) {
+  const monday = new Date(thisMonday)
+  monday.setDate(monday.getDate() - 7 * w)
+  const n = monday.getMonth() === 11 && monday.getDate() >= 20 ? 3 : perMonth[monday.getMonth()] + ((w * 7) % 9) - 4
+  for (let k = 0; k < n; k++) {
+    const when = new Date(monday)
+    when.setDate(monday.getDate() + (k % 5))
+    when.setHours(7 + (k % 8), (k * 13) % 60)
+    const a = assets[(w * 31 + k) % assets.length]
+    act('checkout', a, assigneeOf(pick(users, w + k), 'user'), null, when)
+  }
+}
 // Damaged Assets, three ways: taken in by Repair intake with its Repair Maintenance open, taken in without one (its
 // Maintenance step failed, or an Asset that wasn't checked out), or set Damaged by hand in the web UI with neither.
 // One also had a second Repair intake that was undone.

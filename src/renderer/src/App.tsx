@@ -1,14 +1,14 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, eachInTurn, listName, missingWhat, reportDrill, type BulkAction, type BulkRun, type Drill } from './ListView'
-import { automaticCheckins, ReportsView, type ReportStart } from './ReportsView'
+import { automaticCheckins, ReportsView, weekCheckouts, type ReportStart } from './ReportsView'
 import { ImportView } from './ImportView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
@@ -16,7 +16,7 @@ import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
 import { createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createTempCheckout, NOT_ALLOWED, sharedRepairType, type Runner } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, IncomingRepairView, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
-import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
+import { Bars, ChartCard, Donut, Timeline, WeekLine, auditRows, chartRows, longDay, weekRows, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -196,7 +196,9 @@ export function App() {
   // The End-of-day reminder clicked: the dashboard's Overdue list with Temp only on, from wherever the Operator was.
   useEffect(() => window.reminder.onOpen(() => (cancel(), setShowSettings(false), setView({ page: 'dashboard', reminderClick: Date.now() }))), [])
   // Automatic check-in's notification clicked: the Activity Report of that day's automatic check-ins.
-  useEffect(() => window.reminder.onAutomatic((day) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...automaticCheckins(day), click: Date.now() } }))), [])
+  // The Reports page, opened on a Report and its filters and run at once.
+  const openReport = (start: ReportStart) => (cancel(), setShowSettings(false), setView({ page: 'reports', start: { ...start, click: Date.now() } }))
+  useEffect(() => window.reminder.onAutomatic((day) => openReport(automaticCheckins(day))), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const to = routeKey(e, keyPlace(e.target) === 'field', onWorkflow)
@@ -467,7 +469,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
@@ -841,7 +843,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
 
 
 const pieceName: Record<DashboardPiece, string> = {
-  assets: 'Assets by Status Label', categories: 'Assets by Category', locations: 'Assets by Location', audits: 'Upcoming audits',
+  assets: 'Assets by Status Label', checkouts: 'Checkouts over time', categories: 'Assets by Category', locations: 'Assets by Location', audits: 'Upcoming audits',
   licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', components: 'Components', users: 'Users',
   overdue: 'Overdue', expiring: 'Warranty expiring',
 }
@@ -854,10 +856,12 @@ const splitNames = {
 const GROUPS = ['Charts', 'Inventory Chart', 'Tables'] as const
 type Group = (typeof GROUPS)[number]
 const pieceGroup: Record<DashboardPiece, Group> = {
-  assets: 'Charts', categories: 'Charts', locations: 'Charts', audits: 'Charts',
+  assets: 'Charts', checkouts: 'Charts', categories: 'Charts', locations: 'Charts', audits: 'Charts',
   licenses: 'Inventory Chart', accessories: 'Inventory Chart', consumables: 'Inventory Chart', components: 'Inventory Chart', users: 'Inventory Chart',
   overdue: 'Tables', expiring: 'Tables',
 }
+// The Charts group's pieces: the Assets charts and Checkouts over time.
+type ChartsPiece = ChartPiece | 'checkouts'
 const chartColumn: Record<ChartPiece, string> = { assets: 'Status Label', categories: 'Category', locations: 'Location' }
 
 // Stored per computer: which pieces show, in what order (by group).
@@ -983,10 +987,11 @@ export function showAuditDay(d: AuditDay, cancel: () => void, show: (m: { label:
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
 // tempOnly: opens with the Overdue list's Temp only on (the End-of-day reminder was clicked).
-function DashboardView({ tempOnly: openedTempOnly, onPick, onAssetView, onDrill, onAuditDay, onSettings, statusLabels, locations, defaultLocation }: {
+function DashboardView({ tempOnly: openedTempOnly, onPick, onAssetView, onDrill, onAuditDay, onReport, onSettings, statusLabels, locations, defaultLocation }: {
   tempOnly: boolean
   onPick: (id: number) => void
   onAuditDay: (d: AuditDay) => void
+  onReport: (start: ReportStart) => void
   onAssetView: (v: AssetView) => void
   onDrill: (list: ListKind, drill: Drill) => void
   onSettings: () => void
@@ -1078,7 +1083,16 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onAssetView, onDrill,
       </ChartCard>
     )
   }
-  function chart(piece: ChartPiece) {
+  function chart(piece: ChartsPiece) {
+    if (piece === 'checkouts') {
+      const entry = data.checkouts
+      const openWeek = (week: string) => onReport(weekCheckouts(week))
+      return (
+        <ChartCard key={piece} title={pieceName[piece]} column="Week" unit="Checkouts" rows={entry && !('error' in entry) ? weekRows(entry as Week[]) : entry} onDrill={openWeek}>
+          {(rows) => <WeekLine rows={rows} onDrill={openWeek} />}
+        </ChartCard>
+      )
+    }
     const entry = data[piece]
     const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
     return (
@@ -1244,7 +1258,7 @@ function DashboardView({ tempOnly: openedTempOnly, onPick, onAssetView, onDrill,
           ))}
         </div>
       )}
-      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => (piece === 'audits' ? audits() : chart(piece as ChartPiece)))}</div>}
+      {showing('Charts').length > 0 && <div className="charts">{showing('Charts').map((piece) => (piece === 'audits' ? audits() : chart(piece as ChartsPiece)))}</div>}
       {bars.length > 0 && (
         <section className="card inventory" aria-label="Inventory Chart">
           <header><h2>Inventory Chart</h2></header>

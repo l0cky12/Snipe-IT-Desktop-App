@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartRows, fold, hitSpans, nextMajorAudit } from './Charts'
+import { chartRows, fold, hitSpans, nextMajorAudit, weekRows } from './Charts'
 
 const label = (id: number | null, name: string, type: string, color: string | null, count: number) => ({ id, name, type, color, count })
 
@@ -58,5 +58,12 @@ describe('Upcoming audits hit areas', () => {
     spans.slice(1).forEach(([l], i) => expect(l).toBe(spans[i][1]))
     expect(spans[0][0]).toBe(88)
     expect(spans[3][1]).toBe(312)
+  })
+})
+
+describe('Checkouts over time rows', () => {
+  it('each week opens itself, and only the current week, last, is so far', () => {
+    const rows = weekRows([{ week: '2026-09-14', count: 3 }, { week: '2026-09-21', count: 1 }])
+    expect(rows.map((r) => [r.key, r.count, r.drill, r.name.endsWith(' (so far)')])).toEqual([['2026-09-14', 3, '2026-09-14', false], ['2026-09-21', 1, '2026-09-21', true]])
   })
 })

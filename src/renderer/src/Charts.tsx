@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { scaleBand, scaleLinear, scaleTime } from 'd3-scale'
-import { arc, pie } from 'd3-shape'
-import type { AssetView, AuditDay, Failed, StatusTally, Tally } from '../../main/snipeit'
+import { arc, line, pie } from 'd3-shape'
+import type { AssetView, AuditDay, Failed, StatusTally, Tally, Week } from '../../main/snipeit'
 import type { Drill } from './ListView'
 
 /** The dashboard charts of Assets, each counted by one field, and the Assets List filter its marks open. */
 const FILTER = { assets: 'status_id', categories: 'category_id', locations: 'location_id' } as const
 export type ChartPiece = keyof typeof FILTER
-/** One mark of a chart, legend row or table row; drill is left out where it opens nothing (Other, No Location). */
-export type ChartRow = { key: string; name: string; count: number; color: string; drill?: Drill }
+/** One mark of a chart, legend row or table row; drill (an Assets List filter, or a Checkouts week) is left out where it
+ * opens nothing (Other, No Location). */
+export type ChartRow<D = Drill> = { key: string; name: string; count: number; color: string; drill?: D }
 
 // A Status Label with no color of its own takes look B's status token for its kind.
 const STATUS_TOKEN: Record<string, string> = { deployable: 'green', pending: 'amber', undeployable: 'red', archived: 'grey' }
@@ -34,21 +35,23 @@ const assets = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'Asset' : 'Asse
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact' })
 
 /** A chart on its card, with a Table toggle showing the same numbers as rows. rows is every row, before any folding.
- * dots: each table row shows its mark's color as a status dot (the Status Labels). onRow: what a table row opens instead of
- * its drill (an Upcoming audits day). empty: shown when there are no rows. wide: the card spans the full row. */
-export function ChartCard({ title, column, dots, wide, rows, onDrill, onRow, empty, children }: {
+ * unit: what the numbers count. dots: each table row shows its mark's color as a status dot (the Status Labels). onRow: what
+ * a table row opens instead of its drill (an Upcoming audits day). empty: shown when there are no rows. wide: the card spans
+ * the full row. */
+export function ChartCard<D = Drill>({ title, column, unit = 'Assets', dots, wide, rows, onDrill, onRow, empty, children }: {
   title: string
   column: string
+  unit?: string
   dots?: boolean
   wide?: boolean
-  rows: ChartRow[] | Failed | undefined
-  onDrill: (d: Drill) => void
-  onRow?: (r: ChartRow) => void
+  rows: ChartRow<D>[] | Failed | undefined
+  onDrill: (d: D) => void
+  onRow?: (r: ChartRow<D>) => void
   empty?: ReactNode
-  children: (rows: ChartRow[]) => ReactNode
+  children: (rows: ChartRow<D>[]) => ReactNode
 }) {
   const [table, setTable] = useState(false)
-  const name = (r: ChartRow, inner: ReactNode) => {
+  const name = (r: ChartRow<D>, inner: ReactNode) => {
     const go = onRow ? () => onRow(r) : r.drill && (() => onDrill(r.drill!))
     return go ? <button className="link" onClick={go}>{inner}</button> : inner
   }
@@ -60,10 +63,10 @@ export function ChartCard({ title, column, dots, wide, rows, onDrill, onRow, emp
       </header>
       {!rows ? <p className="dim">Loading…</p>
         : 'error' in rows ? <p className="message error" role="alert">{rows.error}</p>
-        : rows.length === 0 ? empty ?? <p className="dim">No Assets</p>
+        : rows.length === 0 ? empty ?? <p className="dim">No {unit}</p>
         : table ? (
           <div className="chart-table"><table className="history">
-            <thead><tr><th>{column}</th><th className="num">Assets</th></tr></thead>
+            <thead><tr><th>{column}</th><th className="num">{unit}</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.key}>
@@ -287,6 +290,72 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
             </svg>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+const day = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const checkouts = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'Checkout' : 'Checkouts'}`
+
+/** Checkouts over time's rows, oldest week first, each opening its week; the current week, last, is so far. */
+export const weekRows = (weeks: Week[]): ChartRow<string>[] =>
+  weeks.map((w, i) => ({ key: w.week, name: `${day.format(dateOf(w.week))}${i === weeks.length - 1 ? ' (so far)' : ''}`, count: w.count, color: 'var(--series-1)', drill: w.week }))
+
+const LINE_M = { top: 18, bottom: 28, left: 36 }
+
+/** Checkouts over time: one 2px line, a point per week, the current week dashed and labelled "so far", y from 0. A crosshair
+ * tooltip gives the week and its count. One Tab stop: the arrow keys step weeks, Enter (or a click) opens the week. */
+export function WeekLine({ rows, onDrill }: { rows: ChartRow<string>[]; onDrill: (week: string) => void }) {
+  const [ref, width] = useWidth()
+  const [at, setAt] = useState<number | null>(null)
+  const [focused, setFocused] = useState(false)
+  const last = rows.length - 1
+  const end = `${rows[last].count.toLocaleString()} so far`
+  // Room at the right for the "so far" label, about 7px a character.
+  const right = 16 + end.length * 7
+  const x = scaleLinear([0, last], [LINE_M.left, Math.max(LINE_M.left, width - right)])
+  const y = scaleLinear([0, Math.max(1, ...rows.map((r) => r.count))], [H - LINE_M.bottom, LINE_M.top]).nice()
+  const points = rows.map((r, i): [number, number] => [x(i), y(r.count)])
+  const path = line()
+  // A month's name under its first week; every other month when narrow.
+  const months = rows.flatMap((r, i) => (+r.key.slice(8) <= 7 ? [i] : [])).filter((_, n) => width >= 560 || n % 2 === 0)
+  const step = (by: number) => setAt((i) => Math.min(last, Math.max(0, (i ?? last) + by)))
+  const open = (i: number | null) => i !== null && rows[i].drill && onDrill(rows[i].drill!)
+  const keys: Record<string, () => void> = {
+    ArrowLeft: () => step(-1), ArrowRight: () => step(1), Home: () => setAt(0), End: () => setAt(last), Enter: () => open(at), ' ': () => open(at),
+  }
+  const shown = at === null ? null : rows[at]
+  return (
+    <div ref={ref} className="week-line" tabIndex={0} role="group"
+      aria-label="Asset Checkouts per week. Left and Right arrows step through the weeks; Enter opens the week in the Activity Report."
+      onFocus={() => (setFocused(true), setAt((i) => i ?? last))} onBlur={() => (setFocused(false), setAt(null))}
+      onKeyDown={(e) => { if (keys[e.key]) e.preventDefault(), keys[e.key]() }}>
+      {width > 0 && (
+        <svg width={width} height={H} onClick={() => open(at)} onPointerLeave={() => !focused && setAt(null)}
+          onPointerMove={(e) => setAt(Math.min(last, Math.max(0, Math.round(x.invert(e.clientX - e.currentTarget.getBoundingClientRect().left)))))}>
+          {y.ticks(4).map((t) => (
+            <g key={t} className="tick">
+              <line x1={LINE_M.left} x2={x(last)} y1={y(t)} y2={y(t)} />
+              <text x={LINE_M.left - 6} y={y(t)} dy="0.32em">{compact.format(t)}</text>
+            </g>
+          ))}
+          {months.map((i) => <text key={i} className="month" x={x(i)} y={H - LINE_M.bottom + 18}>{month.format(dateOf(rows[i].key))}</text>)}
+          <path className="line" d={path(points.slice(0, -1)) ?? ''} />
+          <path className="line so-far" d={path(points.slice(-2)) ?? ''} />
+          <text className="end" x={x(last) + 8} y={y(rows[last].count)} dy="0.32em">{end}</text>
+          {shown && (
+            <g className="crosshair">
+              <line x1={x(at!)} x2={x(at!)} y1={LINE_M.top} y2={H - LINE_M.bottom} />
+              <circle cx={x(at!)} cy={y(shown.count)} r="4" />
+            </g>
+          )}
+        </svg>
+      )}
+      {/* Always in the page, so a screen reader hears each week as the arrow keys step to it (but not each pointer move). */}
+      <div className="tip" role="status" aria-live={focused ? 'polite' : 'off'} hidden={!shown}
+        style={shown ? at! > last / 2 ? { right: width - x(at!) + 10 } : { left: x(at!) + 10 } : undefined}>
+        {shown && <><b>{checkouts(shown.count)}</b><span>Week of {shown.name}</span></>}
       </div>
     </div>
   )
