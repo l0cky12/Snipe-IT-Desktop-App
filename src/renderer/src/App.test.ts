@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
+import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -174,5 +174,17 @@ describe('the stored dashboard layout', () => {
   it('unreadable or unknown entries are dropped', () => {
     expect(layoutFrom('not json')).toEqual(layoutFrom(null))
     expect(layoutFrom(JSON.stringify([{ piece: 'gone', show: false }, null]))).toEqual(layoutFrom(null))
+  })
+})
+
+describe('clicking an Upcoming audits day', () => {
+  it('discards a lookup or Asset open still loading before showing the day, so it cannot replace the day or leave the dashboard', () => {
+    // run()'s pattern: a request is stale once latest moves on; cancel() moves it.
+    let latest = 1
+    const mine = latest
+    const steps: string[] = []
+    showAuditDay({ day: '2026-10-19', assets: [{ id: 7 } as never] }, () => (steps.push('cancel'), ++latest), (m) => steps.push(`show ${m.assets.length}`))
+    expect(steps).toEqual(['cancel', 'show 1'])
+    expect(mine !== latest).toBe(true)
   })
 })

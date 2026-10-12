@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartRows, fold, nextMajorAudit } from './Charts'
+import { chartRows, fold, hitSpans, nextMajorAudit } from './Charts'
 
 const label = (id: number | null, name: string, type: string, color: string | null, count: number) => ({ id, name, type, color, count })
 
@@ -46,5 +46,17 @@ describe('Next major audit', () => {
 
   it('is no day when nothing is due', () => {
     expect(nextMajorAudit([])).toBeUndefined()
+  })
+})
+
+describe('Upcoming audits hit areas', () => {
+  it('on close dates each marker is inside its own day\'s area only, and the areas meet without overlapping', () => {
+    // Consecutive days about 1.6px apart, as on a 600px-wide timeline, then a lone day.
+    const xs = [100, 101.6, 103.2, 300]
+    const spans = hitSpans(xs)
+    xs.forEach((x, i) => expect(spans.filter(([l, r]) => l <= x && x < r).map((s) => spans.indexOf(s))).toEqual([i]))
+    spans.slice(1).forEach(([l], i) => expect(l).toBe(spans[i][1]))
+    expect(spans[0][0]).toBe(88)
+    expect(spans[3][1]).toBe(312)
   })
 })

@@ -195,6 +195,11 @@ function AuditCount({ view, name, tone, total, onView }: {
   return <li><button className={`link chip c-${tone}`} onClick={() => onView(view)}><b>{total.toLocaleString()}</b> {name}</button></li>
 }
 
+/** Each day's hit area, [left, right]: halfway to its neighbours (12px out at either end), so the areas never overlap and a
+ * click on a marker picks that day even when close dates crowd together. The marks themselves take no clicks (styles.css). */
+export const hitSpans = (xs: number[]): [number, number][] =>
+  xs.map((x, i) => [i ? (xs[i - 1] + x) / 2 : x - 12, i < xs.length - 1 ? (x + xs[i + 1]) / 2 : x + 12])
+
 /**
  * Upcoming audits: a time axis from today to 12 months ahead, one marker per day with Assets due (taller for more), and the
  * Next major audit emphasised and labelled. Audit late and Audit due are pinned left of today. The strip is one Tab stop:
@@ -220,6 +225,7 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
   const y = scaleLinear([0, major?.assets.length ?? 1], [TH - TM.bottom, TM.top]).nice()
   const base = y(0)
   const xs = days.map((d) => x(dateOf(d.day)))
+  const spans = hitSpans(xs)
   const step = (e: KeyboardEvent<SVGGElement>, i: number) => {
     const to = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: days.length - 1 }[e.key]
     if (e.key === 'Enter') onDay(days[i])
@@ -264,13 +270,12 @@ export function Timeline({ days, late, due, dueThrough, onDay, onView }: {
                 {days.map((d, i) => {
                   const big = d === major, r = big ? 7 : 5, top = y(d.assets.length)
                   const label = `${longDay(d.day)}: ${assets(d.assets.length)}${big ? ', the Next major audit' : ''}`
-                  // Each day's hit area runs halfway to its neighbours, so a pointer near a marker finds it.
-                  const left = i ? (xs[i - 1] + xs[i]) / 2 : xs[i] - 12, right = i < days.length - 1 ? (xs[i] + xs[i + 1]) / 2 : xs[i] + 12
+                  const [left, right] = spans[i]
                   return (
                     <g key={d.day} role="link" className={`day${big ? ' major' : ''}`} tabIndex={i === at ? 0 : -1} aria-label={label}
                       onClick={() => onDay(d)} onKeyDown={(e) => step(e, i)} onFocus={() => setActive(i)}>
                       <title>{label}</title>
-                      <rect className="hit" x={left} y={TM.top} width={Math.max(1, right - left)} height={base - TM.top} fill="transparent" />
+                      <rect className="hit" x={left} y={TM.top - 14} width={right - left} height={base - TM.top + 14} fill="transparent" />
                       <line className="stem" x1={xs[i]} x2={xs[i]} y1={base} y2={top} />
                       <circle className="ring" cx={xs[i]} cy={top} r={r + 3} />
                       <circle cx={xs[i]} cy={top} r={r} />

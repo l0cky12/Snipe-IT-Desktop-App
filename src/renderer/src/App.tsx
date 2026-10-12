@@ -335,9 +335,7 @@ export function App() {
   }
 
   const selected = view ? (opensAt(view, showSettings).docked ? panel?.asset.id : undefined) : asset?.id
-  // An Upcoming audits day lists its Assets in the panel (there's no List filter by next audit date); the dashboard stays put,
-  // so the Operator can click through several days in turn.
-  const showAuditDay = (d: AuditDay) => (setPanelOpen(true), setMatches({ label: `Next audit ${longDay(d.day)} (${d.assets.length})`, assets: d.assets }), setOthers([]), setMessage({ text: '' }))
+  const onAuditDay = (d: AuditDay) => showAuditDay(d, cancel, (m) => (setPanelOpen(true), setMatches(m), setOthers([]), setMessage({ text: '' })))
   const go = (page: ListKind, drill?: Drill, report?: SavedReport, assetView?: AssetView) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, assetView, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -459,7 +457,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={showAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
         : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
@@ -914,6 +912,14 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onDrill, onTemp
         : <p className="health-line c-green">All clear <span className="dim">Checked {health.at}</span></p>}
     </section>
   )
+}
+
+/** An Upcoming audits day lists its Assets in the panel (there's no List filter by next audit date); the dashboard stays put,
+ * so the Operator can click through several days in turn. A lookup or Asset open still loading is discarded first, so it
+ * can't replace the day's Assets or leave the dashboard. */
+export function showAuditDay(d: AuditDay, cancel: () => void, show: (m: { label: string; assets: AssetSummary[] }) => void) {
+  cancel()
+  show({ label: `Next audit ${longDay(d.day)} (${d.assets.length})`, assets: d.assets })
 }
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.

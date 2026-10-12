@@ -246,6 +246,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .timeline .day circle { fill: var(--series-1); stroke: var(--bg); stroke-width: 2; }
 .timeline .day circle.ring { fill: none; stroke: none; }
 .timeline .day { cursor: pointer; }
+/* Only each day's .hit area takes the pointer: a marker can spill past its own area into a close neighbour's. */
+.timeline .day :not(.hit) { pointer-events: none; }
 .timeline .day:hover circle:not(.ring) { opacity: .8; }
 .timeline .day:focus-visible { outline: none !important; }
 .timeline .day:focus-visible circle.ring { stroke: var(--mark); stroke-width: 2; }
