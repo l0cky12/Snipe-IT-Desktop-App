@@ -423,7 +423,7 @@ export const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : 
 
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
 // Someone else's Asset opens a choice instead: Move to this User, or Stop.
-export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkCheckoutStep = { step: 'user' }
   let options = NO_OPTIONS
   let round = 0
@@ -469,13 +469,22 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         if (now.assignee?.type !== was.type || now.assignee.id !== was.id || now.statusId !== a.statusId || now.statusType !== 'deployable') throw new Error(`${a.assetTag} changed since it was scanned`)
         if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
         const mine = session
-        await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }) })
+        // Whether it's a Temp checkout, for the undo: a time of day alone doesn't make one (an ordinary Checkout can have
+        // one too), so History says, as for Bulk return's undo. History that can't be read counts as an ordinary Checkout.
+        let temp = false
+        if (a.expectedCheckin && a.expectedCheckin.length > 10) {
+          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
+          sameSession(mine)
+          temp = !!n && (n.undo ? !!n.due : n.workflow === 'Temp checkout')
+        }
+        // The Checkin's and Checkout's own last reads check the Assignee and Status Label again.
+        await bridge.checkin(a.id, { note: workflowNote('Bulk checkout', { move: true }), fromAssignee: { type: was.type, id: was.id }, fromStatusId: a.statusId ?? undefined })
         sameSession(mine)
         // Left checked in, with no automatic return to the previous Assignee, so the Operator sees it and sorts it out.
-        await checkout().catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
+        await checkout({ fromStatusId: a.statusId ?? undefined }).catch((e: Error) => { throw new Error(`Checked in from ${from}, but checkout to ${user.name} failed: ${e.message}`) })
         held(user.id, 1, mine)
         // Undo: a Checkin, then a Checkout back to the previous Assignee with the Status Label and Expected Checkin it
-        // had. A time of day means it was a Temp checkout, so the undo makes it one again.
+        // had. A Temp checkout is made one again.
         const run = async (now: Asset) => {
           stillTheirs(now)
           // A label changed (or made non-deployable) since couldn't be checked out again.
@@ -484,9 +493,9 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
           if (!now.can.checkin || !now.can.checkout) throw new Error(NOT_ALLOWED)
           const { expectedCheckin: due } = a
           const mine = session
-          await bridge.checkin(a.id, { note: undoNote('Bulk checkout') })
+          await bridge.checkin(a.id, { note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined })
           sameSession(mine)
-          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote('Bulk checkout', due && due.length > 10 ? due : undefined) })
+          await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: a.statusId ?? undefined, fromStatusId: a.statusId ?? undefined, expectedCheckin: due ?? undefined, note: undoNote('Bulk checkout', temp ? due! : undefined) })
             .catch((e: Error) => { throw new Error(`Checked in from ${user.name}, but checkout back to ${from} failed: ${e.message}`) })
           held(user.id, -1, mine)
         }
