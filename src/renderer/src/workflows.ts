@@ -1172,8 +1172,8 @@ export function createIncomingRepair(
       return workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
     }
     // The steps after the status change, which never pause: each failure is in the result text or a sub-result. stale:
-    // the Maintenance changed while paused, so it's left as is.
-    const rest = async (text: string, mine: number, stale = false): Promise<Done> => {
+    // why the Maintenance is left as is (it changed while paused, or couldn't be read again).
+    const rest = async (text: string, mine: number, stale = ''): Promise<Done> => {
       const still = () => sameSession(mine)
       const { plan, supplier: s, cost } = planOf(ctx)
       const note = noteFor(text)
@@ -1191,7 +1191,7 @@ export function createIncomingRepair(
       const sub: string[] = []
       if (stale) {
         sub.push('Maintenance left as is')
-        failed.push('the Maintenance changed while paused, so it was left as is')
+        failed.push(`${stale}, so it was left as is`)
       } else if (plan === 'close') {
         try {
           if (s && !open!.supplier) change.supplierId = s.id
@@ -1266,7 +1266,16 @@ export function createIncomingRepair(
     const left = async (now: Asset, text: string) => {
       if (a.statusId === ready || now.assignee || now.statusId !== ready) return null
       const mine = session
-      return rest(text, mine, !(await unchanged()))
+      // A read that fails for a reason that pauses pauses again; any other failure still finishes the return without it.
+      const stale = await unchanged().then(
+        (same) => (same ? '' : 'the Maintenance changed while paused'),
+        async (e: Partial<Failure>) => {
+          if (['unreachable', 'timeout', 'key', 'rateLimited'].includes(e?.kind ?? '')) throw e
+          // A 403 pauses only when the key itself is refused (said as 'key', so it isn't asked again); a permission-only one doesn't.
+          if (e?.kind === 'forbidden' && (await bridge.keyRefused().catch(() => false))) throw { ...e, kind: 'key' }
+          return `the Maintenance couldn't be read again (${e?.message ?? String(e)})`
+        })
+      return rest(text, mine, stale)
     }
     if (isDamaged) return { what, confirm: { check, write, left } }
     return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write, left } }
