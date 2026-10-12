@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
+import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -125,6 +125,11 @@ describe('the Asset panel when a Bulk Action ends', () => {
     const newer = on(7, 5)
     expect(ifShowing(newer, 7, reload, 4)).toBe(newer)
     expect(ifShowing(newer, 7, reload, 5)).toEqual(on(7, 6))
+  })
+  it('reloads in place, the same open (its key), so a form opened from its header meanwhile is not remounted away', () => {
+    const shown = { asset: { id: 7, name: 'old' }, n: 5, form: 'checkin' as const }
+    expect(reloadPanel(shown, 7, 5, { id: 7, name: 'new' })).toEqual({ ...shown, asset: { id: 7, name: 'new' } })
+    expect(reloadPanel(shown, 7, 4, { id: 7, name: 'new' })).toBe(shown)
   })
 })
 

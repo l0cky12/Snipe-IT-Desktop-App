@@ -116,6 +116,14 @@ export function moveCursor(ids: number[], at: number | null, by: -1 | 1): number
   const i = at === null ? -1 : ids.indexOf(at)
   return i < 0 ? ids[by > 0 ? 0 : ids.length - 1] : ids[Math.min(ids.length - 1, Math.max(0, i + by))]
 }
+/** Gives the List's row for id DOM focus (it's focusable, but not in the Tab order), so after ↑/↓ Enter and Space act on the row shown
+ * rather than a button on the row focus was left on. */
+export const focusRow = (table: Pick<ParentNode, 'querySelector'> | null, id: number) =>
+  table?.querySelector<HTMLElement>(`tr[data-id="${id}"]`)?.focus({ preventScroll: true })
+/** Starts opening a row's Asset in the Asset panel (its first column or a Quick Action): the focused row moves onto it at once, not when
+ * the fetch lands, so ↑/↓ meanwhile move on from it. */
+export const openRow = (setCursor: (id: number) => void, onOpenAsset: (id: number, form?: SheetForm) => void) => (id: number, form?: SheetForm) =>
+  (setCursor(id), onOpenAsset(id, form))
 /** The Asset docked in the Asset panel (App owns it, so a scan can open it), with the form a Quick Action opened. */
 export type ListPanel = { n: number; form?: SheetForm; sheet: SheetProps }
 
@@ -229,6 +237,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const [customizing, setCustomizing] = useState(false)
   // The row ↑/↓ have moved to (Assets only), by id.
   const [cursor, setCursor] = useState<number | null>(null)
+  const openAsset = openRow(setCursor, onOpenAsset)
   // The id of the panel's Asset once it's found outside the open View; kept while a reload checks again, so the notice doesn't blink.
   const [outside, setOutside] = useState<number | null>(null)
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
@@ -368,7 +377,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const rowName = (row: Row) => (kind === 'assets' ? (row as Asset).assetTag : (row as { name?: string }).name ?? `#${row.id}`)
 
   function open(row: Row): (() => void) | undefined {
-    if (kind === 'assets') return () => onOpenAsset(row.id)
+    if (kind === 'assets') return () => openAsset(row.id)
     if (kind !== 'activity') return () => onOpenRecord(kind, row.id)
     const item = (row as ListRows['activity']).item
     return item?.type === 'asset' ? () => onOpenAsset(item.id) : undefined
@@ -436,6 +445,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       const next = moveCursor(ids, cursor, k === 'up' ? -1 : 1)
       if (next === null) return
       setCursor(next)
+      focusRow(table.current, next)
       // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
       if (panelLive(!!panel, panelLoading)) onOpenAsset(next)
     } else if (k === 'open') {
@@ -589,10 +599,10 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
               const a = row as Asset
               // Open in the Asset panel, focused by ↑/↓, ticked.
               const docked = kind === 'assets' && panelAsset?.id === row.id
-              const quickProps = (form: SheetForm) => ({ onClick: () => onOpenAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
+              const quickProps = (form: SheetForm) => ({ onClick: () => openAsset(row.id, form), className: docked && panel?.form === form ? 'on' : undefined })
               const inBatch = batch.some((b) => b.id === a.id)
               return (
-                <tr key={row.id} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
+                <tr key={row.id} {...(kind === 'assets' && { 'data-id': row.id, tabIndex: -1 })} className={[docked && 'sel', cursor === row.id && 'cursor', selection.has(row.id) && 'ticked'].filter(Boolean).join(' ') || undefined}>
                   {selectable && (
                     <td className="tick">
                       <label><input type="checkbox" checked={selection.has(row.id)} onChange={() => setSelection((s) => tick(s, [row]))}

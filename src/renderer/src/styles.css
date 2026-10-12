@@ -322,6 +322,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .list-table tr.cursor { scroll-margin: 48px 0 8px; }
 .list-table tr.cursor td { background: var(--hover); }
 .list-table tr.cursor td:first-child { box-shadow: inset 3px 0 0 var(--dim); }
+/* ↑/↓ give the row focus so Enter and Space act on it; its cursor bar shows it, so no ring. */
+.list-table tr:focus-visible { outline: none !important; }
 .list-table tr.sel td { background: var(--hover); }
 .list-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
 .list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }

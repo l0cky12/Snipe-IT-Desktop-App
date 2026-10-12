@@ -70,6 +70,10 @@ export const opensAt = <V extends { page: string }>(view: V | null, showSettings
  * open of the same Asset (a Quick Action's form) stays too. It never touches `latest`, so an open still loading isn't cancelled either. */
 export const ifShowing = <P extends { asset: { id: number }; n: number }>(p: P | null, id: number, next: (p: P) => P | null, n?: number): P | null =>
   p?.asset.id === id && (n === undefined || p.n === n) ? next(p) : p
+/** The Asset panel with its Asset reloaded after a Bulk Action: the same open (n, its key), so the sheet isn't remounted and a form
+ * opened from its header meanwhile keeps its inputs. */
+export const reloadPanel = <P extends { asset: { id: number }; n: number }>(p: P | null, id: number, n: number, asset: P['asset']): P | null =>
+  ifShowing(p, id, (q) => ({ ...q, asset }), n)
 
 /** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
 export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
@@ -352,7 +356,7 @@ export function App() {
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
   // n: the panel's open as the Bulk Action began, so a newer open (of the same Asset too) stays.
-  const refreshPanel = (id: number, n: number) => window.snipeIt.getAsset(id).then((full) => { const next = ++panelN.current; setPanel((p) => ifShowing(p, id, () => ({ asset: full, n: next }), n)) }, (e: Error) => setMessage({ text: e.message, error: true }))
+  const refreshPanel = (id: number, n: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => setMessage({ text: e.message, error: true }))
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
