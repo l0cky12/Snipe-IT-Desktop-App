@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
-import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
+import { ListView, drillTo, listName, missingWhat, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
 import { ReportsView } from './ReportsView'
 import { ImportView } from './ImportView'
@@ -456,7 +456,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={(d) => go('assets', d)} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
         : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
@@ -846,17 +846,23 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 
 const healthName: Record<HealthLine['warning'], string> = {
   unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
+  missing: 'Missing fields', deactivated: 'Deactivated Users', runningOut: 'Licenses Running out', temp: 'Temp checkouts Overdue',
   newer: 'Newer Snipe-IT available',
 }
 // red: fix it now; amber: keep an eye on it.
-const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', newer: 'amber' }
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = {
+  unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', missing: 'amber', deactivated: 'red', runningOut: 'amber', temp: 'red', newer: 'amber',
+}
+const many = (n: number, one: string, more: string) => <><b>{n.toLocaleString()}</b> {n === 1 ? one : more}</>
 
-// The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
-function HealthStrip({ health, onRetry, onSettings, onAssetView, onHideRelease }: {
+// The Health warnings: pinned above the dashboard, outside Customize. One line each, in #67's order; "All clear" when none.
+function HealthStrip({ health, onRetry, onSettings, onAssetView, onDrill, onTempOnly, onHideRelease }: {
   health: { lines: HealthLine[]; at: string } | Failed | null
   onRetry: () => void
   onSettings: () => void
   onAssetView: (v: AssetView) => void
+  onDrill: (list: ListKind, drill: Drill) => void
+  onTempOnly: () => void
   onHideRelease: (tag: string) => Promise<void>
 }) {
   // Why the release notes didn't open, or the release couldn't be hidden.
@@ -885,23 +891,37 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onHideRelease }
         <span className="health-actions"><button onClick={() => tryRelease(() => onHideRelease(l.release.tag))}>Hide until the next release</button></span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
-    return <button className="link" onClick={() => onAssetView(l.warning)}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Asset is' : 'Assets are'} {healthName[l.warning]}</button>
+    if (l.warning === 'temp')
+      return <button className="link" onClick={onTempOnly}><b>{l.count.toLocaleString()}</b> {l.count === 1 ? 'Temp checkout is' : 'Temp checkouts are'} Overdue</button>
+    if (l.warning === 'deactivated')
+      return <button className="link" onClick={() => onDrill('users', { filters: { activated: '0' }, sort: { key: 'assets', order: 'desc' } })}>
+        {many(l.assets, 'Asset', 'Assets')} with {many(l.users, 'deactivated User', 'deactivated Users')}
+      </button>
+    if (l.warning === 'missing')
+      return <button className="link" onClick={() => onDrill('assets', { filters: { missing: l.field } })}>{many(l.count, 'Asset is', 'Assets are')} missing {missingWhat[l.field]}</button>
+    if (l.warning === 'runningOut')
+      return <button className="link" onClick={() => onDrill('licenses', { filters: {}, sort: { key: 'free', order: 'asc' } })}>{many(l.count, 'License is', 'Licenses are')} Running out</button>
+    const view = l.warning
+    return <button className="link" onClick={() => onAssetView(view)}>{many(l.count, 'Asset is', 'Assets are')} {healthName[view]}</button>
   }
   return (
     <section className="health" aria-label="Health warnings" aria-live="polite">
       {health.lines.length
-        ? health.lines.map((l) => <p key={l.warning} className={`health-line c-${healthTone[l.warning]}`}>{line(l)}</p>)
+        ? health.lines.map((l) => <p key={'field' in l ? l.field : l.warning} className={`health-line c-${healthTone[l.warning]}`}>{line(l)}</p>)
         : <p className="health-line c-green">All clear <span className="dim">Checked {health.at}</span></p>}
     </section>
   )
 }
 
 // Loads when opened, on Refresh, and when a piece is shown; no background polling. Hidden pieces aren't fetched.
-function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
+function DashboardView({ onPick, onAssetView, onDrill, onSettings, statusLabels, locations, defaultLocation }: {
   onPick: (id: number) => void
-  onDrill: (d: Drill) => void
   onAssetView: (v: AssetView) => void
+  onDrill: (list: ListKind, drill: Drill) => void
   onSettings: () => void
+  statusLabels: StatusLabel[]
+  locations: StatusLabel[]
+  defaultLocation: StatusLabel | null
 }) {
   const [layout, setLayout] = useState(() => layoutFrom(localStorage.getItem(LAYOUT_KEY)))
   const [customizing, setCustomizing] = useState(false)
@@ -914,6 +934,11 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
   // GitHub's latest Snipe-IT release, asked for beside the Health check so neither waits on the other.
   const [release, setRelease] = useState<Release | null>(null)
   const latestHealth = useRef(0)
+  // The Overdue list: only Temp checkouts, the row whose Checkin form is open, and what the last Checkin said.
+  const [tempOnly, setTempOnly] = useState(false)
+  const [checkingIn, setCheckingIn] = useState<number | null>(null)
+  const [overdueMessage, setOverdueMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
+  const overdueRef = useRef<HTMLDivElement>(null)
   const shown = layout.filter((p) => p.show).map((p) => p.piece)
 
   // On open and Refresh only, not when Customize shows a piece; the last result stays up while a new one loads.
@@ -932,8 +957,12 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     const mine = ++latest.current
     setLoading(true)
     // Each piece loads on its own, so a slow or failing one doesn't hold back the rest; the Asset pieces share one fetch.
-    const shared = shown.filter((p) => ASSET_PIECES.includes(p))
-    const groups = [...(shared.length ? [shared] : []), ...shown.filter((p) => !ASSET_PIECES.includes(p)).map((p) => [p])]
+    // Overdue is always fetched, shown or not: Health warning 5 counts its Temp checkouts. The Health warnings worked out from
+    // a list go with its pieces, and are fetched on their own when those are hidden.
+    const groups: (DashboardPiece | HealthPiece)[][] = [
+      [...new Set<DashboardPiece | HealthPiece>([...shown.filter((p) => ASSET_PIECES.includes(p)), 'overdue', 'missing'])], [...shown.filter((p) => p === 'licenses'), 'runningOut'],
+      ...shown.filter((p) => !ASSET_PIECES.includes(p) && p !== 'licenses').map((p) => [p]),
+    ]
     const merge = (d: Dashboard) => mine === latest.current && setData((data) => ({ ...data, ...d }))
     // Per-piece failures come back as entries; the catch only sees what reached no piece at all.
     // "Loaded" means something arrived: a total failure leaves the last load time alone.
@@ -962,19 +991,40 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     const [usedName, freeName] = splitNames[piece as keyof typeof splitNames]
     return [{ name: usedName, count: used, color: 'var(--series-1)' }, { name: freeName, count: available, color: 'var(--series-1-track)' }]
   }
+  const drillAssets = (d: Drill) => onDrill('assets', d)
   function chart(piece: ChartPiece) {
     const entry = data[piece]
     const rows = entry && !('error' in entry) ? chartRows(piece, entry as Tally[]) : entry
     return (
-      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} dots={piece === 'assets'} rows={rows} onDrill={onDrill}>
-        {(rows) => (piece === 'assets' ? <Donut rows={rows} onDrill={onDrill} /> : <Bars rows={rows} onDrill={onDrill} />)}
+      <ChartCard key={piece} title={pieceName[piece]} column={chartColumn[piece]} dots={piece === 'assets'} rows={rows} onDrill={drillAssets}>
+        {(rows) => (piece === 'assets' ? <Donut rows={rows} onDrill={drillAssets} /> : <Bars rows={rows} onDrill={drillAssets} />)}
       </ChartCard>
     )
   }
 
-  const tag = (a: AssetSummary) => (
+  // A rejected Checkin keeps its form open with what was typed; a done one closes only its own form (another row's opened
+  // meanwhile keeps its inputs) and reloads the dashboard and the Health check.
+  const checkin = (assetTag: string) => async (id: number, o: CheckinOptions) => {
+    try {
+      await window.snipeIt.checkin(id, o)
+      setCheckingIn((open) => (open === id ? null : open))
+      setOverdueMessage({ text: `Checked in ${assetTag}` })
+      load(), check()
+    } catch (e) {
+      setOverdueMessage({ text: (e as Error).message, error: true })
+    }
+  }
+  // Health warning 5 (and, later, the End-of-day reminder): the Overdue list with Temp only on, shown if Customize hid it.
+  function openTempOnly() {
+    setTempOnly(true)
+    setLayout((layout) => layout.map((p) => (p.piece === 'overdue' ? { ...p, show: true } : p)))
+    requestAnimationFrame(() => overdueRef.current?.scrollIntoView({ block: 'start' }))
+  }
+
+  const tag = (a: AssetSummary, flag?: React.ReactNode) => (
     <td>
       <button className="link mono" onClick={() => onPick(a.id)}>{a.assetTag}</button>
+      {flag}
     </td>
   )
   function table(piece: DashboardPiece) {
@@ -988,27 +1038,49 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
         </div>
       )
     if (piece === 'overdue') {
-      const rows = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      const { rows: all, tempError } = entry as NonNullable<Exclude<Dashboard['overdue'], Failed>>
+      // The Temp marks failing turns Temp only off until they load again.
+      const only = tempOnly && !tempError
+      const rows = overdueList(all, only)
       return (
         <div key={piece}>
-          <div className="section">Overdue ({rows.length})</div>
+          <div className="section section-bar" ref={overdueRef}>
+            {only ? 'Overdue Temp checkouts' : 'Overdue'} ({rows.length})
+            <label className="dim"><input type="checkbox" checked={tempOnly} onChange={(e) => setTempOnly(e.target.checked)} disabled={!!tempError} /> Temp only</label>
+          </div>
+          {tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {tempError}</p>}
+          {overdueMessage.text && <p className={overdueMessage.error ? 'message error' : 'message'} role={overdueMessage.error ? 'alert' : 'status'}>{overdueMessage.text}</p>}
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
+              <tr><th>Asset Tag</th><th>Asset</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th><th className="quick">Quick Actions</th></tr>
             </thead>
             <tbody>
+              {/* One keyed group per Asset, so a row leaving doesn't remount an open Checkin form below it. */}
               {rows.map((a) => (
-                <tr key={a.id}>
-                  {tag(a)}
-                  <td>{a.name || '—'}</td>
+                <Fragment key={a.id}>
+                <tr>
+                  {tag(a, a.temp && <span className="flag c-blue">Temp</span>)}
+                  <td>{a.name || a.model || '—'}</td>
                   <td>{a.assignee?.name}</td>
                   <td>{a.expectedCheckin}</td>
                   <td className="late num">{lateness(a.overdue)}</td>
+                  <td className="quick">
+                    <button disabled={!a.can.checkin} onClick={() => (setCheckingIn(checkingIn === a.id ? null : a.id), setOverdueMessage({ text: '' }))}
+                      className={checkingIn === a.id ? 'on' : undefined} title={checkinReason(a)}>Checkin</button>
+                  </td>
                 </tr>
+                {checkingIn === a.id && (
+                  <tr className="quick-form">
+                    <td colSpan={6}>
+                      <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a.assetTag)} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
-          {rows.length === 0 && <p className="empty">Nothing Overdue</p>}
+          {rows.length === 0 && <p className="empty">{only ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
         </div>
       )
     }
@@ -1036,6 +1108,10 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
     )
   }
 
+  // Lines show as they're known; "All clear" waits for the Overdue list and the dashboard's lists too, so it never shows
+  // before the Temp checkouts, missing fields or Running out lines can.
+  const lines = health && !('error' in health) ? healthLines({ ...health, missing: data.missing, runningOut: data.runningOut }, release, data.overdue) : []
+  const strip = !health || 'error' in health ? health : lines.length || (data.overdue && data.missing && data.runningOut !== undefined) ? { lines, at: health.at } : null
   const showing = (group: Group) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
   const bars = showing('Inventory Chart').flatMap((piece) => {
     const entry = segments(piece)
@@ -1051,7 +1127,10 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings }: {
           <button onClick={() => (load(), check())} disabled={loading}>Refresh</button>
         </div>
       </header>
-      <HealthStrip health={health && !('error' in health) ? { lines: healthLines(health, release), at: health.at } : health} onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onHideRelease={hideRelease} />
+      <HealthStrip
+        health={strip}
+        onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onDrill={onDrill} onTempOnly={openTempOnly} onHideRelease={hideRelease}
+      />
       {customizing && (
         <div className="customize">
           {GROUPS.map((group) => (
