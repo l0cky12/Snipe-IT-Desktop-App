@@ -1,4 +1,4 @@
-import { liveEntries, parseAppNote, parseWorkflowNote } from './notes'
+import { appNote, liveEntries, parseAppNote, parseWorkflowNote } from './notes'
 import type { Release } from './release'
 
 export type Config = { baseUrl: string; apiKey: string }
@@ -54,7 +54,7 @@ export type Asset = {
 }
 
 /** What the Operator's key may do to one record, as Snipe-IT's available_actions says. */
-export type Can = { checkout: boolean; checkin: boolean; update: boolean; delete: boolean }
+export type Can = { checkout: boolean; checkin: boolean; update: boolean; delete: boolean; audit: boolean }
 // Snipe-IT sends permissions decoded (key → value); an older one, or a field saved by hand, may send the JSON text.
 const permissionsOf = (raw: unknown): Record<string, unknown> => {
   let value = raw
@@ -63,7 +63,7 @@ const permissionsOf = (raw: unknown): Record<string, unknown> => {
 }
 const canFrom = (raw: unknown): Can => {
   const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof Can, unknown>>
-  return { checkout: a.checkout !== false, checkin: a.checkin !== false, update: a.update !== false, delete: a.delete !== false }
+  return { checkout: a.checkout !== false, checkin: a.checkin !== false, update: a.update !== false, delete: a.delete !== false, audit: a.audit !== false }
 }
 
 export type HistoryEntry = { when: string; action: string; operator: string; detail: string; note: string }
@@ -93,6 +93,11 @@ export type Lateness = { days: number; minutes: number }
 /** How late, for display: "40 min" or "2 h" on the due day, "3d" after it. */
 export const lateness = ({ days, minutes }: Lateness) =>
   days ? `${days}d` : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
+
+/** An Audit's Next audit ("YYYY-MM-DD"; left out, Snipe-IT sets it from its audit interval) and the typed note, if any. */
+export type AuditOptions = { nextAudit?: string; note?: string }
+/** The next audit date an Audit moved from (was) and to (next); next is null when Snipe-IT has no audit interval set. */
+export type Audited = { was: string | null; next: string | null }
 
 /** A Maintenance to open on one Asset. startDate: YYYY-MM-DD. */
 export type MaintenanceInput = { assetId: number; typeId: number; name: string; startDate: string; notes: string }
@@ -806,6 +811,8 @@ const stockForm = (category: NamesKind, own: FormField[], minFrom?: string): For
 export const FORMS: Record<EditKind, FormField[]> = {
   assets: [
     txt('asset_tag', 'Asset Tag', { required: true }), pick('model_id', 'Asset Model', 'models', { required: true }), pick('status_id', 'Status', 'statuslabels', { required: true, from: 'status_label' }), { key: 'expected_checkin', label: 'Expected Checkin', type: 'date' },
+    // Here so a mistaken Audit, which can't be undone, can be put back.
+    { key: 'next_audit_date', label: 'Next audit date', type: 'date' },
     txt('name', 'Name'), txt('serial', 'Serial'), pick('rtd_location_id', 'Default Location', 'locations', { from: 'rtd_location' }), pick('supplier_id', 'Supplier', 'suppliers'),
     pick('company_id', 'Company', 'companies'), txt('order_number', 'Order number'), { key: 'purchase_date', label: 'Purchase date', type: 'date' },
     { key: 'purchase_cost', label: 'Purchase cost', type: 'number' }, { key: 'warranty_months', label: 'Warranty (months)', type: 'number' }, { key: 'notes', label: 'Notes', type: 'textarea' },
@@ -1863,6 +1870,17 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         countDeactivated().catch(failed),
       ])
       return { probe, auditLate, auditDue, dueThrough, deactivated }
+    },
+
+    // One Audit: sets the last audited date to now and the next audit date to nextAudit, or Snipe-IT's audit interval when left out.
+    // Never sends a Location: an Audit doesn't move an Asset. Snipe-IT v8.6.3+'s single-Asset route.
+    async audit(id: number, { nextAudit, note }: AuditOptions): Promise<Audited> {
+      if (nextAudit !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(nextAudit)) throw new Error(`Next audit must be a date (YYYY-MM-DD), not ${nextAudit}`)
+      const text = appNote('Audit', note)
+      const was = dayOf((await current(id)).next_audit_date)
+      const result = await request<{ payload?: { next_audit_date?: RawAsset['next_audit_date'] } }>(`/hardware/${id}/audit`, { note: text, ...(nextAudit && { next_audit_date: nextAudit }) })
+      if (isError(result)) throw new Error(reason(result.messages))
+      return { was, next: dayOf(result.payload?.next_audit_date) }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.

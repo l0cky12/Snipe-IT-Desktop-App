@@ -7,7 +7,7 @@ import { cleanTag, createBulkCheckout, createBulkReturn, createRepairIntake, cre
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
   id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed', statusType: 'deployable',
   assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', defaultLocation: '', locationId: 3, category: 'Chromebook', serial: '', purchaseDate: null,
-  warrantyEnd: null, expectedCheckin: null, lastCheckout: null, lastAudited: null, nextAudit: null, endOfLife: null, purchaseCost: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
+  warrantyEnd: null, expectedCheckin: null, lastCheckout: null, lastAudited: null, nextAudit: null, endOfLife: null, purchaseCost: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true, audit: true }, ...more,
 })
 const flush = () => new Promise((r) => setTimeout(r, 0))
 const ITOFFICE: StatusLabel = { id: 8, name: 'IT Office' }
@@ -636,7 +636,7 @@ describe('Bulk return', () => {
 
   it("refuses an Asset that isn't checked out, or that the key can't check in, and changes nothing", async () => {
     const { flow, checkins } = await started([
-      asset('NOMMA-1', { assignee: null, status: 'Broken', statusMeta: 'undeployable', statusType: 'undeployable' }), asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true } }),
+      asset('NOMMA-1', { assignee: null, status: 'Broken', statusMeta: 'undeployable', statusType: 'undeployable' }), asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true, audit: true } }),
     ])
     flow.scan('NOMMA-1')
     flow.scan('NOMMA-2')
@@ -930,7 +930,7 @@ describe('Bulk checkout', () => {
     it("refuses before any confirm or choice: unknown tag, a Status Label that can't be checked out, a key that may not", async () => {
       const { flow, checkouts, failed } = await scanning([
         ready('NOMMA-2', { status: 'Broken', statusId: 6, statusMeta: 'undeployable', statusType: 'undeployable' }),
-        ready('NOMMA-3', { can: { checkout: false, checkin: true, update: true, delete: true } }),
+        ready('NOMMA-3', { can: { checkout: false, checkin: true, update: true, delete: true, audit: true } }),
         // Someone else's, but a Move couldn't check it out again: its label isn't deployable.
         asset('NOMMA-4', { assignee: { type: 'user', id: 8, name: 'Blake Sampleton' }, status: 'Pending', statusId: 5, statusType: 'pending' }),
       ])
@@ -1108,7 +1108,7 @@ describe('Bulk checkout', () => {
     })
 
     it("Move is off with the not-allowed text when the key can't check it in", async () => {
-      const { flow, checkins } = await choosing([blakes('NOMMA-1', { can: { checkout: true, checkin: false, update: true, delete: true } })])
+      const { flow, checkins } = await choosing([blakes('NOMMA-1', { can: { checkout: true, checkin: false, update: true, delete: true, audit: true } })])
       expect(flow.runner.open!.choice!.blocked).toBe(NOT_ALLOWED)
       expect(flow.runner.fixOpen()).toBe(NOT_ALLOWED)
       expect(checkins).toEqual([])
@@ -1175,7 +1175,7 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
       flow.scan('NOMMA-2')
       await opened(flow)
-      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-2', { can: { checkout: false, checkin: true, update: true, delete: true } }))
+      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-2', { can: { checkout: false, checkin: true, update: true, delete: true, audit: true } }))
       flow.runner.fixOpen()
       await settled(flow)
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: NOT_ALLOWED })
@@ -1293,7 +1293,7 @@ describe('Bulk checkout', () => {
 
       it("refuses when the key may no longer check it in or out, or its label can't be checked out now, and writes nothing", async () => {
         const f = await moving()
-        f.bridge.assetByTag.mockResolvedValueOnce({ ...moved(blakes('NOMMA-1')), can: { checkout: false, checkin: true, update: true, delete: true } })
+        f.bridge.assetByTag.mockResolvedValueOnce({ ...moved(blakes('NOMMA-1')), can: { checkout: false, checkin: true, update: true, delete: true, audit: true } })
         f.flow.runner.askUndo()
         await f.flow.runner.undo()
         expect(f.flow.runner.rows[0].undoFailed).toBe(NOT_ALLOWED)
@@ -1698,8 +1698,8 @@ describe('Repair intake', () => {
   it('refuses without a confirm: already Damaged and not checked out, or a key that can\'t do the first step', async () => {
     const { flow, calls, failed } = await opened([
       asset('NOMMA-1', { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' }),
-      asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true } }),
-      asset('NOMMA-3', { assignee: null, statusId: 1, can: { checkout: true, checkin: true, update: false, delete: true } }),
+      asset('NOMMA-2', { can: { checkout: true, checkin: false, update: true, delete: true, audit: true } }),
+      asset('NOMMA-3', { assignee: null, statusId: 1, can: { checkout: true, checkin: true, update: false, delete: true, audit: true } }),
     ])
     flow.scan('NOMMA-1')
     flow.scan('NOMMA-2')
@@ -1753,7 +1753,7 @@ describe('Repair intake', () => {
 
   it("not checked out: the Status Label, then the note in its History, then the Maintenance (already Damaged but checked out is checked in as normal)", async () => {
     // A key that can't check in can still take in an Asset that isn't checked out: that's an edit, not a Checkin.
-    const noCheckin = { checkout: true, checkin: false, update: true, delete: true }
+    const noCheckin = { checkout: true, checkin: false, update: true, delete: true, audit: true }
     const { flow, calls, checkins } = await opened([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1, statusType: 'deployable', can: noCheckin }), asset('NOMMA-2', { status: 'damaged', statusId: 9 })])
     flow.scan('NOMMA-1')
     await confirming(flow)
