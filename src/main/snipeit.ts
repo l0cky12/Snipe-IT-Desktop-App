@@ -623,7 +623,8 @@ function auditDays(assets: Asset[], today: Date): AuditDay[] {
   const last = daysFrom(today, `${today.getFullYear() + 1}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`)
   const days = new Map<string, AssetSummary[]>()
   for (const a of assets) {
-    if (!a.nextAudit) continue
+    // Archived Assets are never Audit due, even when "show archived in list" puts them in the Asset list.
+    if (!a.nextAudit || a.statusMeta === 'archived') continue
     const ahead = daysFrom(today, a.nextAudit)
     if (ahead < 0 || ahead > last) continue
     if (!days.has(a.nextAudit)) days.set(a.nextAudit, [])

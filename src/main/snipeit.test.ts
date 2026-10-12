@@ -1076,6 +1076,13 @@ describe('dashboard (today is 2026-09-24)', () => {
     ])
   })
 
+  it('Upcoming audits leaves out Archived Assets, which "show archived in list" puts in the Asset list', async () => {
+    const next = (date: string) => ({ next_audit_date: { date, formatted: date } })
+    const archived = { status_label: { id: 4, name: 'Archived', status_meta: 'archived' }, assigned_to: null }
+    const { snipeIt } = fleet({ hardware: [asset(1, next('2026-12-01')), asset(2, { ...next('2026-12-01'), ...archived }), asset(3, { ...next('2027-01-12'), ...archived })] })
+    expect((await snipeIt.dashboard(['audits'])).audits).toMatchObject([{ day: '2026-12-01', assets: [{ id: 1 }] }])
+  })
+
   it("Upcoming audits reads the Asset list only; the Audit late and Audit due totals come from the Health check", async () => {
     const { snipeIt, listsAsked } = fleet({ hardware: [asset(1)] })
     await snipeIt.dashboard(['audits', 'categories'])
