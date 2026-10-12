@@ -20,7 +20,7 @@ export const listName: Record<ListKind, string> = {
 const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K]) => ReactNode } } = {
   assets: {
     status: (a) => <>
-      {a.status.toLowerCase() === ASSET_VIEWS.damaged.filter![1].toLowerCase() ? <span className="flag c-red">{a.status}</span> : <StatusChip asset={a} />}
+      {a.status.trim().toLowerCase() === ASSET_VIEWS.damaged.filter![1].toLowerCase() ? <span className="flag c-red">{a.status}</span> : <StatusChip asset={a} />}
       {a.temp && <span className="flag c-blue">Temp</span>}
       {a.overdue && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
     </>,
