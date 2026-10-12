@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind } from '../../main/snipeit'
-import { drillLabel, singular, type Drill } from './ListView'
+import { drillLabel, listName, type Drill } from './ListView'
 import { DeleteButton } from './RecordForm'
 import { UserAccessSection, type CanManage } from './AccessView'
 import { NOT_ALLOWED } from './App'
@@ -53,10 +53,7 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
   return (
     <>
       <header className="head">
-        <h1>
-          {record.name || '—'}
-          <span className="sub">{singular(kind)}</span>
-        </h1>
+        <h1><span className="dim">{listName[kind]} / </span>{record.name || '—'}</h1>
         <div className="actions">
           {(kind === 'categories' ? CATEGORY_LISTS[record.categoryType ?? ''] ?? [] : RELATED[kind] ?? []).map(([label, list, filter]) => (
             <button key={label} className="quiet"
@@ -81,18 +78,20 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
 
 export function FieldGrid({ fields, onOpenRecord, onOpenAsset }: { fields: Field[]; onOpenRecord: (kind: RecordKind, id: number) => void; onOpenAsset: (id: number) => void }) {
   return (
-    <div className="grid">
+    <dl className="facts">
       {fields.map((f, i) => {
         const link = f.link
         return (
-          <div className="cell" key={i}>
-            <div className="k">{f.label}</div>
-            {link
-              ? <button className="link" onClick={() => (link.kind === 'assets' ? onOpenAsset(link.id) : onOpenRecord(link.kind, link.id))}>{f.value}</button>
-              : <span>{f.value}</span>}
-          </div>
+          <Fragment key={i}>
+            <dt>{f.label}</dt>
+            <dd>
+              {link
+                ? <button className="link" onClick={() => (link.kind === 'assets' ? onOpenAsset(link.id) : onOpenRecord(link.kind, link.id))}>{f.value}</button>
+                : f.value}
+            </dd>
+          </Fragment>
         )
       })}
-    </div>
+    </dl>
   )
 }
