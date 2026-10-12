@@ -245,3 +245,16 @@ it('follows the system appearance until one is chosen, and keeps the choice acro
   expect(relaunched.saveAppearance('system').appearance).toBe('system')
   expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
 })
+
+it('keeps the Maintenance type for repairs blank until set: a whole number above 0, or blank for none, kept across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().repairTypeId).toBeNull()
+  store.save(input)
+  expect(store.saveRepairs(' 12 ').repairTypeId).toBe(12)
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, repairTypeId: 12 })
+  for (const bad of ['0', '-3', '1.5', '1e3', 'abc', '12 34', '99999999999999999999', 7 as never, null as never])
+    expect(() => relaunched.saveRepairs(bad)).toThrow('Maintenance type for repairs must be a whole number above 0, or blank.')
+  expect(relaunched.get().repairTypeId).toBe(12)
+  expect(relaunched.saveRepairs('  ').repairTypeId).toBeNull()
+})

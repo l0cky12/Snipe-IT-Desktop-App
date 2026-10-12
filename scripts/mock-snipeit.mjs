@@ -46,6 +46,9 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), employee_num: i % 10 === 9 ? null : `E-${2001 + i}`, email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i), activated: i % 13 !== 5 }
 })
 const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
+// User notes as Snipe-IT sends them: rendered, so one holding a link comes back as markup Repair intake won't rebuild.
+users[6].notes = 'Loaner agreement on file.'
+users[11].notes = 'Loaner agreement: see <a href="https://example.org/forms/loaner">the signed form</a>'
 // An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
 const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
@@ -102,6 +105,9 @@ const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count:
 const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', qty: 80, remaining_qty: 23 }, { name: 'Wireless Mouse', model_number: 'M-220', qty: 40, remaining_qty: 31, notes: 'For the Library cart' }])
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
+// Maintenance types (v8.6+: a maintenance_type_id). Operator keys can't read the type list; any Repair Maintenance gives the type away.
+const maintenanceTypeRows = named(['Repair', 'Upgrade', 'Software Support'])
+const typeDetails = (name) => ({ ...maintenanceTypeRows.find((t) => t.name === name), tag_color: null })
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
@@ -125,7 +131,7 @@ for (const a of assets.slice(0, 90).reverse()) {
 // One also had a second Repair intake that was undone.
 const maintenances = []
 const maintain = (asset, start, type = 'Repair', completed = null) => maintenances.push({ id: maintenances.length + 1, asset: { id: asset.id, name: asset.name, asset_tag: asset.asset_tag },
-  name: `${asset.asset_tag} damaged`, title: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
+  name: `${asset.asset_tag} damaged`, title: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', maintenance_type_details: typeDetails(type), start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
 const at = (offset, hour) => new Date(`${day(offset)}T${String(hour).padStart(2, '0')}:00:00Z`)
 const repairs = ['cracked screen', 'won’t power on', 'keyboard missing keys', 'hinge broken', 'water damage', 'charging port loose']
 assets.filter((a) => a.status_label.name === 'Damaged').forEach((a, k) => {
@@ -184,7 +190,7 @@ const lists = {
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
   'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: (r, v) => r.item?.id === +v }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
   // Snipe-IT's completed filter: true for completed Maintenances, anything else for open ones.
-  maintenances: { rows: () => maintenances, filters: { completed: (m, v) => !!m.completed_at === (v === 'true'), asset_id: (m, v) => m.asset.id === +v } },
+  maintenances: { rows: () => maintenances, search: (m) => text(m.title, m.notes, m.maintenance_type, m.asset.asset_tag), filters: { completed: (m, v) => !!m.completed_at === (v === 'true'), asset_id: (m, v) => m.asset.id === +v } },
   statuslabels: { rows: () => statuses }, categories: { rows: () => categories }, departments: { rows: () => departments },
   licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes), sorts: { name: (r) => r.name, seats: (r) => r.seats, free_seats_count: (r) => r.free_seats_count } }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
   consumables: { rows: () => consumables, search: (r) => text(r.name, r.item_no, r.notes) }, components: { rows: () => components, search: (r) => text(r.name, r.notes) },
@@ -244,7 +250,7 @@ maintenances.push(...Array.from({ length: 24 }, (_, i) => {
   const type = pick(maintenanceTypes, i)
   return {
     id: maintenances.length + i + 1, asset: { id: a.id, name: a.name, asset_tag: a.asset_tag }, title: `${type === 'Repair' ? pick(['Cracked screen', 'Keyboard replacement', 'Battery swap', 'Hinge repair'], i) : type} for ${a.name}`,
-    maintenance_type: type, asset_maintenance_type: '', supplier: pick(suppliers, i), is_warranty: i % 3 === 0, cost: i % 5 === 4 ? null : (35 + ((i * 173) % 1400) + 0.5 * (i % 2)).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    maintenance_type: type, asset_maintenance_type: '', maintenance_type_details: typeDetails(type), supplier: pick(suppliers, i), is_warranty: i % 3 === 0, cost: i % 5 === 4 ? null : (35 + ((i * 173) % 1400) + 0.5 * (i % 2)).toLocaleString('en-US', { minimumFractionDigits: 2 }),
     start_date: { date: day(start), formatted: day(start) }, completed_at: open ? null : { datetime: `${day(start + time)} 15:20:00`, formatted: day(start + time) },
     completed_by: open ? null : { id: 900, name: 'Demo Operator' }, asset_maintenance_time: open ? 0 : time, created_by: { id: 900, name: 'Demo Operator' },
   }
@@ -323,10 +329,10 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -356,7 +362,24 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'maintenance-types') return limited ? send(refused, 403) : send(listPage({ rows: () => maintenanceTypeRows, search: (t) => text(t.name) }, url.searchParams))
+  if (path === 'maintenances' && req.method === 'POST') {
+    const item = assets.find((a) => a.id === body.asset_id)
+    const type = maintenanceTypeRows.find((t) => t.id === body.maintenance_type_id)
+    if (!item || !type || !body.name || !body.start_date) return fail({ ...(!type && { maintenance_type_id: ['The selected maintenance type id is invalid.'] }), ...(!body.name && { name: ['The name field is required.'] }) })
+    const m = { id: Math.max(0, ...maintenances.map((x) => x.id)) + 1, asset: { id: item.id, name: item.name, asset_tag: item.asset_tag }, name: body.name, title: body.name, notes: body.notes ?? null,
+      maintenance_type: type.name, asset_maintenance_type: '', maintenance_type_details: { ...type, tag_color: null }, start_date: { date: body.start_date, formatted: body.start_date }, completed_at: null }
+    maintenances.push(m)
+    return send({ status: 'success', messages: 'Maintenance created.', payload: { id: m.id } })
+  }
+  if ((m = path.match(/^notes\/(\d+)\/store$/))) {
+    const a = assets.find((x) => x.id === +m[1])
+    if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
+    if (!body.note) return send({ status: 'error', messages: 'The note field is required.', payload: null }, 422)
+    act('note added', a, null, body.note)
+    return send({ status: 'success', messages: 'Note added', payload: { note: body.note, item_id: a.id } })
+  }
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
     if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
