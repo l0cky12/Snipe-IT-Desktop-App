@@ -5,6 +5,7 @@
 // To see how the app takes a failure, MOCK_FAIL answers every request the same way: 401 (API key rejected), 403 (refused),
 // 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
 // 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
+// MOCK_ALL_AUDITED=1 moves every next audit date at least 40 days ahead, so nothing is Audit late or Audit due.
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -51,7 +52,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
   const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), employee_number: pick(users, i).employee_num, type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
-  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40
+  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40 + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
@@ -354,7 +355,8 @@ createServer(async (req, res) => {
     const errors = Object.fromEntries(rows.flatMap((r, n) => (column >= 0 && r[column] ? [] : [[r.find(Boolean) ?? `Row ${n + 2}`, { [required]: { [required]: [`The ${required.replace(/_/g, ' ')} field is required.`] } }]])))
     return Object.keys(errors).length ? send({ status: 'import-errors', messages: errors, payload: null }, 500) : send({ status: 'success', messages: { redirect_url: '' }, payload: null })
   }
-  if (path === 'version') return send({ version: 'v8.3.0 (mock)' })
+  // Shaped like Snipe-IT v8.8's /version.
+  if (path === 'version') return send({ version: 'v8.8.0', build_version: 'v8.8.0-0-gmock', hash_version: 'gmock', full_version: 'v8.8.0 build 0 (gmock)' })
   if (path === 'hardware/labels') {
     const found = (body.asset_tags ?? []).filter((t) => assets.some((a) => a.asset_tag === t))
     if (!found.length) return send({ status: 'error', messages: 'Asset does not exist.', payload: null }, 404)
