@@ -212,9 +212,10 @@ describe('Assets Views', () => {
     expect(picking('auditLate')).toEqual({ view: 'auditLate', search: '', filters: {}, sort: { key: 'nextAudit', order: 'asc' } })
   })
 
-  it('a dashboard or Record drill opens on All with its filter; a Saved Report on All with its search and sort', () => {
+  it('a dashboard or Record drill opens on All with its filter; a Saved Report on its View (All if it has none) with its search and sort', () => {
     expect(opening({ filters: { status_id: '3' } })).toEqual({ view: 'all', search: '', filters: { status_id: '3' }, sort: null })
     expect(opening({ filters: report.filters }, report)).toEqual({ view: 'all', search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' } })
+    expect(opening({ filters: report.filters }, { ...report, view: 'auditLate' })).toEqual({ view: 'auditLate', search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' } })
   })
 
   it("a Health warning's drill opens filtered to its gap, most urgent first: deactivated Users by most Assets, Licenses by fewest Free seats", () => {

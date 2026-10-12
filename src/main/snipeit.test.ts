@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { allMatching } from '../renderer/src/ListView'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type CheckoutOptions, type Dashboard } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
+import { reportRunner } from './scheduler'
 import { userNotesLine } from './notes'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -1123,6 +1124,35 @@ describe('dashboard (today is 2026-09-24)', () => {
       expect([...all!.keys()]).toEqual(many.map((a) => a.id))
       // Each page asks Snipe-IT for the whole set again, never for a page of it.
       expect(urls.filter((u) => u.pathname === '/api/v1/hardware/checkins/overdue').every((u) => u.searchParams.get('offset') === '0')).toBe(true)
+    })
+
+    // Export CSV, Email me now and Schedules all run a Saved Report through reportRunner.
+    describe('a Saved Report runs its View', () => {
+      const saved = (id: string, view?: AssetView) => ({ id, name: id, kind: 'assets' as const, search: '', filters: { location_id: '9' }, sort: null, columns: ['assetTag'], ...(view && { view }) })
+      const reports = [saved('Audit late, Library', 'auditLate'), saved('Out on temp, Library', 'outOnTemp'), saved('Library')]
+      const late = [asset(7, { next_audit_date: { date: '2026-09-01' } })]
+
+      it('Audit late exports from the audit route with its filters, with its View column', async () => {
+        const { snipeIt, urls } = fleet({ 'hardware/audit/overdue': late })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Audit late, Library' })
+        expect(run).toMatchObject({ columns: ['Asset Tag', 'Next audit'], rows: [['NOMMA-7', '2026-09-01']] })
+        expect(urls.map((u) => [u.pathname, u.searchParams.get('location_id')])).toEqual([['/api/v1/hardware/audit/overdue', '9']])
+      })
+
+      it('Out on temp runs the Temp checkout lookup', async () => {
+        const { snipeIt, listsAsked } = fleet({ 'hardware?status=Deployed': tempHardware, 'reports/activity': tempLog })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Out on temp, Library' })
+        expect(run.rows.map((r) => r[0])).toEqual(['NOMMA-1', 'NOMMA-4'])
+        expect(run.columns).toEqual(['Asset Tag', 'Expected checkin'])
+        expect(listsAsked()).toEqual(['hardware', 'reports/activity'])
+      })
+
+      it('one without a View runs the All View, as before', async () => {
+        const { snipeIt, urls } = fleet({ hardware: late })
+        const run = await reportRunner(snipeIt, () => reports)({ saved: 'Library' })
+        expect(run).toMatchObject({ columns: ['Asset Tag'], rows: [['NOMMA-7']] })
+        expect(urls.map((u) => u.pathname)).toEqual(['/api/v1/hardware'])
+      })
     })
   })
 

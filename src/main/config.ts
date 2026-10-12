@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
 import { END_OF_DAY, parseCalendar, realTime, type CalendarEntry } from './calendar'
-import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
+import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
@@ -49,8 +49,9 @@ export type SettingsApi = {
   /** null stops the schedule. */
   setSchedule(report: ScheduleKey, schedule: Schedule | null): Promise<Scheduled[]>
 }
-/** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …"). */
-export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[] }
+/** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …").
+ * view: an Assets one's View (All when left out). */
+export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[]; view?: AssetView }
 // Re-saving and renaming leave its schedule be.
 export type SavedReport = SavedReportQuery & { id: string; name: string; schedule?: KeptSchedule }
 /** No id: a new Saved Report. An id: re-saves that one. */
@@ -82,10 +83,12 @@ function reportQuery(r: SavedReportInput): SavedReportQuery & { name: string } {
   if (!name) throw new Error('Name the report.')
   const sorts: Record<string, string> | undefined = Object.hasOwn(LIST_SORTS, r.kind) ? LIST_SORTS[r.kind] : undefined
   if (!sorts || typeof r.search !== 'string' || !isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || (r.label !== undefined && typeof r.label !== 'string')
-    || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order))))
+    || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order)))
+    || (r.view !== undefined && (r.kind !== 'assets' || typeof r.view !== 'string' || !Object.hasOwn(ASSET_VIEWS, r.view))))
     throw new Error('Invalid report')
   const filters = Object.fromEntries(Object.entries(r.filters).filter(([, v]) => v))
-  return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns] }
+  return { name, kind: r.kind, search: r.search, filters, ...(r.label && { label: r.label }), sort: r.sort && { key: r.sort.key, order: r.sort.order }, columns: [...r.columns],
+    ...(r.view && r.view !== 'all' && { view: r.view }) }
 }
 
 function checkMail(m: MailInput): MailServer {
@@ -269,8 +272,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
         return report
       }
       const old = reports.find((r) => r.id === input.id) ?? gone()
-      // The old label goes, so one the List no longer has doesn't linger; anything else beside the query stays.
-      const { label: _, ...kept } = old
+      // The old label and View go, so ones the List no longer has don't linger; anything else beside the query stays.
+      const { label: _, view: __, ...kept } = old
       const report = { ...kept, ...query }
       write({ ...saved, savedReports: reports.map((r) => (r === old ? report : r)) })
       return report
