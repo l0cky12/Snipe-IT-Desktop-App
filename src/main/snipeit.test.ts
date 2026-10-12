@@ -715,7 +715,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     const { snipeIt, offsets } = fleet({ hardware: Array.from({ length: 1234 }, (_, i) => asset(i + 1)), statuslabels: labels })
     const { assets } = await snipeIt.dashboard(['assets'])
     expect(offsets('hardware')).toEqual([0, 500, 1000])
-    expect(assets).toMatchObject([{ status: 'Deployed', count: 1234 }])
+    expect(assets).toMatchObject([{ name: 'Deployed', count: 1234 }])
   })
 
   it('after the first page, asks for the rest four at a time instead of one after another', async () => {
@@ -738,7 +738,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(assets).toMatchObject([{ count: 250 }])
   })
 
-  it("splits Assets by status label, most first, in Snipe-IT's label color or none when it has none", async () => {
+  it("counts Assets by Status Label, most first, with the label's kind and Snipe-IT's color (null when it has none), and no Assets", async () => {
     const { snipeIt } = fleet({
       hardware: [
         asset(1), asset(2, { status_label: ready, assigned_to: null }), asset(3),
@@ -746,24 +746,23 @@ describe('dashboard (today is 2026-09-24)', () => {
       ],
       statuslabels: labels,
     })
-    const { assets } = await snipeIt.dashboard(['assets'])
-    expect(assets).toMatchObject([
-      { status: 'Deployed', statusMeta: 'deployed', color: null, count: 3 },
-      { status: 'Ready to Deploy', statusMeta: 'deployable', color: '#2ea043', count: 2 },
-      { status: 'Out for Repair', statusMeta: 'undeployable', color: '#ff8800', count: 1 },
-    ])
+    expect(await snipeIt.dashboard(['assets'])).toEqual({ assets: [
+      { id: 2, name: 'Deployed', type: 'deployable', color: null, count: 3 },
+      { id: 1, name: 'Ready to Deploy', type: 'deployable', color: '#2ea043', count: 2 },
+      { id: 3, name: 'Out for Repair', type: 'undeployable', color: '#ff8800', count: 1 },
+    ] })
   })
 
   // Snipe-IT's plain Asset list leaves Archived Assets out unless the admin turned on "show archived in list".
   const archived = { id: 4, name: 'Archived', status_meta: 'archived' }
-  it('counts Archived Assets in the Assets bar, once each, whether or not the plain list includes them', async () => {
+  it('counts Archived Assets in the Status Label chart, once each, whether or not the plain list includes them', async () => {
     const shelved = [asset(7, { status_label: archived, assigned_to: null }), asset(8, { status_label: archived, assigned_to: null })]
     const hidden = fleet({ hardware: [asset(1)], 'hardware?status=Archived': shelved, statuslabels: labels })
     const shown = fleet({ hardware: [asset(1), ...shelved], 'hardware?status=Archived': shelved, statuslabels: labels })
     for (const { snipeIt } of [hidden, shown])
       expect(await snipeIt.dashboard(['assets'])).toEqual({ assets: [
-        expect.objectContaining({ status: 'Archived', count: 2 }),
-        expect.objectContaining({ status: 'Deployed', count: 1 }),
+        expect.objectContaining({ name: 'Archived', count: 2 }),
+        expect.objectContaining({ name: 'Deployed', count: 1 }),
       ] })
   })
 
@@ -774,23 +773,25 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect([overdue, expiring].map((rows) => Array.isArray(rows) && rows.map((a) => a.id))).toEqual([[1], [1]])
   })
 
-  it('each Asset segment carries its Assets, so the rail can list them', async () => {
-    const { snipeIt } = fleet({ hardware: [asset(1), asset(2, { status_label: repair, assigned_to: null }), asset(3)], statuslabels: labels })
-    const { assets } = await snipeIt.dashboard(['assets'])
-    if (!Array.isArray(assets)) throw new Error('expected segments')
-    expect(assets[0].assets.map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-3'])
-    expect(assets[1].assets).toEqual([
-      { id: 2, assetTag: 'NOMMA-2', name: 'CB-LIB-012', status: 'Out for Repair', statusMeta: 'undeployable', assignee: null, can: { checkout: true, checkin: true, update: true, delete: true } },
-    ])
-  })
-
-  it("status labels that can't be loaded leave every segment without a color, and the Assets still show", async () => {
-    const { snipeIt } = fleet({ hardware: [asset(1), asset(2, { status_label: repair })], statuslabels: denied })
+  it("Status Labels that can't be loaded leave every label without a color, its kind read from the Asset (deployed is deployable)", async () => {
+    const { snipeIt } = fleet({ hardware: [asset(1), asset(2, { status_label: repair }), asset(3, { status_label: null })], statuslabels: denied })
     expect(await snipeIt.dashboard(['assets'])).toEqual({
       assets: [
-        expect.objectContaining({ status: 'Deployed', color: null, count: 1 }),
-        expect.objectContaining({ status: 'Out for Repair', color: null, count: 1 }),
+        { id: 2, name: 'Deployed', type: 'deployable', color: null, count: 1 },
+        { id: null, name: 'No Status Label', type: '', color: null, count: 1 },
+        { id: 3, name: 'Out for Repair', type: 'undeployable', color: null, count: 1 },
       ],
+    })
+  })
+
+  it('counts Assets by Category and by current Location, most first (ties by name), with No Location for Assets without one', async () => {
+    const tablet = { id: 5, name: 'Tablet' }, gym = { id: 2, name: 'Gym' }
+    const { snipeIt } = fleet({ hardware: [
+      asset(1), asset(2, { category: tablet, location: null }), asset(3, { location: gym }), asset(4, { category: tablet, location: null }), asset(5, { category: null }),
+    ] })
+    expect(await snipeIt.dashboard(['categories', 'locations'])).toEqual({
+      categories: [{ id: 3, name: 'Chromebook', count: 2 }, { id: 5, name: 'Tablet', count: 2 }, { id: null, name: 'No Category', count: 1 }],
+      locations: [{ id: 9, name: 'Library', count: 2 }, { id: null, name: 'No Location', count: 2 }, { id: 2, name: 'Gym', count: 1 }],
     })
   })
 
@@ -903,12 +904,12 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(listsAsked()).toEqual(['consumables', 'licenses'])
   })
 
-  it('the Asset list is fetched once for the Assets bar, Overdue and Warranty expiring together', async () => {
+  it('the Asset list is fetched once for the Status Label, Category and Location charts, Overdue and Warranty expiring together', async () => {
     const { snipeIt, offsets, listsAsked } = fleet({ hardware: [asset(1)], statuslabels: labels })
-    const result = await snipeIt.dashboard(['overdue', 'expiring'])
-    expect(Object.keys(result).sort()).toEqual(['expiring', 'overdue'])
+    const result = await snipeIt.dashboard(['categories', 'locations', 'overdue', 'expiring'])
+    expect(Object.keys(result).sort()).toEqual(['categories', 'expiring', 'locations', 'overdue'])
     expect(listsAsked()).toEqual(['hardware'])
-    await snipeIt.dashboard(['assets', 'overdue', 'expiring'])
+    await snipeIt.dashboard(['assets', 'categories', 'locations', 'overdue', 'expiring'])
     expect(offsets('hardware')).toEqual([0, 0])
   })
 

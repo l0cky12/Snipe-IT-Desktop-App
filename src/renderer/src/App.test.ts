@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
+import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -143,5 +143,31 @@ describe('a Quick Action form opening in the Asset panel', () => {
   it('takes focus otherwise, as it always has', () => {
     for (const html of forms(true)) expect(html).toContain('autofocus')
     for (const html of forms()) expect(html).toContain('autofocus')
+  })
+})
+
+describe('the stored dashboard layout', () => {
+  // As the last version stored it: the Assets bar first among the Inventory Chart's six bars, then the two tables.
+  const before = (show: Record<string, boolean>) => JSON.stringify(['users', 'assets', 'licenses', 'accessories', 'consumables', 'components', 'expiring', 'overdue']
+    .map((piece) => ({ piece, show: show[piece] ?? true })))
+
+  it("an Operator who hid the Assets bar has the Status Label chart hidden; the Category and Location charts are new, so they show", () => {
+    expect(layoutFrom(before({ assets: false, licenses: false }))).toEqual([
+      { piece: 'assets', show: false }, { piece: 'categories', show: true }, { piece: 'locations', show: true },
+      { piece: 'users', show: true }, { piece: 'licenses', show: false }, { piece: 'accessories', show: true }, { piece: 'consumables', show: true }, { piece: 'components', show: true },
+      { piece: 'expiring', show: true }, { piece: 'overdue', show: true },
+    ])
+  })
+
+  it('with nothing stored, every piece shows: Charts, then the Inventory Chart, then Tables', () => {
+    expect(layoutFrom(null).map((p) => [p.piece, p.show])).toEqual([
+      ['assets', true], ['categories', true], ['locations', true], ['licenses', true], ['accessories', true], ['consumables', true], ['components', true], ['users', true],
+      ['overdue', true], ['expiring', true],
+    ])
+  })
+
+  it('unreadable or unknown entries are dropped', () => {
+    expect(layoutFrom('not json')).toEqual(layoutFrom(null))
+    expect(layoutFrom(JSON.stringify([{ piece: 'gone', show: false }, null]))).toEqual(layoutFrom(null))
   })
 })
