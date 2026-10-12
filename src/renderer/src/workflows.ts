@@ -892,10 +892,12 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
     const { statusId, statusType, status, expectedCheckin } = a
     const write = async (current: Asset, text: string): Promise<Done> => {
       if (current.assignee?.type !== held?.type || current.assignee?.id !== held?.id || current.statusId !== statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      // Checked before any write: a note Snipe-IT can't keep (a link) refuses the intake with nothing changed.
+      const note = workflowNote('Repair intake', { text })
       const mine = session
       // No Location is sent, so a checked-in Asset goes back to its Default Location, as any Checkin from the app does.
       // Checkin's own last read checks the Assignee and Status Label again, so a Checkout changed since isn't checked in.
-      if (held) await bridge.checkin(a.id, { statusId: damaged, note: workflowNote('Repair intake', { text }), fromAssignee: { type: held.type, id: held.id }, fromStatusId: a.statusId ?? undefined })
+      if (held) await bridge.checkin(a.id, { statusId: damaged, note, fromAssignee: { type: held.type, id: held.id }, fromStatusId: a.statusId ?? undefined })
       else await bridge.updateStatus(a.id, damaged)
       return rest(text, mine)
     }

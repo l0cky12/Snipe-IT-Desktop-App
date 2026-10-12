@@ -2237,6 +2237,15 @@ describe('Repair intake', () => {
     expect(calls.slice(5)).toEqual([])
   })
 
+  it("refuses a note with a link before any write, checked out or not: nothing is marked Damaged", async () => {
+    const { flow, calls } = await opened([asset('NOMMA-1', { assignee: null, status: 'Ready to Deploy', statusId: 1 }), asset('NOMMA-2')])
+    for (const tag of ['NOMMA-1', 'NOMMA-2']) {
+      const row = await intake(flow, tag, 'see https://example.org')
+      expect(row.result).toEqual({ state: 'failed', reason: 'Notes can’t contain links (http:// or https://).' })
+    }
+    expect(calls.filter((c) => c.startsWith('status ') || c.startsWith('checkin'))).toEqual([])
+  })
+
   it('refuses the write when the Asset changed hands while the confirm was open', async () => {
     const { flow, bridge, checkins } = await opened([asset('NOMMA-1')])
     flow.scan('NOMMA-1')
