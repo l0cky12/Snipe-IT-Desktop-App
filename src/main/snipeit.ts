@@ -94,6 +94,8 @@ export type Lateness = { days: number; minutes: number }
 export const lateness = ({ days, minutes }: Lateness) =>
   days ? `${days}d` : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
 
+/** A Maintenance to open on one Asset. startDate: YYYY-MM-DD. */
+export type MaintenanceInput = { assetId: number; typeId: number; name: string; startDate: string; notes: string }
 /** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
  *  must be deployable). fromStatusId: the Status Label the Asset must still have, checked on Checkout's own last read (an
  *  Undo never overwrites a label set since). fromLocationId: the Location it must still be at then (null: none).
@@ -484,6 +486,8 @@ type RawMaintenance = {
   // v8.6+ sends the type as maintenance_type (and asset_maintenance_type empty); earlier versions only asset_maintenance_type.
   maintenance_type?: string | null
   asset_maintenance_type?: string | null
+  // The type with its id, which Repair intake needs to open one of the same type.
+  maintenance_type_details?: { id: number; name: string } | null
   supplier: Named
   is_warranty: boolean | number | string | null
   cost: string | null
@@ -1708,6 +1712,74 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       return toUserCard(body)
     },
     searchLocations: (text: string) => searchTargets('locations', text),
+
+    // "(by <Operator>)" on Repair intake's User notes line (#59 §5): the display name, else the name, else the username.
+    async operatorName(): Promise<string> {
+      const me = await request<{ display_name?: string | null; name?: string | null; username?: string | null }>('/users/me')
+      if (isError(me)) throw new Error(reason(me.messages))
+      const name = me.display_name?.trim() || me.name?.trim() || me.username?.trim()
+      if (!name) throw new Error("couldn't read your name from Snipe-IT")
+      return name
+    },
+    // The Maintenance type for repairs (#59 §3), tried in order: Snipe-IT's type list (admin keys only), the type of any
+    // existing Repair Maintenance, then the Settings id (fallback). null when none of them works.
+    async repairTypeId(fallback: number | null): Promise<number | null> {
+      const isRepair = (t: Named | undefined) => t?.name.trim().toLowerCase() === 'repair'
+      const types = await request<{ rows: Named[] }>('/maintenance-types?search=Repair').catch(() => null)
+      const listed = types && !isError(types) ? types.rows.find(isRepair)?.id : undefined
+      if (listed) return listed
+      // Search matches the type's name too. ponytail: first 50 hits; any Repair one gives the type away.
+      const found = await request<{ rows: RawMaintenance[] }>('/maintenances?search=Repair&limit=50').catch(() => null)
+      const used = found && !isError(found) ? found.rows.map((m) => m.maintenance_type_details).find(isRepair)?.id : undefined
+      if (used) return used
+      return Number.isSafeInteger(fallback) && fallback! > 0 ? fallback : null
+    },
+    async openMaintenances(assetId: number): Promise<{ id: number; type: StatusLabel | null }[]> {
+      checkId(assetId)
+      const body = await request<{ rows: RawMaintenance[] }>(`/maintenances?asset_id=${assetId}&completed=false&limit=50`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return body.rows.map((m) => ({ id: m.id, type: m.maintenance_type_details ? { id: m.maintenance_type_details.id, name: m.maintenance_type_details.name } : null }))
+    },
+    // Opens a Maintenance on one Asset; resolves to its id. Needs `assets.edit`.
+    async createMaintenance({ assetId, typeId, name, startDate, notes }: MaintenanceInput): Promise<number> {
+      checkId(assetId)
+      checkId(typeId, 'Maintenance type')
+      if (typeof name !== 'string' || !name.trim() || typeof notes !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('Invalid Maintenance')
+      const body = await request<{ payload?: { id?: number } }>('/maintenances', { asset_id: assetId, maintenance_type_id: typeId, name, start_date: startDate, notes })
+      if (isError(body)) throw new Error(reason(body.messages))
+      return Number(body.payload?.id)
+    },
+    // A note in the Asset's History, for a step that can't carry one (a status change). Snipe-IT v8.3+, `assets.edit`.
+    async addAssetNote(assetId: number, note: string): Promise<void> {
+      checkId(assetId)
+      if (typeof note !== 'string' || !note.trim()) throw new Error('Invalid note')
+      const body = await request(`/notes/${assetId}/store`, { note })
+      if (isError(body)) throw new Error(reason(body.messages))
+    },
+    // Adds one line at the end of a User's notes (#59 §5). Snipe-IT replaces the whole field and sends it back rendered,
+    // so: read, stop if it holds markup that can't be rebuilt, write the old text plus the line, then re-read to check
+    // nobody wrote in between. Any refusal throws, never retrying; the caller offers the line to copy instead.
+    async appendUserNotes(userId: number, line: string): Promise<void> {
+      checkId(userId, 'User')
+      if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
+      const notes = async () => {
+        const body = await request<{ notes?: string | null }>(`/users/${userId}`)
+        if (isError(body)) throw new Error(reason(body.messages))
+        return body.notes ?? ''
+      }
+      const old = (await notes()).replace(/\s+$/, '')
+      if (/<\/?[a-z][^>]*>/i.test(old)) throw new Error("the User's notes have formatting the app can't keep")
+      try {
+        const body = await request(`/users/${userId}`, { notes: old ? `${old}\n${line}` : line }, 'PATCH')
+        if (isError(body)) throw new Error(reason(body.messages))
+      } catch (e) {
+        // ponytail: matches request()'s "HTTP 403" wording, like allowed().
+        throw /HTTP 403\b/.test((e as Error).message) ? new Error("your Snipe-IT account can't edit Users") : e
+      }
+      const now = await notes()
+      // The line may or may not be there now, so the Operator checks before adding it by hand.
+      if (!now.startsWith(old) || !now.replace(/\s+$/, '').endsWith(line)) throw new Error("someone else changed the User's notes at the same time; check them for the line")
+    },
 
     // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
     // unless another is given (Snipe-IT accepts only a deployable one).
