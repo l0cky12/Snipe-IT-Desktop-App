@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { allMatching } from '../renderer/src/ListView'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, overdueTemp, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
 import { reportRunner } from './scheduler'
 import { userNotesLine } from './notes'
@@ -1047,6 +1047,11 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
     expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0, deactivated: { assets: 0, users: 0 } }, null, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+    // What the End-of-day reminder lists: the same Temp checkouts, or why it can't tell them apart.
+    expect(overdueTemp(overdue)).toEqual(overdueList(overdue.rows, true))
+    expect(overdueTemp({ rows: overdue.rows, tempError: 'HTTP 403' })).toEqual({ error: 'HTTP 403' })
+    expect(overdueTemp({ error: "Can't reach Snipe-IT" })).toEqual({ error: "Can't reach Snipe-IT" })
+    expect(overdueTemp(undefined)).toBeUndefined()
   })
 
   describe('the Out on temp and Overdue Views, computed in the app', () => {

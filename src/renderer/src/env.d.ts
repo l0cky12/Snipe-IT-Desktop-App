@@ -5,6 +5,7 @@ import type { SettingsApi } from '../../main/config'
 import type { LabelApi, WorkflowsApi } from '../../main/index'
 import type { ReleaseApi } from '../../main/release'
 import type { ReportsApi } from '../../main/scheduler'
+import type { ReminderApi } from '../../main/reminder'
 
 declare global {
   interface Window {
@@ -14,5 +15,6 @@ declare global {
     reports: ReportsApi
     releases: ReleaseApi
     workflows: WorkflowsApi
+    reminder: ReminderApi
   }
 }
