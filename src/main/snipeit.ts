@@ -926,8 +926,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   // Resolves to the JSON body, or { status: 'error', messages } when Snipe-IT reports an error or 404.
   // Pass `post` to send it with `method` (POST unless told otherwise) instead of GETting: as JSON, or a FormData as multipart.
   // Every other failure throws an Error whose message the Operator can act on. All SnipeIt functions go through here.
-  // Each thrown Error carries its FailureKind, and an HTTP error its status.
-  async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT): Promise<T | SnipeItError> {
+  // Each thrown Error carries its FailureKind, and an HTTP error its status. retries: how often a 429 is sent again.
+  async function request<T>(path: string, post?: object, method = 'POST', timeout = TIMEOUT, retries = 3): Promise<T | SnipeItError> {
     const failure = (kind: FailureKind, message: string, extra?: object) => Object.assign(new Error(message), { kind, ...extra })
     const unreachable = (extra?: object) => failure('unreachable', `Can't reach Snipe-IT at ${config.baseUrl}. Check your network connection and server URL in Settings.`, extra)
     // A server that is reachable but slow isn't a network problem; don't send the Operator to check one.
@@ -954,7 +954,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }
     // Snipe-IT throttles its API (120 requests a minute by default) and refuses the rest before doing anything, so a refused
     // request is safe to send again once the wait it names is over. A Report reads one Asset at a time.
-    for (let tries = 0; res.status === 429 && tries < 3; tries++) {
+    for (let tries = 0; res.status === 429 && tries < retries; tries++) {
       await new Promise((done) => setTimeout(done, Math.min(retryAfter(res), 60) * 1000))
       res = await send()
     }
@@ -1878,7 +1878,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     async automaticCheckin(id: number, checkout: string, note: string): Promise<boolean> {
       const a = toAsset(await current(id), today())
       if (!a.assignee || a.lastCheckout !== checkout || !a.overdue) return false
-      const result = await request(`/hardware/${id}/checkin`, { note })
+      // Not sent again on a 429: after the wait the Asset may be on another Checkout, so the job retries the read and check too.
+      const result = await request(`/hardware/${id}/checkin`, { note }, 'POST', TIMEOUT, 0)
       if (isError(result)) throw new Error(reason(result.messages))
       return true
     },
