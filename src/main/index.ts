@@ -6,8 +6,9 @@ import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
+import { createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt, toWire } from './snipeit'
+import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
 
 // The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
@@ -137,8 +138,33 @@ app.whenReady().then(() => {
     },
   })
   handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
-  // At launch, sending what came due while the app was closed, then every minute.
-  const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+  // Kept, so its click still opens the window after the notification would otherwise be garbage collected.
+  let reminderNote: Notification | null = null
+  const reminder = createEndOfDayReminder({
+    now: () => new Date(),
+    settings: store.get,
+    lastShown: store.lastReminder,
+    recordShown: store.recordReminder,
+    // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+    // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
+    outstanding: async () => {
+      const temp = overdueTemp((await client().dashboard(['overdue'])).overdue)
+      if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+      return temp.map((a) => a.assetTag)
+    },
+    // Even with the window open: at the end of the day it may be behind other windows.
+    notify: ({ title, body }) => {
+      if (!Notification.isSupported()) return
+      reminderNote = new Notification({ title, body })
+      reminderNote.on('click', () => { show(); win.webContents.send('reminder:open') })
+      reminderNote.show()
+    },
+  })
+  // At launch, sending what came due while the app was closed (and today's End-of-day reminder if its time has passed), then every minute.
+  const tick = () => {
+    scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+    reminder.tick().catch((e: Error) => console.error('End-of-day reminder:', e.message))
+  }
   tick()
   setInterval(tick, 60_000)
   handle('settings:saveBackground', (_e, input: Background) => {

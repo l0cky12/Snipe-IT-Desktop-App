@@ -3,6 +3,7 @@ import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi } from '../main/index'
 import type { ReleaseApi } from '../main/release'
+import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -79,3 +80,11 @@ contextBridge.exposeInMainWorld('reports', reports)
 
 const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
 contextBridge.exposeInMainWorld('releases', releases)
+const reminder: ReminderApi = {
+  onOpen(listener) {
+    const opened = () => listener()
+    ipcRenderer.on('reminder:open', opened)
+    return () => void ipcRenderer.removeListener('reminder:open', opened)
+  },
+}
+contextBridge.exposeInMainWorld('reminder', reminder)
