@@ -291,8 +291,14 @@ describe('Confirm step', () => {
     runner.scan('NOMMA-1', null)
     await opened(runner)
     bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+    // The field's onChange stores the scan as typed before Enter looks it up.
+    runner.setText('NOMMA-2')
     expect(await runner.submitText('NOMMA-2', null)).toBe("Couldn't check whether NOMMA-2 is an Asset Tag: Can't reach Snipe-IT")
     expect(runner.open).not.toBeNull()
+    expect(runner.open!.text).toBe('')
+    // Neither Enter on the empty scan field nor a rescan of the open Asset can write the unchecked tag.
+    expect(runner.confirmOpen()).toBe('Say what happened')
+    expect(runner.scan('NOMMA-1', null)).toBe('Say what happened')
     await flush()
     expect(written).toEqual([])
   })

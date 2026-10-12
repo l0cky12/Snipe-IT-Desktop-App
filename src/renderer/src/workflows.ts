@@ -200,8 +200,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         const asset = await bridge.assetByTag(word).catch((e: Error) => e)
         // Esc, another scan or leaving while it was looked up: this text no longer belongs to the confirm.
         if (opened?.key !== key) return ''
-        // It may have been a scan, so it never becomes the text unchecked; the confirm stays open.
-        if (asset instanceof Error) return `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
+        // It may have been a scan, so it never becomes the text unchecked (onChange already stored it); the confirm stays open.
+        if (asset instanceof Error) return (opened.text = ''), `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
         // The text was the tag, so nothing has been said yet.
         if (asset) return (opened.text = ''), this.scan(word, ctx)
       }
