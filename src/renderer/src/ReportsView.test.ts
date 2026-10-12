@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { lastSendText, scheduleText } from './ReportsView'
+import { lastSendText, pickerOptions, scheduleText } from './ReportsView'
 
 it("says when a Report emails itself and over which dates", () => {
   expect(scheduleText({ every: 'day', time: '07:00' })).toBe('Daily at 07:00')
@@ -12,4 +12,13 @@ it("says when a Report emails itself and over which dates", () => {
 it('says how the last send went, including why it failed', () => {
   expect(lastSendText({ at: new Date(2026, 9, 5, 7).toISOString(), rows: 1 })).toBe('Last sent Oct 5, 7:00 AM: 1 row')
   expect(lastSendText({ at: new Date(2026, 9, 5, 19, 5).toISOString(), error: 'Wrong password' })).toBe('Last send failed Oct 5, 7:05 PM: Wrong password')
+})
+
+it('tells same-name Locations apart in the picker', () => {
+  expect(pickerOptions('Any Location', [{ id: 3, name: 'Room 101' }, { id: 9, name: 'Room 101' }, { id: 4, name: 'Gym' }])).toEqual([
+    { value: '3', label: 'Room 101 (id 3)' },
+    { value: '9', label: 'Room 101 (id 9)' },
+    { value: '4', label: 'Gym' },
+  ])
+  expect(pickerOptions('Any Category')).toEqual([])
 })

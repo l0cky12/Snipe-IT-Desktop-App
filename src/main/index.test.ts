@@ -4,10 +4,12 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { MailInput, SavedReport } from './config'
 import type { Mail } from './mail'
+import type { SnipeItBridge } from './snipeit'
 
 // Exercise the actual IPC wiring and settings store; only Electron, HTTP and SMTP are fake.
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const call = (name: string, ...args: unknown[]) => handlers.get(name)!({}, ...args)
+const exposed: Record<string, unknown> = {}
 const connection = { baseUrl: 'https://old.example.org', apiKey: 'old-test-token', defaultLocation: null }
 const smtp: MailInput = { host: 'smtp.example.org', port: 465, security: 'ssl', username: 'operator', sender: 'operator@nomma.net', password: 'test-password' }
 const send = vi.fn<(server: MailInput, mail: Mail) => Promise<void>>(async () => {})
@@ -43,6 +45,22 @@ beforeEach(async () => {
     },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
     nativeTheme,
+    // The window's side, for the preload: Electron passes on only a rejection's text, wrapped like this.
+    ipcRenderer: {
+      invoke: async (name: string, ...args: unknown[]) => {
+        try {
+          return await handlers.get(name)!({}, ...args)
+        } catch (e) {
+          throw new Error(`Error invoking remote method '${name}': ${e}`)
+        }
+      },
+    },
+    // The bridge copies what a function throws, an Error's message only; structuredClone drops its other fields alike.
+    contextBridge: {
+      exposeInMainWorld: (key: string, api: Record<string, (...args: unknown[]) => Promise<unknown>>) =>
+        (exposed[key] = Object.fromEntries(Object.entries(api).map(([name, fn]) =>
+          [name, (...args: unknown[]) => fn(...args).catch((e) => { throw structuredClone(e) })]))),
+    },
     safeStorage: { isEncryptionAvailable: () => false },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))
@@ -113,7 +131,7 @@ it('does not cancel for a rejected connection save or unrelated background setti
   const response = deferred<Response>()
   request.mockImplementationOnce(() => response.promise)
   const pending = call('reports:emailNow', { builtIn: 'overdue', query: {} })
-  expect(() => call('settings:save', { ...connection, baseUrl: 'invalid' })).toThrow()
+  await expect(call('settings:save', { ...connection, baseUrl: 'invalid' })).rejects.toThrow()
   call('settings:saveBackground', { tray: false, startAtLogin: false })
   response.resolve(new Response(JSON.stringify({ email: 'operator@nomma.net' })))
   await pending
@@ -121,7 +139,7 @@ it('does not cancel for a rejected connection save or unrelated background setti
 })
 
 it('keeps a Saved Report definition captured before looking up the recipient', async () => {
-  const saved = call('settings:saveReport', { name: 'Original', kind: 'assets', search: 'original', filters: {}, sort: null, columns: ['assetTag'] }) as SavedReport
+  const saved = await call('settings:saveReport', { name: 'Original', kind: 'assets', search: 'original', filters: {}, sort: null, columns: ['assetTag'] }) as SavedReport
   const response = deferred<Response>()
   request.mockImplementationOnce(() => response.promise)
   const pending = call('reports:emailNow', { saved: saved.id })
@@ -136,4 +154,20 @@ it('switches the theme when the Appearance setting is saved', () => {
   expect(nativeTheme.themeSource).toBe('system')
   call('settings:saveAppearance', 'dark')
   expect(nativeTheme.themeSource).toBe('dark')
+})
+
+it("gives the window a Snipe-IT failure's kind as well as its message", async () => {
+  await import('../preload/index')
+  const snipeIt = exposed.snipeIt as SnipeItBridge
+  request.mockImplementation(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '23' } }))
+  // A 429 is sent again up to three times, after each wait, before it fails; fake timers skip the waits.
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  const throttled = expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 })
+  await vi.runAllTimersAsync()
+  await throttled
+  vi.useRealTimers()
+  request.mockImplementation(async () => new Response('{}', { status: 401 }))
+  await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: expect.stringMatching(/^Snipe-IT rejected your API key\./), kind: 'key' })
+  request.mockImplementation(async () => new Response(JSON.stringify({ status: 'error', messages: 'No Status Labels for you.' })))
+  await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'No Status Labels for you.', kind: 'refused' })
 })

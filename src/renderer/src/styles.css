@@ -20,7 +20,7 @@
   --sans: Figtree, system-ui, "Segoe UI", sans-serif;
   --mono: "Space Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --bar-h: 14px; --bar-name-w: 120px;
-  --r-card: 16px; --r-ctl: 10px; --r-pill: 999px;
+  --r-card: 8px; --r-ctl: 6px; --r-pill: 999px;
   --fast: 120ms ease-out;
 }
 @media (prefers-color-scheme: dark) {
@@ -92,9 +92,20 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .row .n span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .n span:last-child { flex: none; max-width: 55%; }
 
-/* Messages: an info line, or an error with a red edge. */
+/* Messages: an info line, or an error, success or notice: the text on --bg with a colored left edge and icon (red, green, amber). */
 .message { color: var(--dim); font-size: 13px; margin: 10px 0 0; }
-.message.error { color: var(--text); background: var(--bg); border-left: 3px solid var(--red); margin: 10px 14px 0; padding: 10px 14px; border-radius: var(--r-ctl); font-weight: 500; }
+.message.error, .list-message, .settings-page .settings-success, .notice, .ferpa {
+  --edge: var(--red); position: relative; color: var(--text); background: var(--bg); font-weight: 500;
+  border: 1px solid var(--line); border-left: 3px solid var(--edge); border-radius: var(--r-ctl); padding: 10px 14px 10px 38px; }
+.message.error { margin: 10px 14px 0; }
+.list-message, .settings-page .settings-success { --edge: var(--green); }
+.notice, .ferpa { --edge: var(--amber); }
+.message.error::before, .list-message::before, .settings-success::before, .notice::before, .ferpa::before, .field-error::before {
+  content: ''; position: absolute; left: 13px; top: 11px; width: 16px; height: 16px; background: var(--edge);
+  -webkit-mask: url(./icons/circle-alert.svg) center / contain no-repeat; }
+/* Lucide's icons as masks, so the edge color fills them. */
+.list-message::before, .settings-success::before { -webkit-mask-image: url(./icons/circle-check.svg); }
+.notice::before, .ferpa::before { -webkit-mask-image: url(./icons/info.svg); }
 
 /* Sheet: page header, then content. */
 .sheet { overflow: auto; }
@@ -104,22 +115,22 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .head h1 .sub { display: block; font: 400 14px/1.4 var(--sans); color: var(--dim); margin-top: 2px; }
 .tag { display: inline-block; font: 700 13px/1 var(--mono); background: var(--navy); color: var(--gold); padding: 8px 12px; border-radius: 8px; letter-spacing: .02em; }
 
-/* Controls: 40px tall, rounded, one primary per row. */
+/* Controls: 28px tall, 1px border, 6px corners, one primary per group. */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.actions select, .actions input, .actions button { min-height: 40px; background: var(--bg); border: 1.5px solid var(--line); color: var(--text);
-                                                   font: 500 14px var(--sans); padding: 6px 14px; border-radius: var(--r-ctl); transition: border-color var(--fast), background var(--fast); }
+.actions select, .actions input, .actions button { min-height: 28px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+                                                   font: 13px var(--sans); padding: 0 10px; border-radius: var(--r-ctl); transition: border-color var(--fast), background var(--fast); }
 .actions input:focus, .actions select:focus { border-color: var(--mark); }
-.actions button { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 700; cursor: pointer; }
+.actions button { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font: 600 12.5px var(--sans); cursor: pointer; }
 .actions button:hover:not(:disabled) { filter: brightness(1.08); }
 .actions :disabled { opacity: .45; cursor: default; }
-.actions button.quiet, .quick button { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 600; }
+.actions button.quiet, .quick button { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 500; }
 .actions button.quiet.on, .quick button.on { border-color: var(--primary); color: var(--primary); }
 .checkout { padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); }
 .checkout .actions input:not([type]) { flex: 1; min-width: 160px; }
 .checkout .message.error { margin: 10px 0 0; }
 .targets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.targets button { min-height: 36px; background: var(--bg); border: 1.5px solid var(--line); color: var(--text); font: 500 13.5px var(--sans);
-                  padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; transition: border-color var(--fast); }
+.targets button { min-height: 28px; background: var(--bg); border: 1px solid var(--line); color: var(--text); font: 500 12.5px var(--sans);
+                  padding: 0 10px; border-radius: var(--r-ctl); cursor: pointer; transition: border-color var(--fast); }
 .targets button:hover, .targets button:focus-visible { border-color: var(--primary); }
 .targets .dim { align-self: center; }
 
@@ -138,15 +149,21 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .section { padding: 18px 28px 6px; font: 600 16px var(--sans); color: var(--text); }
 .rail .section { font-size: 15px; }
 
-/* Tables: no vertical rules, faint row lines, room to breathe. */
-.history { border-collapse: collapse; width: 100%; font-size: 13.5px; }
-.history td, .history th { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.history td:first-child, .history th:first-child { padding-left: 28px; }
-.history td:last-child, .history th:last-child { padding-right: 28px; }
-.history th { color: var(--dim); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+/* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
+.history { border-collapse: collapse; width: 100%; }
+.history td, .history th { text-align: left; height: 28px; padding: 5px 10px; line-height: 18px; border-bottom: 1px solid var(--line2); vertical-align: middle; }
+/* A cell holding a 24px control (a link, a Quick Action) keeps the row at 28px. */
+.history td:has(button, select, input) { padding-block: 2px; }
+.history td:first-child, .history th:first-child { padding-left: 16px; }
+.history td:last-child, .history th:last-child { padding-right: 16px; }
+.history th { height: 30px; padding-block: 0; border-bottom-color: var(--line); color: var(--dim); font-weight: 500; font-size: 12px; white-space: nowrap; }
+.history .num { text-align: right; }
+.history td .actions { flex-wrap: nowrap; gap: 4px; }
+/* A form in a cell (a Quick Action's, a Report's schedule) still wraps, so a narrow window keeps it usable. */
+.history td :is(form.actions, form .actions) { flex-wrap: wrap; }
+.history td .actions :is(button, select, input) { min-height: 24px; height: 24px; padding: 0 8px; }
 .history .note { display: inline-block; color: var(--text); border: 1.5px solid var(--amber); border-radius: var(--r-pill); padding: 0 9px; font-size: 12.5px; font-weight: 600; line-height: 1.6; }
 .history .late { font-weight: 700; }
-.history td .mono { font-weight: 700; }
 .sheet .message.error { margin: 14px 28px; }
 .sheet-status .message { margin: 10px 28px; }
 
@@ -170,6 +187,18 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* Same height as a bar plus its key, so the ledger keeps its rhythm. */
 .bar-error { border-left: 3px solid var(--red); padding-left: 8px; line-height: 20px; margin-bottom: 22px; font-weight: 500; }
 
+/* Health warnings: one line each with the tone as its edge and dot (red: fix now, amber: keep an eye on it), words in text colours. */
+.health { display: grid; gap: 6px; padding: 14px 28px 0; }
+.health-line { --dot: var(--grey); display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0; min-height: 28px; padding: 4px 10px 4px 12px;
+               border: 1px solid var(--line); border-left: 3px solid var(--dot); border-radius: var(--r-ctl); color: var(--text); font-size: 13.5px; }
+.health-line::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
+.health-line.checking { color: var(--dim); }
+.health-line .link { font-weight: 400; }
+.health-line b { font-weight: 600; }
+.health-actions { margin-left: auto; display: flex; gap: 6px; }
+.health-actions button { min-height: 24px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--text); font: 500 12.5px var(--sans); padding: 0 10px; cursor: pointer; }
+.health-actions button:hover { background: var(--hover); }
+
 /* Customize (dashboard pieces, List columns): a soft tray under the header. */
 .customize { display: flex; gap: 40px; padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); font-size: 13.5px; }
 .customize ol { list-style: none; margin: 0; padding: 0; min-width: 220px; }
@@ -177,16 +206,18 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .customize li.k { font: 600 14px var(--sans); color: var(--text); padding-bottom: 4px; }
 .customize label { flex: 1; display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .customize input { accent-color: var(--primary); margin: 0; width: 18px; height: 18px; }
-.customize button { background: var(--bg); border: 1.5px solid var(--line); color: var(--text); font: 13px var(--sans);
-                    width: 30px; height: 28px; padding: 0; border-radius: 8px; cursor: pointer; }
+.customize button { background: var(--bg); border: 1px solid var(--line); color: var(--text); font: 13px var(--sans);
+                    width: 28px; height: 28px; padding: 0; border-radius: var(--r-ctl); cursor: pointer; }
 .customize button:disabled { opacity: .35; cursor: default; }
 .link { all: unset; color: var(--text); cursor: pointer; font-weight: 600; }
 /* all: unset on .link wipes .mono's font, so it's set again. */
 .link.mono { font-family: var(--mono); font-size: .93em; color: var(--primary); }
 .link:hover, .link:focus-visible { text-decoration: underline; }
+/* 24px tall to click where it stands alone (a table cell, a field's value), not inside a sentence. */
+:is(td, .cell) > .link { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; }
 
 /* Status: a colored dot and the name in the text color, so the words carry the meaning. Late: a red dot. */
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; font: 600 12px/1.6 var(--sans); white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; }
 .chip::before, .late::before { content: ''; flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--dot, var(--red)); }
 .late::before { margin-right: 6px; vertical-align: 1px; }
 .c-green { --dot: var(--green); }
@@ -194,6 +225,9 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .c-blue  { --dot: var(--blue); }
 .c-red   { --dot: var(--red); }
 .c-grey  { --dot: var(--grey); }
+/* Flags (Overdue, Warranty) and Permission Groups: the word in the text color inside an outline in the status color. */
+.flag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--dot, var(--grey)); border-radius: 4px;
+        color: var(--text); font: 600 11.5px/1 var(--sans); white-space: nowrap; }
 
 /* Settings: one card for the connection, one for About, on the paper background. */
 .settings-page { max-width: 760px; margin: 0 auto; padding: 36px 44px 48px; }
@@ -202,23 +236,24 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page h2 { font: 600 20px var(--sans); color: var(--text); margin: 0 0 4px; }
 .settings-page p { margin: 4px 0 12px; }
 .settings-page fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-.settings-section, .settings-about { padding: 24px 28px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
-.settings-page label { display: block; font-weight: 600; margin: 18px 0 8px; }
-.settings-page input, .settings-page select, .settings-page button { min-height: 44px; font: 500 14px var(--sans); color: var(--text); background: var(--bg); border: 1.5px solid var(--line); border-radius: var(--r-ctl); padding: 10px 14px; transition: border-color var(--fast); }
+/* Cards: --bg, a 1px --line border, 8px corners, no shadow. */
+.settings-section, .settings-about { padding: 12px 16px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
+.settings-page label { display: block; font: 600 12px var(--sans); color: var(--dim); margin: 12px 0 6px; }
+.settings-page input, .settings-page select, .settings-page button { min-height: 28px; font: 13px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 0 10px; transition: border-color var(--fast); }
 .settings-page input, .settings-page select { width: 100%; min-width: 0; }
 .settings-page input:focus, .settings-page select:focus { border-color: var(--mark); }
-.settings-page button { cursor: pointer; white-space: nowrap; font-weight: 700; background: var(--bg); }
+.settings-page button { cursor: pointer; white-space: nowrap; font: 500 12.5px var(--sans); background: var(--bg); }
 .settings-page button:hover:not(:disabled) { border-color: var(--primary); }
 .settings-page :disabled { opacity: .5; cursor: default; }
 .connection-row { display: flex; gap: 10px; }
 .connection-row > div { flex: 1; }
 .settings-page input[readonly] { background: transparent; border-style: dashed; color: var(--dim); }
 .settings-page .hint { font-size: 13px; color: var(--dim); margin: 10px 0 0; }
-.settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
-.settings-page .check input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
+.settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font: 500 13px var(--sans); color: var(--text); }
+.settings-page .check input { flex: none; width: 14px; height: 14px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
 .settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .settings-footer { display: flex; align-items: center; gap: 16px; padding: 20px 4px; font-size: 13px; }
-.settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); padding: 10px 22px; }
+.settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
 .settings-appearance, .settings-about { margin-top: 20px; }
 .settings-about dl { margin: 12px 0 16px; }
@@ -226,71 +261,102 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-about dt { color: var(--dim); }
 .settings-about dd { margin: 0; }
 .settings-page .clear-token { border-color: var(--red); background: transparent; }
-.settings-page .settings-success { border-left: 3px solid var(--green); padding-left: 10px; font-weight: 600; margin: 4px 4px 12px; }
+.settings-page .settings-success { margin: 4px 0 12px; }
 .settings-page .message.error { margin: 4px 0 12px; }
 
-/* Lists: a filter bar, a sortable table, Quick Actions per Asset row, a pager. */
-.filters { padding: 14px 28px; border-bottom: 1px solid var(--line); }
-.filters input { flex: 1; min-width: 200px; }
-.filters .filter { flex: 0 1 220px; min-width: 150px; }
-.list-table td, .list-table th { vertical-align: middle; white-space: nowrap; padding: 8px 12px; }
-.list-table tr.sel td { background: var(--hover); }
+/* Lists: a 44px top bar, the toolbar (search, filters, the Selection bar), a sortable table, Quick Actions per Asset row, a pager.
+   All but the table stay put when a wide List scrolls sideways. */
+.topbar, .list-top, .pager { position: sticky; left: 0; }
+.topbar { min-height: 44px; padding: 3px 16px; gap: 8px; }
+.topbar h1 { flex: none; font: 600 13px/28px var(--sans); letter-spacing: 0; }
+.topbar .actions { margin-left: auto; gap: 6px; }
+.toolbar { gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+/* The Assets Views: a 38px tab bar, the open View underlined with --mark and showing its count. */
+.view-tabs { display: flex; gap: 2px; height: 38px; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.view-tabs button { display: flex; align-items: center; gap: 6px; padding: 0 10px; background: none; border: 0; box-shadow: inset 0 -2px 0 transparent;
+  color: var(--dim); font: 500 13px var(--sans); white-space: nowrap; cursor: pointer; transition: color var(--fast); }
+.view-tabs button:hover { color: var(--text); }
+.view-tabs button.on { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--mark); }
+.view-tabs .count { color: var(--dim); font-weight: 500; font-size: 12px; }
+.toolbar > input:not(.filter) { flex: 1 1 160px; min-width: 160px; max-width: 360px; }
+.toolbar .filter { flex: 0 1 150px; min-width: 120px; }
+/* The Selection bar: the count, select-all, its Bulk Actions and Clear, at the toolbar's right end; it takes its own row
+   (and wraps inside it) when the filters leave too little room. */
+.selection-bar { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.selection-bar > b { font-weight: 600; }
+.list-table td, .list-table th { white-space: nowrap; }
+/* Row states: hover, ticked, and selected (its Quick Action open) with the --mark bar. */
+.list-table tbody tr:not(.quick-form):hover td { background: var(--hover); }
 .list-table tr.ticked td { background: var(--selrow); }
-.list-table .tick { width: 1%; padding-right: 0; }
-.list-table .tick input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
-/* The Selection bar: the count, select-all, its Bulk Actions and Clear, above the List. */
-.selection { margin: 12px 28px 0; padding: 8px 14px; border-radius: var(--r-ctl); background: var(--side); }
-.list-table .sort { all: unset; cursor: pointer; }
+.list-table tr.sel td { background: var(--hover); }
+.list-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
+.list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }
+.list-table .tick label { display: flex; align-items: center; height: 28px; padding: 0 6px 0 16px; cursor: pointer; }
+.list-table .tick input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+/* A panel under the toolbar (Edit shared fields, Bulk results): a card whose 44px header row lines up with the toolbar. */
+.list-panel { margin: 10px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+.list-panel > .actions { padding: 8px 16px; gap: 6px; }
+/* Messages and the FERPA confirmation under a List's toolbar line up with it too. */
+.toolbar ~ :is(.message.error, .list-message, .ferpa) { margin: 10px 16px; }
+.toolbar ~ .list-message { display: block; width: fit-content; }
+.list-table .sort { all: unset; display: inline-flex; align-items: center; min-height: 24px; cursor: pointer; }
 .list-table .sort:hover, .list-table .sort:focus-visible { color: var(--text); }
 /* Pinned to the right so the Quick Actions stay in reach when a wide List scrolls sideways. */
 .list-table .quick { position: sticky; right: 0; background: var(--bg); box-shadow: -1px 0 0 var(--line); }
-.list-table tr.sel .quick { background: var(--hover); }
-.quick button { min-height: 32px; font: 600 13px var(--sans); padding: 4px 10px; border: 1.5px solid var(--line); border-radius: 8px; cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
+/* Quick Actions: a compact 24px size, so the row stays 28px. */
+.quick button { height: 24px; font: 500 12.5px var(--sans); padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
-.quick-form td { background: var(--side); padding: 14px 28px; white-space: normal; }
+.list-table .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
-.list-message { margin: 12px 28px 0; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--bg); border-left: 3px solid var(--green); font-weight: 600; display: inline-block; }
-.pager { justify-content: flex-end; padding: 14px 28px; }
+.list-message { margin: 12px 28px 0; display: inline-block; }
+.pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
 .batch td { white-space: nowrap; }
 .batch td[role=status] { white-space: normal; width: 100%; }
-.form-grid.bulk-form { padding: 12px 0 4px; }
-.bulk-rows { max-height: 40vh; overflow: auto; margin-top: 8px; }
+.form-grid.bulk-form { padding: 4px 16px 16px; }
+.bulk-rows { max-height: 40vh; overflow: auto; border-top: 1px solid var(--line); }
+.bulk-rows tr:last-child td { border-bottom: 0; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
-.ferpa { margin: 14px 28px 0; padding: 14px 18px; border: 1.5px solid var(--amber); border-radius: var(--r-ctl); background: var(--bg); }
+.ferpa { margin: 14px 28px 0; font-weight: 400; }
 .ferpa p { margin: 0 0 10px; line-height: 1.5; }
 .records { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 20px 28px; }
 .record-kind { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 16px; background: var(--bg); border: 1.5px solid var(--line); border-radius: 14px;
                color: var(--text); font: 600 15px var(--sans); cursor: pointer; transition: border-color var(--fast); }
 .record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
 .all-fields summary { cursor: pointer; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px 20px; padding: 20px 28px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px 16px; padding: 20px 28px; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
 .form-field.wide { grid-column: 1 / -1; }
-.form-field label { font: 600 13px var(--sans); color: var(--dim); }
-.form-field input:not([type=checkbox]), .form-field select, .form-field textarea { min-height: 40px; background: var(--bg); border: 1.5px solid var(--line); color: var(--text);
-  border-radius: var(--r-ctl); padding: 8px 12px; font: 500 14px var(--sans); }
+.form-field label { font: 600 12px var(--sans); color: var(--dim); }
+.form-field input:not([type=checkbox]), .form-field select, .form-field textarea { min-height: 28px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: var(--r-ctl); padding: 0 10px; font: 13px var(--sans); }
+.form-field textarea { padding: 5px 10px; }
 .form-field input[aria-invalid], .form-field select[aria-invalid], .form-field textarea[aria-invalid] { border-color: var(--red); }
-.field-error { margin: 0; font-size: 13px; font-weight: 600; }
+/* A field's error: the text color, after a red icon. */
+.field-error { --edge: var(--red); margin: 0; color: var(--text); font-size: 12px; font-weight: 500; }
+.field-error::before { position: static; display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -3px; }
 .record-form .message.error { margin: 14px 28px 0; }
 .confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Red as an outline, not text: no red passes 4.5:1 for text in both themes. The confirm's is heavier. */
 .actions button.danger { background: var(--bg); border-color: var(--red); color: var(--text); }
 .actions button.danger:not(.quiet) { box-shadow: inset 0 0 0 1px var(--red); }
-.choices { display: flex; flex-wrap: wrap; gap: 6px 16px; min-height: 40px; align-items: center; }
-.choices label { display: flex; align-items: center; gap: 6px; font: 500 14px var(--sans); color: var(--text); }
+.choices { display: flex; flex-wrap: wrap; gap: 6px 16px; min-height: 28px; align-items: center; }
+.choices label { display: flex; align-items: center; gap: 6px; min-height: 24px; font: 13px var(--sans); color: var(--text); }
 .access-body { padding: 4px 28px 20px; display: grid; gap: 10px; }
 .access .message { margin: 6px 28px; }
-.chip-x { all: unset; cursor: pointer; margin-left: 6px; font-weight: 700; }
+/* 24×24 to click, without making the outline taller. */
+.flag .chip-x { all: unset; display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -2px -6px -2px 0; border-radius: 4px; cursor: pointer; font-weight: 700; }
+.flag .chip-x:hover:not(:disabled) { background: var(--hover); }
+.flag .chip-x:disabled { opacity: .45; cursor: default; }
 .permissions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .permission-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 0 28px 28px; }
-.permission-areas fieldset { border: 1.5px solid var(--line); border-radius: var(--r-ctl); padding: 10px 14px; display: grid; gap: 6px; }
+.permission-areas fieldset { border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 16px; display: grid; gap: 6px; }
 .permission-areas legend { font: 600 14px var(--sans); color: var(--text); padding: 0 6px; }
 .permission-areas label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 /* Something the Operator can't do here and why: not an error, not a success. */
-.notice { margin: 14px 28px 0; padding: 12px 16px; border: 1.5px solid var(--amber); border-radius: var(--r-ctl); background: var(--bg); line-height: 1.5; }
+.notice { margin: 14px 28px 0; font-weight: 400; line-height: 1.5; }
 /* The CSV being imported: its columns' fields, and what Snipe-IT said about the rows. */
 .import-form { display: grid; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); background: var(--side); }
 .sheet .import-form > .actions, .sheet .import-form > .message { margin: 0 28px; }
