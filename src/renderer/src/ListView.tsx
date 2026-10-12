@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
-import { AssetSheet, NOT_ALLOWED, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
+import { AssetSheet, AuditForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
@@ -200,6 +200,12 @@ export const mayDelete = (kind: ListKind, rows: { can: Can }[]) => deletable(kin
 const bulkEditable = (kind: ListKind): kind is BulkKind => Object.hasOwn(BULK_FORMS, kind)
 // "Edit shared fields" is offered on Assets and Users when Snipe-IT lets the Operator edit them.
 export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(kind) && rows.some((r) => r.can.update)
+// Audit… is offered on Assets when Snipe-IT lets the Operator audit any of them; the rest are still tried, so Snipe-IT's reason shows.
+export const mayAudit = (kind: ListKind, rows: { can: Can }[]) => kind === 'assets' && rows.some((r) => r.can.audit)
+/** The Audit Bulk Action: the same Next audit and note for each Asset, one Audit at a time (not Snipe-IT's bulk audit, which
+ * would lose Stop, progress and Retry failed), each result with its next audit date and the one it was. */
+export const auditAction = (o: AuditOptions): BulkAction =>
+  ({ kind: 'assets', title: 'Audit Assets', done: 'Audited', work: async (id) => auditedResult(await window.snipeIt.audit(id, o)) })
 
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
@@ -264,6 +270,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // Export CSV: asking for the FERPA confirmation, or fetching every matching row.
   const [exporting, setExporting] = useState<'asking' | 'fetching' | null>(null)
   const [editing, setEditing] = useState(false)
+  const [auditing, setAuditing] = useState(false)
   const mine = bulk?.kind === kind ? bulk : null
   // A deleted Record leaves the Selection; one that failed stays ticked.
   useEffect(() => {
@@ -362,6 +369,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
     }
     onBulk({ kind, title: `Edit ${listName[kind]}`, done: 'Saved', work }, selectionRun())
   }
+  const auditSelection = (o: AuditOptions) => (setAuditing(false), onBulk(auditAction(o), selectionRun()))
   // The List as shown, every matching row up to the Report row cap; saved where the Operator chooses.
   async function exportCsv() {
     setExporting('fetching')
@@ -572,6 +580,9 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
                 {mayEdit(kind, [...selection.values()]) && (
                   <button className="quiet" disabled={bulk?.busy || !!selectingAll || editing} onClick={() => setEditing(true)}>Edit shared fields…</button>
                 )}
+                {mayAudit(kind, [...selection.values()]) && (
+                  <button className="quiet" disabled={bulk?.busy || !!selectingAll || auditing} onClick={() => setAuditing(true)}>Audit…</button>
+                )}
                 {mayDelete(kind, [...selection.values()]) && (confirmingDelete ? (
                   <span className="confirm" role="alertdialog" aria-label={deleteQuestion(kind, selection.size)}>
                     <span>{deleteQuestion(kind, selection.size)} They go to Snipe-IT's deleted items, one at a time.</span>
@@ -587,6 +598,11 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
           {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
           {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
+          {auditing && selection.size > 0 && (
+            <section className="list-panel" aria-label="Audit Assets">
+              <AuditForm count={selection.size} busy={!!bulk?.busy} onAudit={auditSelection} onCancel={() => setAuditing(false)} />
+            </section>
+          )}
           {mine && <BulkResults title={mine.title} run={mine} onStop={onStopBulk} onRetry={() => onBulk(mine, retrying(mine))} onClose={onCloseBulk} />}
         </div>
         <table ref={table} className="history list-table">
@@ -650,7 +666,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       </div>
       {kind === 'assets' && panel && panelAsset && (
         <AssetSheet key={panel.n} {...panel.sheet} form={panel.form} onCheckin={reloading(panel.sheet.onCheckin)} onCheckout={reloading(panel.sheet.onCheckout)}
-          onStatus={reloading(panel.sheet.onStatus)}
+          onStatus={reloading(panel.sheet.onStatus)} onAudit={reloading(panel.sheet.onAudit)}
           onDeleted={() => (setSelection((s) => (s.has(panelAsset.id) ? new Map([...s].filter(([id]) => id !== panelAsset.id)) : s)), reload(), panel.sheet.onDeleted())}
           docked={{ ticked: selection.has(panelAsset.id), notInView: outside === panelAsset.id, onClose: onClosePanel, onTick: () => tickRow(panelRow()) }} />
       )}

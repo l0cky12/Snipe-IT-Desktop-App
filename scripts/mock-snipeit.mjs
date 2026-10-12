@@ -300,7 +300,7 @@ const groups = [
 ]
 const groupsOf = (ids) => ({ total: ids.length, rows: ids.map((id) => ({ id, name: groups.find((g) => g.id === id)?.name ?? '' })) })
 for (const u of users) Object.assign(u, { groups: groupsOf(u.id % 3 ? [2] : [1]), permissions: u.id === 1 ? { 'reports.view': '1', 'assets.delete': '-1' } : {} })
-const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true }
+const actions = limited ? { checkout: true, checkin: true, update: false, delete: false, clone: false, audit: false } : { checkout: true, checkin: true, update: true, delete: true, clone: true, audit: true }
 for (const r of [...assets, ...users, ...locations, ...models, ...categories, ...manufacturers, ...suppliers, ...departments, ...companies, ...statuses]) r.available_actions = actions
 // Labels. The label endpoint answers with a one-page PDF naming the Asset Tags, standing in for Snipe-IT's label engine.
 // MOCK_LABELS=legacy answers as a Snipe-IT on the legacy label engine does; MOCK_LABELS=none as one without the endpoint.
@@ -332,7 +332,7 @@ const routes = [
   [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -452,7 +452,7 @@ createServer(async (req, res) => {
     store[m[1]].splice(store[m[1]].indexOf(row), 1)
     return send({ status: 'success', messages: 'Deleted.', payload: null })
   }
-  if ((m = path.match(/^hardware\/(\d+)(?:\/(checkin|checkout))?$/))) {
+  if ((m = path.match(/^hardware\/(\d+)(?:\/(checkin|checkout|audit))?$/))) {
     const a = assets.find((x) => x.id === +m[1])
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
@@ -472,6 +472,13 @@ createServer(async (req, res) => {
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
       act('checkout', a, a.assigned_to, body.note)
+    } else if (m[2] === 'audit') {
+      // Like Snipe-IT with a 12-month audit interval: the next audit date given, or a year from today.
+      if (limited) return fail('You do not have permission to audit this asset.')
+      const next = body.next_audit_date || day(365)
+      Object.assign(a, { last_audit_date: { datetime: `${day(0)} ${new Date().toTimeString().slice(0, 8)}`, formatted: day(0) }, next_audit_date: { date: next, formatted: next } })
+      act('audit', a, null, body.note)
+      return send({ status: 'success', messages: 'Asset audited successfully.', payload: { asset_tag: a.asset_tag, note: body.note, next_audit_date: a.next_audit_date } })
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)
       if (!status) return fail({ status_id: ['Choose a valid status.'] })
