@@ -5,8 +5,8 @@ import { cleanTag, createBulkReturn, createRunner, NOT_ALLOWED } from './workflo
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
   id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed', statusType: 'deployable',
-  assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', category: 'Chromebook', serial: '', purchaseDate: null,
-  warrantyEnd: null, expectedCheckin: null, overdueDays: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
+  assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', defaultLocation: '', category: 'Chromebook', serial: '', purchaseDate: null,
+  warrantyEnd: null, expectedCheckin: null, lastAudited: null, nextAudit: null, endOfLife: null, purchaseCost: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
 })
 const flush = () => new Promise((r) => setTimeout(r, 0))
 const ITOFFICE: StatusLabel = { id: 8, name: 'IT Office' }
@@ -148,7 +148,7 @@ describe('Undo last', () => {
   const settled = async (runner: { pending: number }) => vi.waitFor(() => expect(runner.pending).toBe(0))
 
   it('each row records the Asset as the lookup found it', async () => {
-    const one = asset('NOMMA-1', { expectedCheckin: '2026-10-09 14:50', overdueDays: 1 })
+    const one = asset('NOMMA-1', { expectedCheckin: '2026-10-09 14:50', overdue: { days: 1, minutes: 1440 } })
     const { runner } = undoable([one])
     runner.scan('NOMMA-1', null)
     await settled(runner)
