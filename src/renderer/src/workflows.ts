@@ -577,7 +577,8 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       const mine = session
       const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
       // No Location is sent, so a checked-in Asset goes back to its Default Location, as any Checkin from the app does.
-      if (held) await bridge.checkin(a.id, { statusId: damaged, note })
+      // Checkin's own last read checks the Assignee and Status Label again, so a Checkout changed since isn't checked in.
+      if (held) await bridge.checkin(a.id, { statusId: damaged, note, fromAssignee: { type: held.type, id: held.id }, fromStatusId: a.statusId ?? undefined })
       else await bridge.updateStatus(a.id, damaged)
       const sub: string[] = []
       still()

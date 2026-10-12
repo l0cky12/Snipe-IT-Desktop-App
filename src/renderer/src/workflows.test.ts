@@ -1189,10 +1189,25 @@ describe('Repair intake', () => {
     expect(calls.filter((c) => !c.startsWith('bytag')).slice(3)).toEqual([])
   })
 
+  it("Checkin's own last read refuses a Checkout changed since the scan's re-read; no Maintenance or User note", async () => {
+    const one = asset('NOMMA-1')
+    const { flow, bridge, calls, checkins } = await opened([one])
+    flow.scan('NOMMA-1')
+    await vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+    flow.runner.setText('cracked screen')
+    bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1'))
+    one.assignee = { type: 'user', id: 8, name: 'Blake Sampleton' }
+    flow.runner.confirmOpen()
+    await vi.waitFor(() => expect(flow.runner.rows[0].result.state).toBe('failed'))
+    expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 is checked out to Blake Sampleton now' })
+    expect(checkins).toEqual([])
+    expect(calls.filter((c) => c.startsWith('maintenance') || c.startsWith('user notes'))).toEqual([])
+  })
+
   it('a User held it: Checkin as Damaged with the note, a repair Maintenance, then the User notes line', async () => {
     const { flow, calls, checkins } = await opened([asset('NOMMA-1')])
     const row = await intake(flow, 'NOMMA-1', 'cracked   screen\n')
-    expect(checkins).toEqual([[1, { statusId: 9, note: '[Repair intake] cracked screen' }]])
+    expect(checkins).toEqual([[1, { statusId: 9, note: '[Repair intake] cracked screen', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 2 }]])
     expect(calls.slice(3)).toEqual([
       'bytag NOMMA-1', 'bytag NOMMA-1', 'checkin 1', 'open maintenances 1',
       'maintenance 1 type 9 "NOMMA-1 damaged" 2026-10-11 [Repair intake] cracked screen', `user notes 7 ${LINE}`,
@@ -1226,7 +1241,7 @@ describe('Repair intake', () => {
     expect(calls.slice(5)).toEqual(['status 1 9', 'note 1 [Repair intake] cracked screen', 'open maintenances 1', 'maintenance 1 type 9 "NOMMA-1 damaged" 2026-10-11 [Repair intake] cracked screen'])
     expect(flow.runner.rows[0]).toMatchObject({ what: "Damaged (wasn't checked out)", sub: ['Maintenance opened', 'User note: no User'] })
     await intake(flow, 'NOMMA-2')
-    expect(checkins).toEqual([[2, { statusId: 9, note: '[Repair intake] cracked screen' }]])
+    expect(checkins).toEqual([[2, { statusId: 9, note: '[Repair intake] cracked screen', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 9 }]])
   })
 
   it('an open Repair Maintenance is reused, never a second one', async () => {
