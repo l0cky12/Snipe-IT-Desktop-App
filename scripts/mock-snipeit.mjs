@@ -58,7 +58,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
     serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
-    location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
+    // A few unassigned Assets have no Location, for the dashboard's No Location bar.
+    location: holder?.type === 'location' ? holder : !holder && i % 13 === 6 ? null : pick(locations.slice(1), i), assigned_to: holder,
     // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
     rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
@@ -144,10 +145,10 @@ const lists = {
   hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
-    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
+    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
     next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
-    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' } },
+    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' }, archived: (a) => a.status_label.status_meta === 'archived' },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
     // Like Snipe-IT, username, email and employee_num are exact matches.
     filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v, username: (u, v) => u.username === v, email: (u, v) => u.email === v, employee_num: (u, v) => u.employee_num === v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
@@ -168,6 +169,8 @@ function listPage(spec, q) {
   const search = q.get('search')?.toLowerCase()
   if (search && spec.search) rows = rows.filter((r) => spec.search(r).includes(search))
   for (const [key, test] of Object.entries(spec.filters ?? {})) if (q.get(key)) rows = rows.filter((r) => test(r, q.get(key)))
+  // Like Snipe-IT with "show archived in list" off: the plain Asset list leaves Archived Assets out, but status_id or status=Archived lists them.
+  if (spec.archived && !q.get('status_id') && q.get('status') !== 'Archived') rows = rows.filter((r) => !spec.archived(r))
   const by = spec.sorts?.[q.get('sort') ?? spec.sort]
   if (by) rows = [...rows].sort((a, b) => String(by(a)).localeCompare(String(by(b)), undefined, { numeric: true }) * (q.get('order') === 'asc' ? 1 : -1))
   const offset = Number(q.get('offset') ?? 0)

@@ -66,6 +66,8 @@
     }
   },
   "devDependencies": {
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.2.0",
     "@types/node": "^26.6.2",
     "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.3.0",
@@ -81,6 +83,8 @@
     "vitest": "^5.0.1"
   },
   "dependencies": {
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
     "jsbarcode": "^3.12.3",
     "lucide-react": "^1.48.0",
     "nodemailer": "^10.0.13",
