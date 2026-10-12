@@ -488,6 +488,14 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .confirm-facts { display: grid; grid-template-columns: repeat(4, minmax(0, auto)); justify-content: start; gap: 4px 24px; margin: 0; }
 .confirm-facts dt { font-size: 12px; color: var(--dim); }
 .confirm-facts dd { margin: 0; }
+/* Repair intake's confirm sits under the field's form, since it has its own note field. */
+.workflow-main > .scan-confirm { margin: 0 28px; }
+.sub-result { display: block; color: var(--dim); }
+/* A done row whose text is a typed note (Repair intake) wraps instead of pushing the table wider; What wraps too, so
+   the result keeps room to read. */
+.running td:last-child .chip { white-space: normal; }
+.running td:last-child { min-width: 220px; }
+.running td:nth-last-child(2) { white-space: normal; }
 .options { margin: 8px 28px; }
 .options summary { cursor: pointer; }
 .options .actions { margin-top: 8px; }
