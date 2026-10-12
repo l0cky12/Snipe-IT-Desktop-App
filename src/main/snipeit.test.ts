@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BULK_FORMS, createSnipeIt, filled, fromWire, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
+import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, toWire, type CheckoutOptions } from './snipeit'
 import { toCsv } from './export'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
@@ -950,6 +950,56 @@ it('tests authentication before reporting connection success and detects the ver
   await expect(createSnipeIt(config, denied.fetch).testConnection()).rejects.toThrow('rejected your API key')
   const older = fakeFetch({ '/users/me': { body: { id: 1 } } })
   expect(await createSnipeIt(config, older.fetch).testConnection()).toEqual({ version: 'Unavailable' })
+})
+
+describe('Health warnings', () => {
+  const audits = { '/hardware/audit/overdue': { body: { total: 12, rows: [] } }, '/hardware/audit/due': { body: { total: 3, rows: [] } } }
+
+  it('probes /version for the version, and reads both audit totals with limit=1', async () => {
+    const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3 })
+    expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/version'])
+    expect(queries.filter((q) => Object.keys(q).length)).toEqual([{ limit: '1' }, { limit: '1' }])
+  })
+
+  it('classifies the probe: unreachable (network, timeout, 503), the key rejected (401) or refused key-wide (403)', async () => {
+    const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
+    expect((await createSnipeIt(config, offline).health()).probe).toEqual({ warning: 'unreachable', message: expect.stringMatching(/^Can't reach Snipe-IT at https:\/\/snipe\.example\.org/) })
+    const slow = (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }) as typeof globalThis.fetch
+    expect((await createSnipeIt(config, slow).health()).probe).toEqual({ warning: 'unreachable', message: expect.stringMatching(/took longer than/) })
+    const proxy = fakeFetch({ '/version': { status: 503, body: {} }, ...audits })
+    expect((await createSnipeIt(config, proxy.fetch).health()).probe).toMatchObject({ warning: 'unreachable' })
+    const rejected = fakeFetch({ '/version': { status: 401, body: { message: 'Unauthenticated.' } }, ...audits })
+    expect((await createSnipeIt(config, rejected.fetch).health()).probe).toEqual({ warning: 'key', message: expect.stringMatching(/^Snipe-IT rejected your API key\./) })
+    const twoFactor = fakeFetch({ '/version': { status: 403, body: { status: 'error', messages: 'Two-factor authentication is required.' } }, ...audits })
+    expect((await createSnipeIt(config, twoFactor.fetch).health()).probe).toEqual({ warning: 'key', message: 'Snipe-IT returned HTTP 403: Two-factor authentication is required.' })
+  })
+
+  it('a check that fails says why on its own, leaving the others', async () => {
+    const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'] })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3,
+    })
+  })
+
+  it('lines: hidden at 0, too old below v8.7, and a failed check on its own line only', () => {
+    expect(healthLines({ probe: { version: 'v8.7.0' }, auditLate: 0, auditDue: 0 })).toEqual([])
+    expect(healthLines({ probe: { version: 'v9.0.1' }, auditLate: 12, auditDue: 0 })).toEqual([{ warning: 'auditLate', count: 12 }])
+    expect(healthLines({ probe: { version: 'v8.6.3' }, auditLate: { error: 'No audits for you.' }, auditDue: 3 })).toEqual([
+      { warning: 'tooOld', version: 'v8.6.3' }, { warning: 'auditLate', error: 'No audits for you.' }, { warning: 'auditDue', count: 3 },
+    ])
+    expect(healthLines({ probe: { version: 'nightly' }, auditLate: 0, auditDue: 1 })).toEqual([
+      { warning: 'tooOld', error: "Snipe-IT's version, nightly, isn't one this app can read." }, { warning: 'auditDue', count: 1 },
+    ])
+    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+  })
+
+  it('lines: Snipe-IT unreachable or the key failing shows only that line', () => {
+    const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
+    expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
+    const key = { warning: 'key', message: 'Snipe-IT rejected your API key.' } as const
+    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 })).toEqual([key])
+  })
 })
 
 it("gets the Operator's own email from Snipe-IT, and says so when their account has none", async () => {
