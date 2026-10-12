@@ -597,6 +597,12 @@ describe('checkin', () => {
         expect(posted(requests)).toEqual([])
       }
     })
+
+    it('sends a Checkin Snipe-IT throttles only once, so the job reads the Asset again before it retries', async () => {
+      const { fetch, requests } = checkinWith(tempOut, { status: 429, body: { message: 'Too Many Attempts.' } })
+      await expect(createSnipeIt(config, fetch, at).automaticCheckin(4812, '2026-09-24 09:05', note)).rejects.toMatchObject({ kind: 'rateLimited' })
+      expect(posted(requests)).toHaveLength(1)
+    })
   })
 
   it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
