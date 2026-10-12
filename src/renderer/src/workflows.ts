@@ -58,8 +58,10 @@ const hhmm = (d: Date) => d.toTimeString().slice(0, 5)
 export const cleanTag = (raw: string) => raw.replace(/\p{Cc}/gu, '').trim()
 const busy = (r: Row) => r.result.state === 'waiting' || r.result.state === 'working' || r.result.state === 'unsure'
 // The fields a Workflow's write changes (or its undo puts back); an Asset whose fields all match its lookup is as it was when scanned.
+// lastCheckout tells a newer Checkout to the same Assignee, with the same fields, from the one that was looked up.
 const same = (a: Asset, b: Asset) =>
   a.assignee?.type === b.assignee?.type && a.assignee?.id === b.assignee?.id && a.statusId === b.statusId && a.locationId === b.locationId && a.expectedCheckin === b.expectedCheckin
+  && a.lastCheckout === b.lastCheckout
 const assigneeName = (a: Assignee) => `${a.type === 'asset' ? 'Asset ' : ''}${a.name}`
 const found = (a: Asset) => `${a.assignee ? `checked out to ${assigneeName(a.assignee)}` : 'not checked out'}, '${a.status || 'no status'}', at ${a.location || 'no Location'}`
 

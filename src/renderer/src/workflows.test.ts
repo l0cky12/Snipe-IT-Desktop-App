@@ -1302,6 +1302,15 @@ describe('Pause (#73)', () => {
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "Changed while paused: checked out to Blake Sampleton, 'Deployed', at Library" })
     })
 
+    it('on Resume, a newer Checkout to the same Assignee counts as changed too: the retry would clear it', async () => {
+      const { flow, assets, checkins } = await cutOff()
+      assets[0] = { ...assets[0], lastCheckout: '2026-10-12 09:30' }
+      await flow.runner.resume()
+      await settled(flow.runner)
+      expect(checkins).toHaveLength(1)
+      expect(flow.runner.rows[0].result).toMatchObject({ state: 'failed', reason: expect.stringMatching(/^Changed while paused/) })
+    })
+
     it('on Resume, a new Expected Checkin counts as changed too: the retry would clear it', async () => {
       const { flow, assets, checkins } = await cutOff()
       assets[0] = { ...assets[0], expectedCheckin: '2026-10-20' }
