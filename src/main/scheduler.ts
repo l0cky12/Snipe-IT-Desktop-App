@@ -1,5 +1,5 @@
 import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from './config'
-import { csvName, exportTable, localDate, rowCount, shownColumns, toCsv } from './export'
+import { csvName, exportTable, localDate, rowCount, shownColumns, toCsv, viewColumns } from './export'
 import type { Mail } from './mail'
 import { REPORT_NAMES, type ReportKind, type ReportQuery, type SnipeIt } from './snipeit'
 
@@ -110,7 +110,7 @@ export function createReportScheduler({ now, session, schedules, recordSend, fai
   return api
 }
 
-/** Runs a Report to rows: a Saved Report as its List shows it (search, filters, sort, Columns), a built-in one as the Reports page does. */
+/** Runs a Report to rows: a Saved Report as its List shows it (View, search, filters, sort, Columns), a built-in one as the Reports page does. */
 export function reportRunner(client: Pick<SnipeIt, 'exportList' | 'report'>, savedReports: () => SavedReport[]) {
   return async (ref: ReportRef): Promise<ReportRun> => {
     if ('builtIn' in ref) {
@@ -120,7 +120,9 @@ export function reportRunner(client: Pick<SnipeIt, 'exportList' | 'report'>, sav
     }
     const r = savedReports().find((s) => s.id === ref.saved)
     if (!r) throw new Error('That Saved Report no longer exists.')
-    const { rows, capped } = await client.exportList(r.kind, { search: r.search, filters: r.filters, sort: r.sort?.key, order: r.sort?.order })
-    return { name: r.name, ...exportTable(r.kind, shownColumns(r.kind, r.columns), rows), capped }
+    // Its View's route, or its in-app lookup (Out on temp, Overdue), with the View's own column.
+    const { rows, capped } = await client.exportList(r.kind, { search: r.search, filters: r.filters, sort: r.sort?.key, order: r.sort?.order, ...(r.view && { view: r.view }) })
+    const shown = shownColumns(r.kind, r.columns)
+    return { name: r.name, ...exportTable(r.kind, r.view ? viewColumns(shown, r.view) : shown, rows), capped }
   }
 }

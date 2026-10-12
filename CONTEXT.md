@@ -160,7 +160,7 @@ The Workflow for taking many Assets back: pick the one Location returns go to, t
 _Avoid_: collection, bulk checkin
 
 **Repair intake**:
-The Workflow for a broken Asset coming to the counter: scan it, write what happened to the Asset (required), then Check it in as Damaged (or just mark it Damaged if it isn't checked out) and open a Maintenance for the repair. When a User held it, a User notes line is added to that User's notes.
+The Workflow for a broken Asset coming to the counter: scan it, write what happened to the Asset (required), then Check it in as Damaged (or just mark it Damaged if it isn't checked out) and open a Maintenance for the repair. When a User held it, a User notes line is added to that User's notes. It can undo the last one.
 _Avoid_: drop-off, break/fix
 
 **User notes line**:
