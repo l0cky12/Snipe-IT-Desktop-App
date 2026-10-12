@@ -3,7 +3,7 @@ import { ArchiveRestore, PackageCheck, type LucideIcon } from 'lucide-react'
 import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import { cleanTag, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type Row, type Runner } from './workflows'
+import { cleanTag, fieldKey, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type Row, type Runner } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return']
@@ -244,7 +244,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone, on
                 {/* A row's Location shows only when it differs from the current one (after Change Location). */}
                 {r.ctx.id === here.id ? r.what : [r.what, `to ${r.ctx.name}`].filter(Boolean).join(', ')}
                 {/* Came back after its Expected Checkin, from the lookup answer; a refused Asset didn't come back. */}
-                {r.before?.overdueDays != null && (r.result.state === 'done' || r.result.state === 'undone') && <> <span className="chip c-red">Overdue</span></>}
+                {r.before?.overdue != null && (r.result.state === 'done' || r.result.state === 'undone') && <> <span className="chip c-red">Overdue</span></>}
               </>
             )} />
         ) : (
@@ -290,9 +290,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   typed.current = q
   const shown = !user && list?.q === q ? list.users : []
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
+  // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
   useEffect(() => {
     setText(''); setList(null); setMoved(null); field.current?.focus()
-  }, [step])
+  }, [fieldKey(step)])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
     flow.runner.enter()

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailInput, SavedReport } from './config'
 import type { Mail } from './mail'
+import { RELEASES_URL } from './release'
 import type { SnipeItBridge } from './snipeit'
 
 // Exercise the actual IPC wiring and settings store; only Electron, HTTP and SMTP are fake.
@@ -16,6 +17,7 @@ const send = vi.fn<(server: MailInput, mail: Mail) => Promise<void>>(async () =>
 const request = vi.fn<typeof fetch>()
 let dir: string
 const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
+const openExternal = vi.fn(async (_url: string) => {})
 // The main window's event handlers, the tray menu, and the quit prompt (which answers Cancel unless told otherwise).
 const windowEvents = new Map<string, (e: { preventDefault(): void }) => void>()
 const appEvents = new Map<string, (e: { preventDefault(): void }) => void>()
@@ -38,10 +40,13 @@ beforeEach(async () => {
   ask.mockReset().mockReturnValue(1)
   quit.mockClear()
   send.mockClear()
+  openExternal.mockClear()
   request.mockReset().mockImplementation(async (url) => new Response(JSON.stringify(
     String(url).endsWith('/users/me') ? { email: 'operator@nomma.net' } : { total: 0, rows: [] },
   )))
   vi.stubGlobal('fetch', request)
+  // From source the app asks only this for the latest Snipe-IT release; the fake fetch answers it.
+  vi.stubEnv('SNIPEIT_RELEASES_URL', RELEASES_URL)
   nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
@@ -78,6 +83,7 @@ beforeEach(async () => {
           [name, (...args: unknown[]) => fn(...args).catch((e) => { throw structuredClone(e) })]))),
     },
     safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal },
   }))
   vi.doMock('./mail', () => ({ sendMail: send }))
   vi.doMock('./tray.png?asset', () => ({ default: '' }))
@@ -90,6 +96,7 @@ afterEach(() => {
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -176,11 +183,30 @@ it("gives the window a Snipe-IT failure's kind as well as its message", async ()
   await import('../preload/index')
   const snipeIt = exposed.snipeIt as SnipeItBridge
   request.mockImplementation(async () => new Response('{}', { status: 429, headers: { 'Retry-After': '23' } }))
-  await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 })
+  // A 429 is sent again up to three times, after each wait, before it fails; fake timers skip the waits.
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  const throttled = expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'Snipe-IT is limiting requests; try again in 23 seconds.', kind: 'rateLimited', retryAfter: 23 })
+  await vi.runAllTimersAsync()
+  await throttled
+  vi.useRealTimers()
   request.mockImplementation(async () => new Response('{}', { status: 401 }))
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: expect.stringMatching(/^Snipe-IT rejected your API key\./), kind: 'key' })
   request.mockImplementation(async () => new Response(JSON.stringify({ status: 'error', messages: 'No Status Labels for you.' })))
   await expect(snipeIt.statusLabels()).rejects.toMatchObject({ message: 'No Status Labels for you.', kind: 'refused' })
+})
+
+it("gives the window GitHub's latest Snipe-IT release, opens only its release notes, and hides it", async () => {
+  const notes = 'https://github.com/grokability/snipe-it/releases/tag/v8.9.1'
+  request.mockImplementation(async (url) => new Response(JSON.stringify(
+    String(url) === RELEASES_URL ? { tag_name: 'v8.9.1', html_url: notes } : String(url).endsWith('/version') ? { version: 'v8.8.0' } : { total: 0, rows: [] })))
+  expect(await call('release:latest')).toEqual({ tag: 'v8.9.1', url: notes })
+  await call('release:open', notes)
+  await expect(call('release:open', 'https://example.org/grokability/snipe-it/releases/tag/v8.9.1')).rejects.toThrow('Only Snipe-IT release notes')
+  expect(openExternal.mock.calls).toEqual([[notes]])
+  call('release:hide', 'v8.9.1')
+  expect(await call('release:latest')).toBeNull()
+  // Asked GitHub once: the second check read the day-long cache.
+  expect(request.mock.calls.filter(([url]) => String(url) === RELEASES_URL)).toHaveLength(1)
 })
 
 describe('quitting while a Paused Workflow holds scans (#73)', () => {

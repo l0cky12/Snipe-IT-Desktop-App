@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, choices, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, focusRow, openRow, panelLive, panelToRefresh, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -152,5 +152,136 @@ describe('Export CSV', () => {
   it('Lists whose rows hold Users or Assignees need the FERPA confirmation', () => {
     expect(['assets', 'users', 'activity', 'departments'].every((k) => holdsStudentInfo(k as 'assets'))).toBe(true)
     expect(['suppliers', 'locations', 'licenses', 'statuslabels'].some((k) => holdsStudentInfo(k as 'assets'))).toBe(false)
+  })
+})
+
+describe('columns', () => {
+  it('count columns right-align; text columns and empty ones do not', () => {
+    const columns = [{ key: 'name', label: 'Name' }, { key: 'assets', label: 'Assets' }, { key: 'parent', label: 'Parent' }]
+    const rows = [{ name: 'Library', assets: 12, parent: null }, { name: 'Gym', assets: 0, parent: null }]
+    expect([...numericColumns(columns, rows)]).toEqual(['assets'])
+  })
+})
+
+describe('Assets Views', () => {
+  const report = { id: 'r1', name: 'Library carts', kind: 'assets' as const, search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' as const }, columns: ['assetTag'] }
+
+  it('each View asks for itself with the search, filter boxes and sort; other Lists have no View', () => {
+    const state = { view: 'auditLate' as const, search: 'cb', filters: { location_id: '4' }, sort: { key: 'nextAudit', order: 'desc' as const } }
+    expect(listQuery('assets', state)).toEqual({ view: 'auditLate', search: 'cb', filters: { location_id: '4' }, sort: 'nextAudit', order: 'desc' })
+    expect(listQuery('users', { ...state, view: 'all' })).not.toHaveProperty('view')
+  })
+
+  it("Assets' old defaults, stored by the List on every open, give the new defaults; a real pick is kept", () => {
+    expect(storedColumns('assets', ['assetTag', 'name', 'status', 'model', 'category', 'location', 'assignee'])).toEqual(['assetTag', 'status', 'model', 'assignee', 'location'])
+    expect(storedColumns('assets', ['assetTag', 'name', 'status', 'model', 'location', 'assignee'])).toEqual(['assetTag', 'name', 'status', 'model', 'assignee', 'location'])
+    expect(storedColumns('assets', null)).toEqual(['assetTag', 'status', 'model', 'assignee', 'location'])
+  })
+
+  it('picking a View starts its search, filter boxes and sort again', () => {
+    expect(picking('damaged')).toEqual({ view: 'damaged', search: '', filters: {}, sort: null })
+    expect(picking('auditLate')).toEqual({ view: 'auditLate', search: '', filters: {}, sort: { key: 'nextAudit', order: 'asc' } })
+  })
+
+  it('a dashboard or Record drill opens on All with its filter; a Saved Report on All with its search and sort', () => {
+    expect(opening({ filters: { status_id: '3' } })).toEqual({ view: 'all', search: '', filters: { status_id: '3' }, sort: null })
+    expect(opening({ filters: report.filters }, report)).toEqual({ view: 'all', search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' } })
+  })
+
+  it('the Selection survives switching Views, and "Select all N matching" adds the open View\'s Assets to it', async () => {
+    const asset = (id: number) => ({ id, name: `NOMMA-${id}` })
+    // Ticked on All, then Audit late's first page loads with one of them on it.
+    let s = tick(new Map(), [asset(1), asset(2)])
+    s = refreshed(s, [{ id: 2, name: 'NOMMA-2 (reloaded)' }, asset(9)])
+    expect([...s.values()]).toEqual([asset(1), { id: 2, name: 'NOMMA-2 (reloaded)' }])
+    // Select all pages through the open View only.
+    const asked: unknown[] = []
+    const lateRows = [asset(2), asset(9), asset(12)]
+    const query = listQuery('assets', { ...picking('auditLate'), sort: { key: 'id', order: 'asc' } })
+    const all = await allMatching(async (offset) => (asked.push({ ...query, offset }), { total: 3, rows: lateRows.slice(offset, offset + 2) }))
+    expect(asked).toEqual([0, 2].map((offset) => ({ view: 'auditLate', search: '', filters: {}, sort: 'id', order: 'asc', offset })))
+    expect([...new Map([...s, ...all!]).keys()]).toEqual([1, 2, 9, 12])
+  })
+})
+
+describe('keys on the Assets List', () => {
+  it('↑/↓ take the Asset panel along and Esc closes it while it shows, or while the first open is still loading', () => {
+    expect(panelLive(true, false)).toBe(true)
+    expect(panelLive(false, true)).toBe(true)
+    expect(panelLive(false, false)).toBe(false)
+  })
+
+  it('a Bulk Action reloads only the panel open that showed as it began, so a form opened mid-run keeps its inputs', () => {
+    const run = { records: [{ id: 7 }] }
+    expect(panelToRefresh(3, { n: 3, id: 7 }, run)).toBe(7)
+    expect(panelToRefresh(3, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(undefined, { n: 4, id: 7 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 8 }, run)).toBeUndefined()
+    expect(panelToRefresh(3, { n: 3, id: 7 }, { ...run, deletes: true })).toBeUndefined()
+    expect(panelToRefresh(3, null, run)).toBeUndefined()
+  })
+
+  it('↑/↓ give the row they move to DOM focus, so Enter opens that row and not one a button was left focused on', () => {
+    const focused: string[] = []
+    const rows = new Map([7, 8].map((id) => [`tr[data-id="${id}"]`, { focus: () => focused.push(`row ${id}`) }]))
+    focusRow({ querySelector: ((s: string) => rows.get(s) ?? null) as ParentNode['querySelector'] }, 8)
+    expect(focused).toEqual(['row 8'])
+    focusRow(null, 8)
+  })
+
+  it('a row or Quick Action click moves the focused row onto it at once, before its Asset loads', () => {
+    const done: string[] = []
+    const open = openRow((id) => done.push(`cursor ${id}`), (id, form) => done.push(`open ${id} ${form ?? ''}`.trim()))
+    open(3)
+    open(4, 'checkin')
+    expect(done).toEqual(['cursor 3', 'open 3', 'cursor 4', 'open 4 checkin'])
+  })
+
+  const key = (name: string, mods: Partial<Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {}) =>
+    ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
+
+  it('↑/↓ move between rows from anywhere but a field, even with a button focused', () => {
+    expect(listKey(key('ArrowDown'), 'none', false)).toBe('down')
+    expect(listKey(key('ArrowUp'), 'control', false)).toBe('up')
+    expect(listKey(key('ArrowDown'), 'field', false)).toBeNull()
+  })
+
+  it('Enter opens the focused row, but leaves a focused button or field to do its own job', () => {
+    expect(listKey(key('Enter'), 'none', false)).toBe('open')
+    expect(listKey(key('Enter'), 'control', false)).toBeNull()
+    expect(listKey(key('Enter'), 'field', true)).toBeNull()
+  })
+
+  it('Space ticks only when focus is not in a field or on a button', () => {
+    expect(listKey(key(' '), 'none', true)).toBe('tick')
+    expect(listKey(key(' '), 'control', true)).toBeNull()
+    expect(listKey(key(' '), 'field', false)).toBeNull()
+  })
+
+  it('Esc closes (or cancels the form in the panel), but a field outside the panel keeps it', () => {
+    expect(listKey(key('Escape'), 'none', false)).toBe('close')
+    expect(listKey(key('Escape'), 'control', false)).toBe('close')
+    expect(listKey(key('Escape'), 'field', true)).toBe('close')
+    expect(listKey(key('Escape'), 'field', false)).toBeNull()
+  })
+
+  it('with a modifier held, or any other key, nothing happens', () => {
+    expect(listKey(key('ArrowDown', { shiftKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key(' ', { ctrlKey: true }), 'none', false)).toBeNull()
+    expect(listKey(key('a'), 'none', false)).toBeNull()
+  })
+
+  it('the focused row moves one at a time and stops at either end of the page', () => {
+    const ids = [4, 8, 15]
+    expect(moveCursor(ids, 8, 1)).toBe(15)
+    expect(moveCursor(ids, 8, -1)).toBe(4)
+    expect(moveCursor(ids, 15, 1)).toBe(15)
+    expect(moveCursor(ids, 4, -1)).toBe(4)
+  })
+
+  it('with no focused row (or one no longer on the page), ↓ starts at the top and ↑ at the bottom', () => {
+    expect(moveCursor([4, 8, 15], null, 1)).toBe(4)
+    expect(moveCursor([4, 8, 15], 99, -1)).toBe(15)
+    expect(moveCursor([], null, 1)).toBeNull()
   })
 })

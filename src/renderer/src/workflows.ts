@@ -2,7 +2,7 @@
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
 import type { Asset, Assignee, Failure, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
-import { undoNote, workflowNote } from '../../main/notes'
+import { parseWorkflowNote, undoNote, workflowNote } from '../../main/notes'
 import type { Outcome } from './BatchView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
@@ -13,8 +13,9 @@ export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
  *  may have gone through before the connection dropped (unsure, waiting for Resume to check). Refused and failed are both 'failed'. */
 export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'undone' } | { state: 'neutral'; text: string } | { state: 'unsure'; reason: string } | Outcome
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
- *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. */
-export type Undo = { says: string; run: (now: Asset) => Promise<void> }
+ *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
+ *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true. */
+export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void> }
 /** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
  *  before: the Asset as the lookup found it, before the Workflow acted. undo: how to put it back, or why it can't be.
  *  undoFailed: why the last Undo of it didn't happen. */
@@ -133,7 +134,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     // Paused, nothing is sent. After a pause, the next held scan waits for the open confirm, so each comes up in turn.
     while (queue.length && !paused && !(opened && held.has(queue[0].key))) {
       const row = queue.shift()!
-      held.delete(row.key)
+      const wasHeld = held.delete(row.key)
       if (undoing) await undoing
       const wait = lastStart + pace - Date.now()
       if (wait > 0) await sleep(wait)
@@ -179,9 +180,11 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
         if (mine !== generation) return
         if ('send' in step) await send(asset, { write: step.send, text: '' })
         else if ('confirm' in step) {
-          // At most one open: a newer one skips the one still waiting, as a different scan would.
+          // At most one open: a newer one skips the one still waiting, as a different scan would. Latest wins: a newer
+          // scan (or line) since this one, whatever came of it, means this confirm never opens. Not for a scan that
+          // waited through a pause: those come up in turn on Resume.
           skipOpen()
-          if (away) settle(row, { state: 'neutral', text: SKIPPED }, { what: step.what ?? '' })
+          if (away || (!wasHeld && row.key !== next)) settle(row, { state: 'neutral', text: SKIPPED }, { what: step.what ?? '' })
           else {
             opened = { key: row.key, confirm: step.confirm, text: '' }
             update(row.key, { what: step.what ?? '', result: { state: 'confirm' } })
@@ -375,7 +378,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
         if (mine !== generation) return
         // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
         if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-        await run(now)
+        await run(now, () => mine === generation)
         if (mine !== generation) return
         announce = `${row.tag}: Undone`
         update(row.key, { result: { state: 'undone' }, undoFailed: undefined })
@@ -444,7 +447,7 @@ export const READY = 'Ready to Deploy'
 
 // Bulk return (#58): pick the one Location returns go to, then each scanned Asset that's checked out is checked in at
 // once, set to Ready to Deploy and sent there. No confirm; Undo last fixes mistakes.
-export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'statusLabels'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'statusLabels' | 'getAsset'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   let step: BulkReturnStep = { step: 'location' }
   // The Location picked last, highlighted when the next round starts.
   let last: StatusLabel | null = null
@@ -465,14 +468,21 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'key
     const { assignee: was, statusId, expectedCheckin } = a
     const from = `${was.type === 'asset' ? 'Asset ' : ''}${was.name}`
     // Undo: a Checkout back to the same Assignee with the old Status Label and Expected Checkin. Snipe-IT's Checkout sets
-    // the Location; the old one isn't forced back. A time of day means it was a Temp checkout, so the undo makes it one again.
+    // the Location; the old one isn't forced back. A Temp checkout is made one again (its tag back), but a time of day alone
+    // doesn't make one: an ordinary Checkout can have one too. So History says, only then: its newest Checkout is the one
+    // returned (it's still checked in, as left). History that can't be read puts back an ordinary Checkout.
     const readyId = ready
-    const run = async (now: Asset) => {
+    const run = async (now: Asset, current: () => boolean) => {
       if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
-      // A label someone set since the return isn't overwritten with the old one.
+      // A label someone set since the return isn't overwritten with the old one; Checkout's own last read checks it again.
       if (now.statusId !== readyId) throw new Error(`${now.assetTag} is '${now.status}' now`)
-      const due = expectedCheckin && expectedCheckin.length > 10 ? expectedCheckin : undefined
-      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
+      let due: string | undefined
+      if (expectedCheckin && expectedCheckin.length > 10) {
+        const n = parseWorkflowNote((await bridge.getAsset(a.id)).history.find((h) => h.action === 'Checkout')?.note ?? null)
+        if (!current()) return
+        if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
+      }
+      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, fromStatusId: readyId, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
     // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.
     const undo = keep ? `Snipe-IT can't check out an Asset with status '${a.status}'. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} checked in from ${from}`, run }
@@ -528,6 +538,8 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'key
 export type BulkReturn = ReturnType<typeof createBulkReturn>
 
 export type BulkCheckoutStep = { step: 'user' } | { step: 'scan'; user: UserCard; round: number }
+// Changes on a new step or round only, not when the User's Asset count does, so the view's field clears on a real change.
+export const fieldKey = (s: BulkCheckoutStep) => (s.step === 'scan' ? `scan ${s.round}` : s.step)
 /** Bulk checkout's Options: a date-only Expected Checkin and a note, each '' when not set. */
 export type CheckoutSession = { expectedCheckin: string; note: string }
 /** What a Bulk checkout scan was made under: the User, which round with them, and the Options. */
@@ -541,9 +553,16 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
+  // Bumped by reset (another server), so a Checkout or Undo still in flight never counts on the new server.
+  let session = 0
+  // The header's "holds N Assets" follows each Checkout and Undo while that User is still the one being served.
+  const held = (userId: number, by: number, from: number) => {
+    if (from === session && step.step === 'scan' && step.user.id === userId) step = { ...step, user: { ...step.user, assets: step.user.assets + by } }
+  }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
+    const mine = session
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
     // ponytail: someone else's Asset is refused for now; the choice step (Move to this User / Stop) is #91.
     if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}`)
@@ -558,18 +577,24 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
       if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
       // Another Expected Checkin means a newer Checkout to the same User; that one isn't undone.
       if ((now.expectedCheckin ?? '') !== expectedCheckin) throw new Error(`${a.assetTag} is due back ${now.expectedCheckin || 'never'} now`)
-      await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
+      // A Checkin with no Location moves it to its Default Location, so "no Location" can't be put back while it has one.
+      if (a.locationId === null && now.defaultLocation) throw new Error(`${a.assetTag} had no Location; a Checkin would move it to its Default Location, ${now.defaultLocation}`)
+      // Checkin's own last read checks all three again.
+      await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined, noDefaultLocation: a.locationId === null })
+      held(user.id, -1, mine)
     }
     // Snipe-IT can't check in to no Location (it uses the Default Location instead), so that undo is by hand.
     const byHand = a.locationId === null && a.defaultLocation
     const done: Done = { text: 'Checked out', undo: byHand ? `Snipe-IT would check ${a.assetTag} in to its Default Location, ${a.defaultLocation}, not back to no Location. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} → ${user.name}`, run } }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      held(user.id, 1, mine)
       return done
     }
     // As this Checkout leaves it: to this User, the Status Label kept, and the Expected Checkin it set (or none).
-    const left = (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === expectedCheckin ? done : null)
+    // Found so on Resume, it went through: the User's count goes up as for any Checkout.
+    const left = (now: Asset) => (now.assignee?.type === 'user' && now.assignee.id === user.id && now.statusId === a.statusId && (now.expectedCheckin ?? '') === expectedCheckin ? (held(user.id, 1, mine), done) : null)
     return { what, confirm: { write, left } }
   }, events, now, pace)
 
@@ -640,6 +665,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
     },
     reset() {
       attempt++
+      session++
       step = { step: 'user' }
       options = NO_OPTIONS
       runner.reset()
