@@ -1185,6 +1185,36 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return body.rows.map((r) => ({ id: r.id, name: r.name, detail: r.username ?? r.model_number ?? '', matched: matchedField(kind, r, q) }))
   }
 
+  async function setStatus(id: number, statusId: number): Promise<void> {
+    checkId(id)
+    checkId(statusId, 'status')
+    const result = await request(`/hardware/${id}`, { status_id: statusId }, 'PATCH')
+    if (isError(result)) throw new Error(reason(result.messages))
+  }
+
+  // A User's notes as Snipe-IT sends them, without trailing whitespace. written: they're about to be written back, so
+  // markup Snipe-IT rendered, which can't be rebuilt as it was stored, refuses.
+  async function userNotes(userId: number, written = false): Promise<string> {
+    const body = await request<{ notes?: string | null }>(`/users/${userId}`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    const notes = (body.notes ?? '').replace(/\s+$/, '')
+    if (written && /<\/?[a-z][^>]*>/i.test(notes)) throw new Error("the User's notes have formatting the app can't keep")
+    return notes
+  }
+  const checkLine = (line: string) => {
+    if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
+  }
+  // Replaces a User's whole notes field.
+  async function writeUserNotes(userId: number, notes: string): Promise<void> {
+    try {
+      const body = await request(`/users/${userId}`, { notes }, 'PATCH')
+      if (isError(body)) throw new Error(reason(body.messages))
+    } catch (e) {
+      // ponytail: matches request()'s "HTTP 403" wording, like allowed().
+      throw /HTTP 403\b/.test((e as Error).message) ? new Error("your Snipe-IT account can't edit Users") : e
+    }
+  }
+
   // Re-reads the Asset so Checkout/Checkin rules and the default status come from Snipe-IT, not from a possibly stale screen.
   async function current(id: number): Promise<RawAsset> {
     checkId(id)
@@ -1681,12 +1711,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // A Quick Action; Snipe-IT decides whether the status fits (e.g. a checked-out Asset needs a deployable one).
-    async updateStatus(id: number, statusId: number): Promise<void> {
-      checkId(id)
-      checkId(statusId, 'status')
-      const result = await request(`/hardware/${id}`, { status_id: statusId }, 'PATCH')
-      if (isError(result)) throw new Error(reason(result.messages))
-    },
+    updateStatus: setStatus,
 
     searchUsers: (text: string) => searchTargets('users', text),
 
@@ -1756,6 +1781,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(body)) throw new Error(reason(body.messages))
       return Number(body.payload?.id)
     },
+    // Undo of Repair intake: a soft delete of the Maintenance it opened. Needs `assets.edit`.
+    async deleteMaintenance(id: number): Promise<void> {
+      checkId(id, 'Maintenance')
+      const body = await request(`/maintenances/${id}`, {}, 'DELETE')
+      if (isError(body)) throw new Error(reason(body.messages))
+    },
     // A note in the Asset's History, for a step that can't carry one (a status change). Snipe-IT v8.3+, `assets.edit`.
     async addAssetNote(assetId: number, note: string): Promise<void> {
       checkId(assetId)
@@ -1768,28 +1799,28 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // nobody wrote in between. Any refusal throws, never retrying; the caller offers the line to copy instead.
     async appendUserNotes(userId: number, line: string): Promise<void> {
       checkId(userId, 'User')
-      if (typeof line !== 'string' || !line.trim() || /[\r\n]/.test(line)) throw new Error('Invalid User notes line')
-      const notes = async () => {
-        const body = await request<{ notes?: string | null }>(`/users/${userId}`)
-        if (isError(body)) throw new Error(reason(body.messages))
-        return body.notes ?? ''
-      }
-      const old = (await notes()).replace(/\s+$/, '')
-      if (/<\/?[a-z][^>]*>/i.test(old)) throw new Error("the User's notes have formatting the app can't keep")
-      try {
-        const body = await request(`/users/${userId}`, { notes: old ? `${old}\n${line}` : line }, 'PATCH')
-        if (isError(body)) throw new Error(reason(body.messages))
-      } catch (e) {
-        // ponytail: matches request()'s "HTTP 403" wording, like allowed().
-        throw /HTTP 403\b/.test((e as Error).message) ? new Error("your Snipe-IT account can't edit Users") : e
-      }
-      const now = await notes()
+      checkLine(line)
+      const old = await userNotes(userId, true)
+      await writeUserNotes(userId, old ? `${old}\n${line}` : line)
+      const now = await userNotes(userId)
       // The line may or may not be there now, so the Operator checks before adding it by hand.
-      if (!now.startsWith(old) || !now.replace(/\s+$/, '').endsWith(line)) throw new Error("someone else changed the User's notes at the same time; check them for the line")
+      if (!now.startsWith(old) || !now.endsWith(line)) throw new Error("someone else changed the User's notes at the same time; check them for the line")
+    },
+    // Undo of the User notes line: taken off only while the notes still end with exactly that line, on its own line;
+    // anything written after it since, or the line edited, leaves the notes alone ("changed since").
+    async removeUserNotesLine(userId: number, line: string): Promise<void> {
+      checkId(userId, 'User')
+      checkLine(line)
+      const notes = await userNotes(userId, true)
+      const rest = notes.slice(0, notes.length - line.length)
+      if (!notes.endsWith(line) || (rest && !/\n$/.test(rest))) throw new Error('changed since')
+      await writeUserNotes(userId, rest.replace(/\s+$/, ''))
     },
 
-    // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
-    // unless another is given (Snipe-IT accepts only a deployable one).
+    // Checkout allowed: no Assignee, and a deployable status or another one given. Snipe-IT requires a status, so the
+    // current one is sent unless another is given (Snipe-IT accepts only a deployable one). Snipe-IT checks out only an
+    // Asset whose label is deployable now, whatever is sent, so on one that isn't (an undo putting a Damaged Asset back)
+    // the given label is set first, and the old one put back if the Checkout is refused.
     async checkout(id: number, { targetType, targetId, statusId, fromStatusId, fromLocationId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
       if (!Object.hasOwn(TARGET_NAME, targetType)) throw new Error('An Asset can only be checked out to a User, a Location or another Asset.')
       checkId(targetId, TARGET_NAME[targetType])
@@ -1799,17 +1830,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (body.assigned_to) throw new Error(`${body.asset_tag} is already checked out to ${body.assigned_to.name}. Check it in first.`)
       if (fromStatusId !== undefined && body.status_label?.id !== fromStatusId) throw new Error(`${body.asset_tag} is '${body.status_label?.name ?? 'no status'}' now`)
       if (fromLocationId !== undefined && (body.location?.id ?? null) !== fromLocationId) throw new Error(`${body.asset_tag} is at ${body.location?.name ?? 'no Location'} now`)
-      if (body.status_label?.status_meta !== 'deployable')
-        throw new Error(`${body.asset_tag} is "${body.status_label?.name ?? 'no status'}", which can't be checked out.`)
-      const result = await request(`/hardware/${id}/checkout`, {
-        status_id: statusId ?? body.status_label.id,
-        checkout_to_type: targetType,
-        [`assigned_${targetType}`]: targetId,
-        // A time of day goes as YYYY-MM-DD HH:MM:00, which Snipe-IT reads in the server's timezone (also Central, #61 §1).
-        ...(expectedCheckin && { expected_checkin: expectedCheckin.length > 10 ? `${expectedCheckin}:00` : expectedCheckin }),
-        ...(note?.trim() && { note: note.trim() }),
-      })
-      if (isError(result)) throw new Error(reason(result.messages))
+      const label = body.status_label
+      const deployable = label?.status_meta === 'deployable'
+      if (!label || (!deployable && statusId === undefined)) throw new Error(`${body.asset_tag} is "${label?.name ?? 'no status'}", which can't be checked out.`)
+      if (!deployable) await setStatus(id, statusId!)
+      try {
+        const result = await request(`/hardware/${id}/checkout`, {
+          status_id: statusId ?? label.id,
+          checkout_to_type: targetType,
+          [`assigned_${targetType}`]: targetId,
+          // A time of day goes as YYYY-MM-DD HH:MM:00, which Snipe-IT reads in the server's timezone (also Central, #61 §1).
+          ...(expectedCheckin && { expected_checkin: expectedCheckin.length > 10 ? `${expectedCheckin}:00` : expectedCheckin }),
+          ...(note?.trim() && { note: note.trim() }),
+        })
+        if (isError(result)) throw new Error(reason(result.messages))
+      } catch (e) {
+        // ponytail: one try; a Checkout that timed out but went through in Snipe-IT is refused here.
+        if (!deployable) await setStatus(id, label.id).catch(() => { throw new Error(`${(e as Error).message} (its Status Label is still the new one: put back '${label.name}' by hand)`) })
+        throw e
+      }
     },
 
     // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.

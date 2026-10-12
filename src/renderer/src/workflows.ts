@@ -16,8 +16,9 @@ export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
 export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'choice' } | { state: 'undone' } | { state: 'neutral'; text: string } | Outcome
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
  *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
- *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true. */
-export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void> }
+ *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true.
+ *  It may resolve to the Undone row's sub-results (a later step that failed doesn't stop it being Undone). */
+export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void | string[]> }
 /** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
  *  before: the Asset as the lookup found it, before the Workflow acted. undo: how to put it back, or why it can't be.
  *  undoFailed: why the last Undo of it didn't happen. */
@@ -277,10 +278,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         if (mine !== generation) return
         // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
         if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-        await run(now, () => mine === generation)
+        const sub = await run(now, () => mine === generation)
         if (mine !== generation) return
         announce = `${row.tag}: Undone`
-        update(row.key, { result: { state: 'undone' }, undoFailed: undefined })
+        update(row.key, { result: { state: 'undone' }, undoFailed: undefined, ...(sub && { sub, copy: undefined }) })
       } catch (e) {
         if (mine !== generation) return
         announce = `${row.tag}: ${(e as Error).message}`
@@ -676,7 +677,7 @@ type RepairSetup = { damaged: number; typeId: number | null; fallback: number | 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
 // notes line. Each step after the first runs only once the first worked, and none undoes an earlier one.
-export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'checkin' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'appendUserNotes'>, events: Events, now = () => new Date(), pace = PACE_MS) {
+export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'getAsset' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
   // Looked up when the Workflow opens and kept for the session; what isn't found yet (Damaged, a Repair type) is looked
   // for again at the next open.
   let setup: Promise<RepairSetup> | null = null
@@ -690,16 +691,15 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let operator: Promise<string> | null = null
   const operatorName = () => (operator ??= bridge.operatorName().catch((e) => { operator = null; throw e }))
 
-  // The Maintenance step's sub-result.
-  async function maintenance(a: Asset, typeId: number | null, notes: string, still: () => void): Promise<string> {
-    if (typeId === null) return 'not opened: no Repair type found'
+  // The Maintenance step's sub-result; for Undo last, the id of the Maintenance it opened, or that one was open already.
+  async function maintenance(a: Asset, typeId: number | null, notes: string, still: () => void): Promise<{ text: string; made?: number; reused?: true }> {
+    if (typeId === null) return { text: 'not opened: no Repair type found' }
     try {
-      if ((await bridge.openMaintenances(a.id)).some((m) => isRepair(m.type, typeId))) return 'already open'
+      if ((await bridge.openMaintenances(a.id)).some((m) => isRepair(m.type, typeId))) return { text: 'already open', reused: true }
       still()
-      await bridge.createMaintenance({ assetId: a.id, typeId, name: `${a.assetTag} damaged`, startDate: localDate(now()), notes })
-      return 'opened'
+      return { text: 'opened', made: await bridge.createMaintenance({ assetId: a.id, typeId, name: `${a.assetTag} damaged`, startDate: localDate(now()), notes }) }
     } catch (e) {
-      return `not opened: ${(e as Error).message}`
+      return { text: `not opened: ${(e as Error).message}` }
     }
   }
 
@@ -712,8 +712,10 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     if (!held && a.statusId === damaged) throw new Error('Already Damaged: nothing to do')
     const from = held && assigneeName(held)
     const user = held?.type === 'user' ? held : null
+    // As scanned, for Undo last to put back.
+    const { statusId, statusType, status, expectedCheckin } = a
     const write = async (current: Asset, text: string): Promise<Done> => {
-      if (current.assignee?.type !== held?.type || current.assignee?.id !== held?.id || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      if (current.assignee?.type !== held?.type || current.assignee?.id !== held?.id || current.statusId !== statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
       const note = workflowNote('Repair intake', { text })
       const mine = session
       const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
@@ -725,9 +727,11 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
       still()
       if (!held) await bridge.addAssetNote(a.id, note).catch((e: Error) => sub.push(`Asset note not added: ${e.message}`))
       still()
-      sub.push(`Maintenance ${await maintenance(a, typeId, note, still)}`)
+      const { text: opened, made, reused } = await maintenance(a, typeId, note, still)
+      sub.push(`Maintenance ${opened}`)
       still()
       let copy: string | undefined
+      let added: string | undefined
       if (!user) sub.push('User note: no User')
       else {
         try {
@@ -737,12 +741,49 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
           still()
           await bridge.appendUserNotes(user.id, line)
           sub.push('User note added')
+          added = line
           copy = undefined
         } catch (e) {
           sub.push(`User note skipped: ${(e as Error).message}`)
         }
       }
-      return { text: cleanText(text), what: held ? `Damaged, from ${from}` : "Damaged (wasn't checked out)", sub, copy }
+      // Undo last (#59 §6), in order: the Asset back as it was (if that fails, nothing else is tried), then the
+      // Maintenance this intake opened, then the User notes line while the notes still end with it.
+      const run = async (current: Asset): Promise<string[]> => {
+        if (current.assignee) throw new Error(`${a.assetTag} is checked out to ${assigneeName(current.assignee)} now`)
+        if (current.statusId !== damaged) throw new Error(`${a.assetTag} is '${current.status}' now`)
+        const mine = session
+        const still = () => { if (mine !== session) throw new Error('Stopped: Settings changed') }
+        const results: string[] = []
+        // A Temp checkout is made one again (its tag back), but a time of day alone doesn't make one: an ordinary Checkout
+        // can have one too. So History says, as for Bulk return's undo: its newest Checkout is the one the intake checked
+        // in. History that can't be read puts back an ordinary Checkout. Snipe-IT may send the checkout email again.
+        let due: string | undefined
+        if (held && expectedCheckin && expectedCheckin.length > 10) {
+          const n = parseWorkflowNote((await bridge.getAsset(a.id).catch(() => null))?.history.find((h) => h.action === 'Checkout')?.note ?? null)
+          still()
+          if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
+        }
+        // Checkout's own last read refuses a label someone set since the intake, so nothing is written over it.
+        if (held) await bridge.checkout(a.id, { targetType: held.type, targetId: held.id, statusId: statusId ?? undefined, fromStatusId: damaged, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Repair intake', due) })
+        else {
+          await bridge.updateStatus(a.id, statusId!)
+          still()
+          await bridge.addAssetNote(a.id, undoNote('Repair intake')).catch((e: Error) => results.push(`Asset note not added: ${e.message}`))
+        }
+        still()
+        if (made !== undefined) await bridge.deleteMaintenance(made).then(() => results.push('Maintenance deleted'), (e: Error) => results.push(`Maintenance not deleted: ${e.message}`))
+        else if (reused) results.push('Maintenance left open: it was open before')
+        still()
+        if (added) await bridge.removeUserNotesLine(user!.id, added).then(() => results.push('User note removed'), (e: Error) => results.push(`User note not removed: ${e.message}`))
+        return results
+      }
+      // Snipe-IT checks out only to a deployable Status Label, so an Asset that was out under another (Pending, or
+      // already Damaged) can't be put back from the list.
+      const undo = held && statusType !== 'deployable'
+        ? `Snipe-IT can't check out an Asset with status '${status}'. Open ${a.assetTag} to put it back by hand.`
+        : { says: held ? `${a.assetTag} checked in as Damaged from ${from}` : `${a.assetTag} marked Damaged`, run }
+      return { text: cleanText(text), what: held ? `Damaged, from ${from}` : "Damaged (wasn't checked out)", undo, sub, copy }
     }
     const says = [
       held ? `Check in from ${from}, mark Damaged` : 'Mark Damaged, add the note to its History',
