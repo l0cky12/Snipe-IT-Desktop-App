@@ -43,6 +43,8 @@ const users = Array.from({ length: 64 * scale }, (_, i) => {
   return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), employee_num: i % 10 === 9 ? null : `E-${2001 + i}`, email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i), activated: i % 13 !== 5 }
 })
 const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
+// An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
+const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
 // Activity times are local, as Snipe-IT sends them in its own timezone.
 const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().replace('T', ' ').slice(0, 19)
@@ -55,7 +57,7 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), employee_number: pick(users, i).employee_num, type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? assigneeOf(pick(users, i), 'user') : assigneeOf(pick(locations.slice(1), i), 'location')
   // A few with no Serial (none or blank), no Asset Model (deleted), or no Location (some of those checked out, which don't count as missing it).
   const noLocation = holder?.type !== 'location' && i % 29 === 11
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
@@ -223,6 +225,8 @@ for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
 lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date >= day(0) && a.next_audit_date.date <= day(30)) }
 lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
+// Snipe-IT's Overdue route: checked out and due before now, a date-only Expected Checkin from its midnight; never Archived Assets.
+lists['hardware/checkins/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => a.assigned_to && a.expected_checkin && a.expected_checkin.datetime < minutesAgo(0) && a.status_label.status_meta !== 'archived') }
 // More Maintenances, after the Damaged ones above, shaped like Snipe-IT v8.7+ (cost as formatted text, the type under maintenance_type): one every few days
 // over the last four months, mostly Repairs, the newest still open.
 const maintenanceTypes = ['Repair', 'Repair', 'Repair', 'Upgrade', 'Software Support']
@@ -313,7 +317,7 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/audit\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|imports\/process\/\d+)$/, ['POST']],
@@ -423,7 +427,9 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
+      // Checked in, status_meta is the label's own type again (a kept "Deployed" label reads deployable), as in Snipe-IT.
+      const label = statuses.find((s) => s.id === body.status_id) ?? a.status_label
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: { ...label, status_meta: label.status_type }, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
       const other = body.checkout_to_type === 'asset' && assets.find((x) => x.id === body.assigned_asset && x.id !== a.id)
       const target = other ? { id: other.id, name: other.name } : body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
@@ -431,7 +437,7 @@ createServer(async (req, res) => {
       // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
       const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
       if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
-      a.assigned_to = { ...target, ...(target.employee_num !== undefined && { employee_number: target.employee_num }), type: body.checkout_to_type }
+      a.assigned_to = assigneeOf(target, body.checkout_to_type)
       a.last_checkout = { datetime: local(new Date()), formatted: day(0) }
       a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)

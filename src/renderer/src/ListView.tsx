@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, actionLabel, ASSET_VIEWS, lateness, BULK_FORMS, DELETE_KINDS, LIST_PAGE, LIST_SORTS, MISSING_FIELDS, REPORT_MAX, toSummary, type Asset, type MissingField, type AssetView, type AuditOptions, type BulkKind, type Can, type DeleteKind, type AssetSummary, type ListKind, type ListPage, type ListQuery, type ListRows, type OtherKind, type RecordKind, type EditKind, type StatusLabel } from '../../main/snipeit'
 import { editable } from './RecordView'
 import { AssetSheet, AuditForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { OutcomeText, type BatchAction, type Outcome } from './BatchView'
@@ -15,8 +15,16 @@ export const listName: Record<ListKind, string> = {
   manufacturers: 'Manufacturers', suppliers: 'Suppliers', departments: 'Departments', companies: 'Companies', statuslabels: 'Status Labels',
 }
 // What a List shows in a cell instead of its text (LIST_COLUMNS' text, which Export writes): the status as a chip, a note set off.
+// An Asset's Status flags it Temp (marked on the All View) and Overdue; a Damaged one's Status Label, named as the Damaged
+// View finds it, is itself the flag.
 const CELLS: { [K in ListKind]?: { [C in keyof ListRows[K]]?: (row: ListRows[K]) => ReactNode } } = {
-  assets: { status: (a) => <StatusChip asset={a} /> },
+  assets: {
+    status: (a) => <>
+      {a.status.trim().toLowerCase() === ASSET_VIEWS.damaged.filter![1].toLowerCase() ? <span className="flag c-red">{a.status}</span> : <StatusChip asset={a} />}
+      {a.temp && <span className="flag c-blue">Temp</span>}
+      {a.overdue && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
+    </>,
+  },
   activity: { note: (r) => r.note && <span className="note">{r.note}</span> },
 }
 /** The keys of the columns that hold numbers (counts like Assets, Seats, Remaining), which right-align. */
@@ -588,6 +596,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           </div>
           {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
           {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
+          {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
           {editing && selection.size > 0 && bulkEditable(kind) && <BulkEditForm kind={kind} count={selection.size} busy={!!bulk?.busy} onApply={editSelection} onCancel={() => setEditing(false)} />}
           {auditing && selection.size > 0 && (
             <section className="list-panel" aria-label="Audit Assets">
