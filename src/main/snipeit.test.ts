@@ -3,6 +3,7 @@ import { allMatching } from '../renderer/src/ListView'
 import { BULK_FORMS, createSnipeIt, filled, fromWire, healthLines, lateness, markdownOf, overdueList, toWire, type AssetView, type CheckoutOptions, type Dashboard } from './snipeit'
 import { toCsv } from './export'
 import { reportRunner } from './scheduler'
+import { userNotesLine } from './notes'
 
 const config = { baseUrl: 'https://snipe.example.org', apiKey: 'test-key' }
 
@@ -70,7 +71,9 @@ function fakeFetch(routes: Record<string, { status?: number; body: unknown }>) {
     requests.push({ method, path, body: init?.body instanceof FormData ? init.body : init?.body ? JSON.parse(String(init.body)) : undefined })
     const routedOtherwise = Object.keys(routes).some((k) => k.replace(/^[A-Z]+ /, '') === path)
     const route = routes[method === 'GET' ? path : `${method} ${path}`] ?? { status: 404, body: routedOtherwise ? noEndpoint : notFound }
-    return new Response(JSON.stringify(route.body), { status: route.status ?? 200 })
+    // A function body answers each request afresh (a server whose data changes between calls).
+    const body = typeof route.body === 'function' ? route.body() : route.body
+    return new Response(JSON.stringify(body), { status: route.status ?? 200 })
   }
   return { fetch: fetch as typeof globalThis.fetch, calls, requests, queries }
 }
@@ -2400,6 +2403,114 @@ describe('updateStatus', () => {
     const refused = { status: 'error', messages: { status_id: ['That status is not deployable.'] }, payload: null }
     const { fetch } = fakeFetch({ 'PATCH /hardware/4812': { body: refused } })
     await expect(createSnipeIt(config, fetch).updateStatus(4812, 3)).rejects.toThrow('That status is not deployable.')
+  })
+})
+
+describe('Repair intake', () => {
+  const denied = { status: 403, body: { status: 'error', messages: 'This action is unauthorized.' } }
+  const repairType = { id: 4, name: 'Repair', tag_color: null }
+
+  it('"(by <Operator>)" is the display name, else the name, else the username, from /users/me', async () => {
+    const me = (body: object) => createSnipeIt(config, fakeFetch({ '/users/me': { body: { id: 900, username: 'dtech', ...body } } }).fetch).operatorName()
+    expect(await me({ display_name: 'D. Tech', name: 'Demo Tech' })).toBe('D. Tech')
+    expect(await me({ display_name: null, name: 'Demo Tech' })).toBe('Demo Tech')
+    expect(await me({ display_name: '', name: '' })).toBe('dtech')
+    await expect(me({ display_name: null, name: '', username: '' })).rejects.toThrow("couldn't read your name from Snipe-IT")
+  })
+
+  describe('the Maintenance type for repairs', () => {
+    it("is Snipe-IT's Repair type when the key can read Maintenance types", async () => {
+      const { fetch, calls, queries } = fakeFetch({ '/maintenance-types': { body: { total: 2, rows: [{ id: 3, name: 'Repairable parts' }, { id: 4, name: 'repair' }] } } })
+      expect(await createSnipeIt(config, fetch).repairTypeId(9)).toBe(4)
+      expect(calls).toEqual(['/maintenance-types'])
+      expect(queries[0]).toMatchObject({ search: 'Repair' })
+    })
+
+    it("on a 403 or no match, any existing Repair Maintenance's type", async () => {
+      const found = { body: { total: 2, rows: [{ id: 50, maintenance_type_details: { id: 2, name: 'Upgrade' } }, { id: 51, maintenance_type_details: repairType }] } }
+      for (const types of [denied, { body: { total: 0, rows: [] } }]) {
+        const { fetch, calls, queries } = fakeFetch({ '/maintenance-types': types, '/maintenances': found })
+        expect(await createSnipeIt(config, fetch).repairTypeId(9)).toBe(4)
+        expect(calls).toEqual(['/maintenance-types', '/maintenances'])
+        expect(queries[1]).toMatchObject({ search: 'Repair' })
+      }
+    })
+
+    it('otherwise the Settings id; with none of them, null', async () => {
+      const { fetch, calls } = fakeFetch({ '/maintenance-types': denied, '/maintenances': { body: { total: 0, rows: [] } } })
+      expect(await createSnipeIt(config, fetch).repairTypeId(9)).toBe(9)
+      expect(calls).toEqual(['/maintenance-types', '/maintenances'])
+      expect(await createSnipeIt(config, fetch).repairTypeId(null)).toBeNull()
+    })
+  })
+
+  it("an Asset's open Maintenances, each with its type", async () => {
+    const { fetch, queries } = fakeFetch({ '/maintenances': { body: { total: 2, rows: [{ id: 51, maintenance_type_details: repairType }, { id: 52, maintenance_type_details: null }] } } })
+    expect(await createSnipeIt(config, fetch).openMaintenances(4812)).toEqual([{ id: 51, type: { id: 4, name: 'Repair' } }, { id: 52, type: null }])
+    expect(queries[0]).toMatchObject({ asset_id: '4812', completed: 'false' })
+  })
+
+  it('opens a Maintenance and gives back its id', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /maintenances': { body: { status: 'success', messages: 'Created.', payload: { id: 61 } } } })
+    const input = { assetId: 4812, typeId: 4, name: 'NOMMA-004812 damaged', startDate: '2026-10-11', notes: '[Repair intake] cracked screen' }
+    expect(await createSnipeIt(config, fetch).createMaintenance(input)).toBe(61)
+    expect(requests).toEqual([{ method: 'POST', path: '/maintenances', body: { asset_id: 4812, maintenance_type_id: 4, name: 'NOMMA-004812 damaged', start_date: '2026-10-11', notes: '[Repair intake] cracked screen' } }])
+    const refused = fakeFetch({ 'POST /maintenances': { body: { status: 'error', messages: { maintenance_type_id: ['The selected maintenance type id is invalid.'] }, payload: null } } })
+    await expect(createSnipeIt(config, refused.fetch).createMaintenance(input)).rejects.toThrow('The selected maintenance type id is invalid.')
+  })
+
+  it("adds a note to an Asset's History", async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /notes/4812/store': { body: { status: 'success', messages: 'Note added', payload: { note: 'x', item_id: 4812 } } } })
+    await createSnipeIt(config, fetch).addAssetNote(4812, '[Repair intake] cracked screen')
+    expect(requests).toEqual([{ method: 'POST', path: '/notes/4812/store', body: { note: '[Repair intake] cracked screen' } }])
+  })
+
+  describe("the User notes line: a safe read-modify-write of the User's notes", () => {
+    const line = userNotesLine('2026-10-11', 'NOMMA-004812', 'cracked screen', 'D. Tech')
+    // A User whose notes the server keeps between calls; patch() can change them as another Operator would.
+    function user(notes: string | null, patch = (sent: string) => sent) {
+      let kept = notes
+      const fake = fakeFetch({
+        '/users/311': { body: () => ({ id: 311, name: 'Avery Testwell', notes: kept }) },
+        'PATCH /users/311': { body: () => (kept = patch((fake.requests.at(-1)!.body as { notes: string }).notes), { status: 'success', messages: 'Updated.', payload: {} }) },
+      })
+      return fake
+    }
+
+    it('reads the notes, writes them back with the line after, and re-reads to check', async () => {
+      const { fetch, requests } = user('Loaner agreement on file.\n[2026-09-02] [NOMMA-000777] damaged – bent hinge (by D. Tech)')
+      await createSnipeIt(config, fetch).appendUserNotes(311, line)
+      expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /users/311', 'PATCH /users/311', 'GET /users/311'])
+      expect(requests[1].body).toEqual({ notes: `Loaner agreement on file.\n[2026-09-02] [NOMMA-000777] damaged – bent hinge (by D. Tech)\n${line}` })
+    })
+
+    it('empty notes become just the line', async () => {
+      const { fetch, requests } = user(null)
+      await createSnipeIt(config, fetch).appendUserNotes(311, line)
+      expect(requests[1].body).toEqual({ notes: line })
+    })
+
+    it('refuses notes holding markup Snipe-IT rendered, without writing', async () => {
+      for (const notes of ['See <a href="https://example.org/form">the form</a>', 'Asked <em>twice</em>', 'one<br />two']) {
+        const { fetch, requests } = user(notes)
+        await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("the User's notes have formatting the app can't keep")
+        expect(requests.map((r) => r.method)).toEqual(['GET'])
+      }
+    })
+
+    it("a key that can't edit Users (403) is refused once, never retried", async () => {
+      const { fetch, requests } = fakeFetch({ '/users/311': { body: { id: 311, notes: '' } }, 'PATCH /users/311': denied })
+      await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("your Snipe-IT account can't edit Users")
+      expect(requests.map((r) => r.method)).toEqual(['GET', 'PATCH'])
+    })
+
+    it('a re-read that no longer starts with the old notes and ends with the line is reported, never retried', async () => {
+      for (const other of [(sent: string) => sent.replace('Loaner', 'Returned'), (sent: string) => `${sent}\nCalled home`]) {
+        const { fetch, requests } = user('Loaner agreement on file.', other)
+        await expect(createSnipeIt(config, fetch).appendUserNotes(311, line)).rejects.toThrow("someone else changed the User's notes at the same time; check them for the line")
+        expect(requests.map((r) => r.method)).toEqual(['GET', 'PATCH', 'GET'])
+      }
+    })
   })
 })
 
