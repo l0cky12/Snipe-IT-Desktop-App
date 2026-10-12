@@ -133,6 +133,8 @@ export function App() {
   const [panel, setPanel] = useState<Panel | null>(null)
   // Set when an open docks in the Asset panel, which then takes focus instead of the Scan box.
   const docking = useRef(false)
+  // The last panel n handed out; never reused, so work begun on a closed panel can't match one reopened on the same Asset.
+  const panelN = useRef(0)
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
@@ -223,7 +225,7 @@ export function App() {
     if (isStale()) return
     if (opensAt(view, showSettings).docked) {
       docking.current = true
-      setPanel((p) => ({ asset: full, form, n: (p?.n ?? 0) + 1 }))
+      setPanel({ asset: full, form, n: ++panelN.current })
     } else {
       setShowSettings(false)
       setAsset(full)
@@ -345,7 +347,8 @@ export function App() {
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
-  const refreshPanel = (id: number, n = panel?.n) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }), n)), (e: Error) => setMessage({ text: e.message, error: true }))
+  // n: the panel's open as the Bulk Action began, so a newer open (of the same Asset too) stays.
+  const refreshPanel = (id: number, n: number) => window.snipeIt.getAsset(id).then((full) => { const next = ++panelN.current; setPanel((p) => ifShowing(p, id, () => ({ asset: full, n: next }), n)) }, (e: Error) => setMessage({ text: e.message, error: true }))
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))

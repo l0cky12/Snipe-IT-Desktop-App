@@ -103,9 +103,13 @@ export function listKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | '
     default: return null
   }
 }
-/** Whether ↑/↓ take the Asset panel along: while it shows, or while an open is still loading (the first, before any panel shows),
- * so that open can't land after and pull the focused row back. */
-export const cursorOpens = (shown: boolean, opening: boolean) => shown || opening
+/** Whether ↑/↓ take the Asset panel along and Esc closes it: while it shows, or while an open is still loading (the first, before
+ * any panel shows), so that open can't land after and pull the focused row back, or open a panel the Operator dismissed. */
+export const panelLive = (shown: boolean, loading: boolean) => shown || loading
+/** The panel's Asset to reload when a Bulk Action ends: only the open that showed as the run began (n), and only if the run changed
+ * it without deleting it. An open made mid-run (a Quick Action's form) is newer and keeps its inputs. */
+export const panelToRefresh = (startN: number | undefined, panel: { n: number; id: number } | null, run: { deletes?: true; records: { id: number }[] } | null) =>
+  panel && panel.n === startN && !run?.deletes && run?.records.some((r) => r.id === panel.id) ? panel.id : undefined
 /** The row focused after ↑ (-1) or ↓ (1): the next one on the page, stopping at either end; from none, the first or the last. */
 export function moveCursor(ids: number[], at: number | null, by: -1 | 1): number | null {
   if (!ids.length) return null
@@ -186,7 +190,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // A lookup or open still loading, which ↑/↓ supersede.
   panelLoading: boolean
   // When a Bulk Action ends: reload the panel's Asset, or close the panel after a delete; neither cancels an open still loading.
-  onRefreshPanel: (id: number) => void
+  onRefreshPanel: (id: number, n: number) => void
   onDropPanel: (id: number) => void
   // App runs a Bulk Action, so leaving the List mid-run loses nothing; its panel shows on the List it acts on.
   bulk: (BulkRun & BulkAction) | null
@@ -249,11 +253,14 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   // The List refreshes when its run ends (finished or stopped), and so does the Asset panel if the run included its Asset.
   const running = !!mine?.busy
   const wasRunning = useRef(running)
+  // The panel's open (n) as the run began.
+  const startN = useRef<number>(undefined)
   useEffect(() => {
+    if (!wasRunning.current && running) startN.current = panel?.n
     if (wasRunning.current && !running) {
       setReloads((n) => n + 1)
-      const shown = panel?.sheet.asset.id
-      if (shown !== undefined && !mine?.deletes && mine?.records.some((r) => r.id === shown)) onRefreshPanel(shown)
+      const shown = panelToRefresh(startN.current, panel && { n: panel.n, id: panel.sheet.asset.id }, mine)
+      if (shown !== undefined) onRefreshPanel(shown, startN.current!)
     }
     wasRunning.current = running
   }, [running])
@@ -430,7 +437,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       if (next === null) return
       setCursor(next)
       // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
-      if (cursorOpens(!!panel, panelLoading)) onOpenAsset(next)
+      if (panelLive(!!panel, panelLoading)) onOpenAsset(next)
     } else if (k === 'open') {
       if (cursor === null || !ids.includes(cursor)) return
       onOpenAsset(cursor)
@@ -438,7 +445,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
       // The focused row, which the panel follows (and which ↑/↓ move before the panel catches up); with none, the panel's Asset (a scan, then Space).
       if (!tickRow(rows.find((r) => r.id === cursor) ?? panelRow())) return
     } else if (k === 'close') {
-      if (!panel) return
+      if (!panelLive(!!panel, panelLoading)) return
       onClosePanel()
     } else return
     e.preventDefault()
