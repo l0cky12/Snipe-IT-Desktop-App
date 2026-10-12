@@ -6,6 +6,8 @@
 // 429 (too many requests, with Retry-After: MOCK_RETRY_AFTER seconds, 23 unless set; set it empty to send none),
 // 503 (the proxy can't reach Snipe-IT), or hang (never answers, so the app's timeout fires).
 // MOCK_ALL_AUDITED=1 moves every next audit date at least 40 days ahead, so nothing is Audit late or Audit due.
+// It also stands in for GitHub's latest Snipe-IT release (v8.8.1, a patch past its /version), so the app never asks GitHub:
+// start the app from source with SNIPEIT_RELEASES_URL=http://127.0.0.1:<port>/repos/grokability/snipe-it/releases/latest.
 // ponytail: covers only the endpoints and filters the app uses; changes live in memory until it stops.
 // It answers any number of requests at once, where a real server has a few workers; parallel requests look better here.
 import { createServer } from 'node:http'
@@ -20,9 +22,10 @@ const named = (list) => list.map((name, i) => ({ id: i + 1, name }))
 const pick = (list, n) => list[n % list.length]
 
 const statuses = [
-  ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['In Repair', 'undeployable', '#d29922'],
-  ['Damaged', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
-].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_meta, color }))
+  ['Ready to Deploy', 'deployable', '#2ea043'], ['Deployed', 'deployed', '#388bfd'], ['Damaged', 'undeployable', '#d29922'],
+  ['Broken', 'undeployable', '#e5534b'], ['Pending', 'pending', null], ['Archived', 'archived', '#6e7681'],
+// status_type is the label's own type; status_meta says 'deployed' for a deployable label on a checked-out Asset.
+].map(([name, status_meta, color], i) => ({ id: i + 1, name, status_type: status_meta === 'deployed' ? 'deployable' : status_meta, status_meta, color }))
 const campus = { id: 1, name: 'Main Campus', parent: null, city: 'Springfield' }
 const locations = [campus, ...['Library', 'Room 101', 'Room 204', 'Science Lab', 'Gym', 'Front Office', 'IT Office'].map((name, i) => ({ id: i + 2, name, parent: campus, city: 'Springfield' }))]
 const categories = named(['Chromebook', 'Laptop', 'Projector', 'Tablet'])
@@ -36,11 +39,15 @@ const first = ['Avery', 'Blake', 'Casey', 'Devon', 'Emery', 'Finley', 'Harper', 
 const last = ['Testwell', 'Sampleton', 'Mockford', 'Demoski', 'Fakely', 'Placeholder', 'Example', 'Dummyworth']
 const users = Array.from({ length: 64 * scale }, (_, i) => {
   const [f, l] = [pick(first, i), pick(last, i * 3 + Math.floor(i / 16))]
-  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i) }
+  // A few deactivated Users, some still holding Assets.
+  return { id: i + 1, name: `${f} ${l}`, username: `${f[0]}${l}${i + 1}`.toLowerCase(), employee_num: i % 10 === 9 ? null : `E-${2001 + i}`, email: `${f}.${l}${i + 1}@example.org`.toLowerCase(), department: pick(departments, i), location: pick(locations.slice(1), i), activated: i % 13 !== 5 }
 })
+const prices = [289, 249, 1149.99, 649.5, 349] // per Asset Model
+// An Asset's assigned_to, as Snipe-IT sends it: a User's carries their employee_number.
+const assigneeOf = (target, type) => ({ ...target, ...(type === 'user' && { employee_number: target.employee_num }), type })
 const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
-// A datetime as Snipe-IT sends created_at and last_checkout.
-const stamp = (when) => when.toISOString().replace('T', ' ').slice(0, 19)
+// Activity times are local, as Snipe-IT sends them in its own timezone.
+const local = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().replace('T', ' ').slice(0, 19)
 // Expected Checkin as Snipe-IT v8.7+ sends it: a datetime, with a date-only one at midnight.
 const dueBack = (v) => (v ? { datetime: v.length > 10 ? v : `${v} 00:00:00`, formatted: v } : null)
 // A due time of day some minutes ago, in local time, so the dashboard has Assets Overdue by minutes and hours today.
@@ -50,36 +57,51 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   const model = pick(models, i % 7 ? 0 : i)
   const status = i % 11 === 3 ? statuses[2] : i % 17 === 5 ? statuses[3] : i % 23 === 7 ? statuses[5] : i % 3 === 0 ? statuses[0] : statuses[1]
   const toUser = status.status_meta === 'deployed' && i % 5 !== 0
-  const holder = status.status_meta !== 'deployed' ? null : toUser ? { ...pick(users, i), type: 'user' } : { ...pick(locations.slice(1), i), type: 'location' }
+  const holder = status.status_meta !== 'deployed' ? null : toUser ? assigneeOf(pick(users, i), 'user') : assigneeOf(pick(locations.slice(1), i), 'location')
+  // A few with no Serial (none or blank), no Asset Model (deleted), or no Location (some of those checked out, which don't count as missing it).
+  const noLocation = holder?.type !== 'location' && i % 29 === 11
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
-  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40 + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
+  // Rooms are audited together, so past the next two months some Assets share one of two busy days (the Next major audit).
+  const spread = ((i * 37) % 420) - 40
+  const planned = spread <= 60 ? spread : i % 4 === 1 ? 226 : i % 6 === 2 ? 135 : spread
+  const nextAudit = i % 19 === 0 ? null : planned + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
-    serial: `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
+    serial: i % 41 === 9 ? null : i % 41 === 30 ? '' : `5CD${(2381000 + i * 37).toString(36).toUpperCase()}`, model: i % 97 === 50 ? null : { id: model.id, name: model.name }, model_number: model.model_number, manufacturer: model.manufacturer,
     category: model.category, status_label: status,
-    location: holder?.type === 'location' ? holder : pick(locations.slice(1), i), assigned_to: holder,
+    // A few unassigned Assets have no Location, for the dashboard's No Location bar.
+    location: holder?.type === 'location' ? holder : noLocation || (!holder && i % 13 === 6) ? null : pick(locations.slice(1), i), assigned_to: holder,
     // Like Snipe-IT, a Checkin with no Location moves the Asset here, or to no Location when there's none.
     rtd_location: i % 4 === 2 ? null : pick(locations.slice(1), i + 1),
-    // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
-    last_checkout: holder ? { datetime: stamp(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     purchase_date: { date: day(-400 - i) }, warranty_expires: { date: day(30 + i * 4) }, warranty_months: model.category.name === 'Chromebook' ? '36 months' : null, expected_checkin: holder && i % 9 === 1 ? dueBack(dueOf(i)) : null,
     // Shaped like Snipe-IT v8.7+: last_audit_date is a datetime, next_audit_date a date.
     last_audit_date: nextAudit === null || i % 7 === 2 ? null : { datetime: `${day(nextAudit - 365)} 10:30:00`, formatted: day(nextAudit - 365) },
     next_audit_date: nextAudit === null ? null : { date: day(nextAudit), formatted: day(nextAudit) },
+    // End of life from 90 days past to about 20 months ahead, a few with none.
+    asset_eol_date: i % 13 === 0 ? null : { date: day(((i * 53) % 700) - 90), formatted: day(((i * 53) % 700) - 90) },
+    // Snipe-IT formats money as text ("1,149.99") and sends null for none.
+    purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
+    last_checkout: holder ? { datetime: local(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
 })
+// A checked-out Asset someone set to Pending while it was out: Bulk return checks it in but keeps the label.
+// Snipe-IT's status_meta says 'deployed' for any checked-out Asset; status_type keeps the label's own type.
+assets[1].status_label = { ...statuses[4], status_meta: 'deployed' }
 // The stocked kinds, a few of each.
 const stock = (list) => list.map((r, i) => ({ id: i + 1, notes: null, manufacturer: null, category: null, ...r }))
-const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, notes: 'Renews each July' }])
+// min_amt as Snipe-IT sends it: null when none is set, and for 0 too (its LicensesTransformer). Two are Running out.
+const licenses = stock([{ name: 'Office Suite A3', seats: 300, free_seats_count: 42, min_amt: 20, license_name: 'Main Campus' }, { name: 'Classroom Filter', seats: 500, free_seats_count: 120, min_amt: null, notes: 'Renews each July' },
+  { name: 'Typing Tutor', seats: 30, free_seats_count: 3, min_amt: 5 }, { name: 'Lab Design Suite', seats: 25, free_seats_count: 0, min_amt: null }])
 const accessories = stock([{ name: 'USB-C Charger 65W', model_number: 'CHG-65', qty: 80, remaining_qty: 23 }, { name: 'Wireless Mouse', model_number: 'M-220', qty: 40, remaining_qty: 31, notes: 'For the Library cart' }])
 const consumables = stock([{ name: 'Toner 206A Black', item_no: '206A-BK', qty: 12, remaining: 5 }, { name: 'Copy Paper (case)', item_no: 'PAPER-10', qty: 40, remaining: 31 }])
 const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, remaining: 14 }, { name: '256GB NVMe SSD', serial: null, qty: 10, remaining: 6, notes: 'Chromebook repair spares' }])
 const log = []
-const act = (action_type, asset, target, note = null, when = new Date()) =>
-  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: stamp(when) }, created_by: { id: 900, name: 'Demo Operator' },
+const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
+  log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
     item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
 // A checked-out Asset due at a time of day is a Temp checkout: its current Checkout carries the tag. Except NOMMA-001055,
 // checked in and out again in the web UI since its tagged Checkout; and NOMMA-001037's tag was put back by an undo.
@@ -95,33 +117,86 @@ for (const a of assets.slice(0, 90).reverse()) {
   const action = temp || a.id % 4 ? 'checkout' : a.id % 3 ? 'checkin from' : 'update'
   act(action, a, action === 'update' ? null : a.assigned_to ?? pick(users, a.id), a.id % 6 ? null : 'Charger included', when)
 }
+// Damaged Assets, three ways: taken in by Repair intake with its Repair Maintenance open, taken in without one (its
+// Maintenance step failed, or an Asset that wasn't checked out), or set Damaged by hand in the web UI with neither.
+// One also had a second Repair intake that was undone.
+const maintenances = []
+const maintain = (asset, start, type = 'Repair', completed = null) => maintenances.push({ id: maintenances.length + 1, asset: { id: asset.id, name: asset.name, asset_tag: asset.asset_tag },
+  name: `${asset.asset_tag} damaged`, title: `${asset.asset_tag} damaged`, maintenance_type: type, asset_maintenance_type: '', start_date: { date: day(start), formatted: day(start) }, completed_at: completed && { datetime: `${day(completed)} 15:00:00` } })
+const at = (offset, hour) => new Date(`${day(offset)}T${String(hour).padStart(2, '0')}:00:00Z`)
+const repairs = ['cracked screen', 'won’t power on', 'keyboard missing keys', 'hinge broken', 'water damage', 'charging port loose']
+assets.filter((a) => a.status_label.name === 'Damaged').forEach((a, k) => {
+  const since = -(k * 4 + 2)
+  if (k % 3 === 0) {
+    act('checkin from', a, pick(users, a.id), `[Repair intake] ${pick(repairs, k)}`, at(since, 14))
+    maintain(a, since)
+  } else if (k % 3 === 1) {
+    act('note added', a, null, `[Repair intake] ${pick(repairs, k)}`, at(since, 15))
+    if (k === 1) act('note added', a, null, '[Repair intake] wrong Asset scanned', at(since + 1, 9)), act('note added', a, null, '[Undo] Repair intake', at(since + 1, 10))
+  }
+})
+// Not Damaged-since sources: a finished repair, and an open Maintenance that isn't a repair.
+maintain(assets[1], -60, 'Repair', -50)
+maintain(assets[4], -6, 'Upgrade')
+// Temp checkouts, for Temp checkout history: returned late, on time and by Automatic check-in, one undone, and one whose
+// Bulk return was undone, so it's still out (and Overdue). [ago days, HH:MM] is local time that many days back.
+{
+  const at = (ago, hm) => { const d = new Date(Date.now() - ago * 864e5); d.setHours(...hm.split(':').map(Number), 0, 0); return d }
+  const stamp = (d) => local(d).slice(0, 16)
+  const temp = (a, user, out, due, ...after) => {
+    act('checkout', a, user, `[Temp checkout | due: ${stamp(due)}]`, out)
+    for (const [action, note, when, operator] of after) act(action, a, user, note, when, operator)
+  }
+  const [late, sameDay, onTime, auto, undone] = assets.filter((a) => a.id > 90 && a.status_label.status_meta === 'deployable')
+  const out = assets.find((a) => a.id > 90 && a.assigned_to?.type === 'user')
+  const user = (n) => ({ ...pick(users, n), type: 'user' })
+  temp(late, user(3), at(6, '08:00'), at(6, '14:50'), ['checkin from', '[Bulk return]', at(4, '09:10'), 'Library Desk'])
+  temp(sameDay, user(4), at(5, '08:15'), at(5, '15:00'), ['checkin from', '[Bulk return]', at(5, '15:40')])
+  temp(onTime, user(5), at(4, '10:00'), at(4, '15:00'), ['checkin from', null, at(4, '14:20'), 'Library Desk'])
+  temp(auto, user(6), at(3, '09:30'), at(3, '15:00'), ['checkin from', '[Automatic check-in]', at(3, '15:00')])
+  temp(undone, user(7), at(2, '11:00'), at(2, '15:00'), ['checkin from', '[Undo] Temp checkout', at(2, '11:01')])
+  const due = at(1, '15:00')
+  temp(out, out.assigned_to, at(1, '08:30'), due, ['checkin from', '[Bulk return]', at(1, '15:20')],
+    ['checkout', `[Undo] Bulk return [Temp checkout | due: ${stamp(due)}]`, at(1, '15:22')])
+  out.expected_checkin = dueBack(local(due))
+}
+log.sort((x, y) => y.created_at.datetime.localeCompare(x.created_at.datetime))
 
 const text = (...fields) => fields.filter(Boolean).join(' ').toLowerCase()
 const lists = {
   // Searches the fields and related names real Snipe-IT does (Asset::$searchableRelations), plus custom fields.
-  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
+  hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model?.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
-    status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model.id === +v, category_id: (a, v) => a.category.id === +v,
-    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : !a.assigned_to && a.status_label.status_meta === 'deployable'),
-  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model.name, category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial,
-    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '' } },
+    status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model?.id === +v, category_id: (a, v) => a.category.id === +v,
+    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : !a.assigned_to && a.status_label.status_meta === 'deployable'),
+  }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model?.name ?? '', category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial ?? '',
+    next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
+    purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' }, archived: (a) => a.status_label.status_meta === 'archived' },
   users: { rows: () => users.map((u) => ({ ...u, assets_count: assets.filter((a) => a.assigned_to?.type === 'user' && a.assigned_to.id === u.id).length })), search: (u) => text(u.name, u.username, u.email, u.department.name, u.location.name),
-    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
+    // Like Snipe-IT, username, email and employee_num are exact matches.
+    filters: { location_id: (u, v) => u.location.id === +v, department_id: (u, v) => u.department.id === +v, username: (u, v) => u.username === v, email: (u, v) => u.email === v, employee_num: (u, v) => u.employee_num === v, activated: (u, v) => String(Number(u.activated)) === v }, sorts: { last_name: (u) => u.name.split(' ')[1], username: (u) => u.username, assets_count: (u) => u.assets_count } },
   locations: { rows: () => locations.map((l) => ({ ...l, assets_count: assets.filter((a) => a.location?.id === l.id).length, assigned_assets_count: assets.filter((a) => a.assigned_to?.type === 'location' && a.assigned_to.id === l.id).length, users_count: users.filter((u) => u.location?.id === l.id).length })),
     search: (l) => text(l.name, l.city), filters: {}, sorts: { name: (l) => l.name, assets_count: (l) => l.assets_count } },
-  models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model.id === m.id).length, remaining: assets.filter((a) => a.model.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
+  models: { rows: () => models.map((m) => ({ ...m, assets_count: assets.filter((a) => a.model?.id === m.id).length, remaining: assets.filter((a) => a.model?.id === m.id && !a.assigned_to && a.status_label.status_meta === 'deployable').length })),
     search: (m) => text(m.name, m.model_number, m.manufacturer.name), filters: { category_id: (m, v) => m.category.id === +v }, sorts: { name: (m) => m.name, assets_count: (m) => m.assets_count } },
-  'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: () => true }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
+  'reports/activity': { rows: () => log, search: (r) => text(r.item?.name, r.target?.name, r.note), filters: { action_type: (r, v) => r.action_type === v, item_type: (r, v) => r.item?.type === v, item_id: (r, v) => r.item?.id === +v }, sorts: { created_at: (r) => r.created_at.datetime }, sort: 'created_at' },
+  // Snipe-IT's completed filter: true for completed Maintenances, anything else for open ones.
+  maintenances: { rows: () => maintenances, filters: { completed: (m, v) => !!m.completed_at === (v === 'true'), asset_id: (m, v) => m.asset.id === +v } },
   statuslabels: { rows: () => statuses }, categories: { rows: () => categories }, departments: { rows: () => departments },
-  licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes) }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
+  licenses: { rows: () => licenses, search: (r) => text(r.name, r.license_name, r.notes), sorts: { name: (r) => r.name, seats: (r) => r.seats, free_seats_count: (r) => r.free_seats_count } }, accessories: { rows: () => accessories, search: (r) => text(r.name, r.model_number, r.notes) },
   consumables: { rows: () => consumables, search: (r) => text(r.name, r.item_no, r.notes) }, components: { rows: () => components, search: (r) => text(r.name, r.notes) },
 }
 
 function listPage(spec, q) {
   let rows = spec.rows()
-  const search = q.get('search')?.toLowerCase()
+  // Snipe-IT's structured filter (only its is:null here: none or blank) replaces the search, as Snipe-IT's does.
+  const filter = JSON.parse(q.get('filter') || '{}')
+  for (const [key, v] of Object.entries(filter)) if (v === 'is:null') rows = rows.filter((r) => r[key] == null || r[key] === '')
+  const search = q.get('filter') ? '' : q.get('search')?.toLowerCase()
   if (search && spec.search) rows = rows.filter((r) => spec.search(r).includes(search))
   for (const [key, test] of Object.entries(spec.filters ?? {})) if (q.get(key)) rows = rows.filter((r) => test(r, q.get(key)))
+  // Like Snipe-IT with "show archived in list" off: the plain Asset list leaves Archived Assets out, but status_id or status=Archived lists them.
+  if (spec.archived && !q.get('status_id') && q.get('status') !== 'Archived') rows = rows.filter((r) => !spec.archived(r))
   const by = spec.sorts?.[q.get('sort') ?? spec.sort]
   if (by) rows = [...rows].sort((a, b) => String(by(a)).localeCompare(String(by(b)), undefined, { numeric: true }) * (q.get('order') === 'asc' ? 1 : -1))
   const offset = Number(q.get('offset') ?? 0)
@@ -155,6 +230,22 @@ lists['hardware/audit/due'] = { ...lists.hardware, rows: () => assets.filter((a)
 lists['hardware/audit/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => auditable(a) && a.next_audit_date.date < day(0)) }
 // Snipe-IT's Overdue route: checked out and due before now, a date-only Expected Checkin from its midnight; never Archived Assets.
 lists['hardware/checkins/overdue'] = { ...lists.hardware, rows: () => assets.filter((a) => a.assigned_to && a.expected_checkin && a.expected_checkin.datetime < minutesAgo(0) && a.status_label.status_meta !== 'archived') }
+// More Maintenances, after the Damaged ones above, shaped like Snipe-IT v8.7+ (cost as formatted text, the type under maintenance_type): one every few days
+// over the last four months, mostly Repairs, the newest still open.
+const maintenanceTypes = ['Repair', 'Repair', 'Repair', 'Upgrade', 'Software Support']
+maintenances.push(...Array.from({ length: 24 }, (_, i) => {
+  const a = assets[(i * 41 + 3) % assets.length]
+  const start = -120 + i * 5
+  const time = i % 4 === 1 ? 3 : 6 + (i % 9)
+  const open = start + time > -2
+  const type = pick(maintenanceTypes, i)
+  return {
+    id: maintenances.length + i + 1, asset: { id: a.id, name: a.name, asset_tag: a.asset_tag }, title: `${type === 'Repair' ? pick(['Cracked screen', 'Keyboard replacement', 'Battery swap', 'Hinge repair'], i) : type} for ${a.name}`,
+    maintenance_type: type, asset_maintenance_type: '', supplier: pick(suppliers, i), is_warranty: i % 3 === 0, cost: i % 5 === 4 ? null : (35 + ((i * 173) % 1400) + 0.5 * (i % 2)).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+    start_date: { date: day(start), formatted: day(start) }, completed_at: open ? null : { datetime: `${day(start + time)} 15:20:00`, formatted: day(start + time) },
+    completed_by: open ? null : { id: 900, name: 'Demo Operator' }, asset_maintenance_time: open ? 0 : time, created_by: { id: 900, name: 'Demo Operator' },
+  }
+}))
 
 // Creating, editing and deleting records, checked the way Snipe-IT checks them (a few of its rules).
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
@@ -181,6 +272,8 @@ function saveRecord(kind, body, row) {
     else if (k.startsWith('_snipeit_')) (target.custom_fields ??= {})[fieldset.fields.find((f) => f.db_column_name === k)?.name ?? k] = { field: k, value: v }
     else if (k === 'expected_checkin') target[k] = dueBack(v)
     else if (/date$|_checkin$/.test(k)) target[k] = v ? { date: v, formatted: v } : null
+    // Snipe-IT keeps a minimum of 0, but sends it back as null, like none set.
+    else if (k === 'min_amt') target[k] = Number(v) || null
     else target[k] = v
   }
   if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
@@ -227,7 +320,9 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+)$/, ['GET']],
+  // GitHub's, outside /api/v1/.
+  [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
   [/^(fieldsets\/\d+\/fields|hardware\/\d+\/check(in|out)|imports\/process\/\d+)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
@@ -296,6 +391,15 @@ createServer(async (req, res) => {
     const errors = Object.fromEntries(rows.flatMap((r, n) => (column >= 0 && r[column] ? [] : [[r.find(Boolean) ?? `Row ${n + 2}`, { [required]: { [required]: [`The ${required.replace(/_/g, ' ')} field is required.`] } }]])))
     return Object.keys(errors).length ? send({ status: 'import-errors', messages: errors, payload: null }, 500) : send({ status: 'success', messages: { redirect_url: '' }, payload: null })
   }
+  // Snipe-IT's User picker: "Last, First (username) - #employee number", Users only.
+  if (path === 'users/selectlist') {
+    const q = (url.searchParams.get('search') ?? '').toLowerCase()
+    const found = users.filter((u) => text(u.name, u.username, u.email, u.employee_num).includes(q)).slice(0, 50)
+    return send({ results: found.map((u) => ({ id: u.id, text: `${u.name.split(' ').reverse().join(', ')} (${u.username})${u.employee_num ? ` - #${u.employee_num}` : ''}`, image: null })), pagination: { more: false } })
+  }
+  // Shaped like GitHub's releases/latest, trimmed to what the app reads.
+  if (path === '/repos/grokability/snipe-it/releases/latest')
+    return send({ tag_name: 'v8.8.1', name: 'v8.8.1', html_url: 'https://github.com/grokability/snipe-it/releases/tag/v8.8.1', draft: false, prerelease: false })
   // Shaped like Snipe-IT v8.8's /version.
   if (path === 'version') return send({ version: 'v8.8.0', build_version: 'v8.8.0-0-gmock', hash_version: 'gmock', full_version: 'v8.8.0 build 0 (gmock)' })
   if (path === 'hardware/labels') {
@@ -326,14 +430,20 @@ createServer(async (req, res) => {
     if (!a) return send({ status: 'error', messages: 'Asset does not exist.' }, 404)
     if (m[2] === 'checkin') {
       act('checkin from', a, a.assigned_to, body.note)
-      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: statuses.find((s) => s.id === body.status_id) ?? a.status_label, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
+      // Checked in, status_meta is the label's own type again (a kept "Deployed" label reads deployable), as in Snipe-IT.
+      const label = statuses.find((s) => s.id === body.status_id) ?? a.status_label
+      Object.assign(a, { assigned_to: null, expected_checkin: null, status_label: { ...label, status_meta: label.status_type }, location: locations.find((l) => l.id === body.location_id) ?? a.rtd_location })
     } else if (m[2] === 'checkout') {
-      const target = body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
+      const other = body.checkout_to_type === 'asset' && assets.find((x) => x.id === body.assigned_asset && x.id !== a.id)
+      const target = other ? { id: other.id, name: other.name } : body.checkout_to_type === 'user' ? users.find((u) => u.id === body.assigned_user) : locations.find((l) => l.id === body.assigned_location)
       if (!target) return fail('Checkout target does not exist.')
-      a.assigned_to = { ...target, type: body.checkout_to_type }
-      a.status_label = statuses[1]
+      // Like Snipe-IT, a Status Label sent with the Checkout must be deployable; checked out, its status_meta reads 'deployed'.
+      const status = body.status_id === undefined ? statuses[1] : statuses.find((s) => s.id === body.status_id && s.status_type === 'deployable')
+      if (!status) return fail({ status_id: ['The selected status id is invalid.'] })
+      a.assigned_to = assigneeOf(target, body.checkout_to_type)
+      a.last_checkout = { datetime: local(new Date()), formatted: day(0) }
+      a.status_label = { ...status, status_meta: 'deployed' }
       a.expected_checkin = dueBack(body.expected_checkin)
-      a.last_checkout = { datetime: stamp(new Date()), formatted: day(0) }
       act('checkout', a, a.assigned_to, body.note)
     } else if (req.method === 'PATCH') {
       const status = statuses.find((s) => s.id === body.status_id)

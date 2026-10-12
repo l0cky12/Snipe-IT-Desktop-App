@@ -204,15 +204,17 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   expect(relaunched.schedules()).toEqual([])
 })
 
-it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts', () => {
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
   const { store } = setup()
   for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
   const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
-  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited'])
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory'])
   expect(ranged).toEqual(RANGED_REPORTS)
   // The Schedule form shows the range choice by the same rule.
   expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
   expect(takesRange({ saved: 'x' })).toBe(false)
+  // The snapshot Reports send what's true at the time.
+  for (const builtIn of ['statusLocation', 'checkedOut'] as const) expect(store.schedules().find((s) => 'builtIn' in s.report && s.report.builtIn === builtIn)?.schedule).not.toHaveProperty('range')
 })
 
 it('refuses a schedule it could not keep', () => {
