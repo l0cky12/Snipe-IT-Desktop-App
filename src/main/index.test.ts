@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailInput, SavedReport } from './config'
 import type { Mail } from './mail'
 import { RELEASES_URL } from './release'
@@ -18,6 +18,12 @@ const request = vi.fn<typeof fetch>()
 let dir: string
 const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false, on: () => {} }
 const openExternal = vi.fn(async (_url: string) => {})
+// The main window's event handlers, the tray menu, and the quit prompt (which answers Cancel unless told otherwise).
+const windowEvents = new Map<string, (e: { preventDefault(): void }) => void>()
+const appEvents = new Map<string, (e: { preventDefault(): void }) => void>()
+let trayMenu: { label: string; click: () => void }[] = []
+const ask = vi.fn<(...args: unknown[]) => number>()
+const quit = vi.fn()
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -29,6 +35,10 @@ beforeEach(async () => {
   vi.resetModules()
   vi.useFakeTimers()
   handlers.clear()
+  windowEvents.clear()
+  appEvents.clear()
+  ask.mockReset().mockReturnValue(1)
+  quit.mockClear()
   send.mockClear()
   openExternal.mockClear()
   request.mockReset().mockImplementation(async (url) => new Response(JSON.stringify(
@@ -40,14 +50,20 @@ beforeEach(async () => {
   nativeTheme.themeSource = 'system'
   dir = mkdtempSync(join(tmpdir(), 'snipe-report-session-'))
   vi.doMock('electron', () => ({
-    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: () => {}, setAppUserModelId: () => {} },
+    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: (name: string, handler: (e: { preventDefault(): void }) => void) => appEvents.set(name, handler), setAppUserModelId: () => {}, quit, isPackaged: false },
     BrowserWindow: class {
       setMenuBarVisibility() {}
       loadFile() {}
       loadURL() {}
-      on() {}
+      on(name: string, handler: (e: { preventDefault(): void }) => void) { windowEvents.set(name, handler) }
       isVisible() { return true }
+      getChildWindows() { return [] }
+      hide() {}
     },
+    dialog: { showMessageBoxSync: ask },
+    Tray: class { setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
+    Menu: { buildFromTemplate: (template: typeof trayMenu) => template },
+    nativeImage: { createFromPath: () => ({}) },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
     nativeTheme,
     // The window's side, for the preload: Electron passes on only a rejection's text, wrapped like this.
@@ -191,4 +207,67 @@ it("gives the window GitHub's latest Snipe-IT release, opens only its release no
   expect(await call('release:latest')).toBeNull()
   // Asked GitHub once: the second check read the day-long cache.
   expect(request.mock.calls.filter(([url]) => String(url) === RELEASES_URL)).toHaveLength(1)
+})
+
+describe('quitting while a Paused Workflow holds scans (#73)', () => {
+  // Whether the window close, or app.quit()'s before-quit, was cancelled.
+  const cancelled = (handler: (e: { preventDefault(): void }) => void) => {
+    const e = { preventDefault: vi.fn() }
+    handler(e)
+    return e.preventDefault.mock.calls.length > 0
+  }
+  const close = () => cancelled(windowEvents.get('close')!)
+  const beforeQuit = () => cancelled(appEvents.get('before-quit')!)
+
+  it('closing the window out of tray mode asks only when scans are waiting, and Cancel keeps the app open', async () => {
+    await call('workflows:unsent', 3)
+    expect(close()).toBe(true)
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "3 scans weren't sent to Snipe-IT. Quit anyway?", buttons: ['Quit', 'Cancel'] })
+    ask.mockReturnValue(0)
+    expect(close()).toBe(false)
+    // Quit was chosen: the app.quit() that follows the last window closing doesn't ask again.
+    expect(beforeQuit()).toBe(false)
+    expect(ask).toHaveBeenCalledTimes(2)
+  })
+
+  it('a moving queue (or none) quits without asking', async () => {
+    await call('workflows:unsent', 0)
+    expect(close()).toBe(false)
+    expect(beforeQuit()).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('Windows logging out never waits on the prompt', async () => {
+    await call('workflows:unsent', 2)
+    windowEvents.get('session-end')!({ preventDefault() {} })
+    expect(beforeQuit()).toBe(false)
+    expect(close()).toBe(false)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it("quitting the app (the tray's Quit, Ctrl+Q) asks too; closing to the tray keeps the scans without asking", async () => {
+    await call('settings:saveBackground', { tray: true, startAtLogin: false })
+    trayMenu.find((i) => i.label === 'Quit')!.click()
+    expect(quit).toHaveBeenCalledTimes(1)
+    await call('workflows:unsent', 1)
+    expect(close()).toBe(true)
+    expect(ask).not.toHaveBeenCalled()
+    expect(beforeQuit()).toBe(true)
+    expect(ask.mock.calls[0].at(-1)).toMatchObject({ message: "1 scan wasn't sent to Snipe-IT. Quit anyway?" })
+    // Still running in the tray, so closing hides the window again.
+    expect(close()).toBe(true)
+    ask.mockReturnValue(0)
+    expect(beforeQuit()).toBe(false)
+    // Quitting now: the window closes for good.
+    expect(close()).toBe(false)
+  })
+
+  it('only takes a whole number of scans from the window', async () => {
+    for (const bad of [-2, 1.5, '4', null]) {
+      await call('workflows:unsent', bad)
+      expect(close()).toBe(false)
+    }
+    expect(ask).not.toHaveBeenCalled()
+  })
 })

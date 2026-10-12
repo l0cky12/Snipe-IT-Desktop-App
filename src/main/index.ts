@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +17,8 @@ const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
+/** unsent: how many scans Paused Workflows are keeping from Snipe-IT, so quitting can ask first. */
+export type WorkflowsApi = { unsent(count: number): Promise<void> }
 
 // A Label PDF in its own window, in Chromium's PDF viewer: its Print button opens the system print dialog, which can also
 // save it as a PDF, as can its Download button. ponytail: Electron 44 can't open that dialog for a PDF by itself
@@ -188,7 +190,7 @@ app.whenReady().then(() => {
   handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
   handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'operatorName', 'repairTypeId', 'openMaintenances', 'createMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'operatorName', 'repairTypeId', 'openMaintenances', 'createMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
@@ -208,9 +210,25 @@ app.whenReady().then(() => {
   // tray quits. Logging out of Windows ends the app without asking.
   let tray: Tray | null = null
   let quitting = false
-  app.on('before-quit', () => { quitting = true })
+  // Windows logging out or shutting down: never held up by the prompt below.
+  win.on('session-end', () => { quitting = true })
+  // Quitting (the tray's Quit, Ctrl+Q, or closing the window out of tray mode) while a Paused Workflow holds scans asks
+  // first (#73); a moving queue quits without asking. In memory only, so quitting loses them.
+  let unsent = 0
+  handle('workflows:unsent', (_e, count: unknown) => { unsent = Number.isSafeInteger(count) && (count as number) > 0 ? count as number : 0 })
+  const quitAnyway = () => {
+    if (!unsent) return true
+    const ask = { type: 'warning' as const, buttons: ['Quit', 'Cancel'], defaultId: 1, cancelId: 1, message: `${unsent} scan${unsent === 1 ? " wasn't" : "s weren't"} sent to Snipe-IT. Quit anyway?` }
+    return (win.isVisible() ? dialog.showMessageBoxSync(win, ask) : dialog.showMessageBoxSync(ask)) === 0
+  }
+  app.on('before-quit', (e) => {
+    if (!quitting && !quitAnyway()) return e.preventDefault()
+    quitting = true
+  })
   win.on('close', (e) => {
-    if (!tray || quitting) return
+    if (quitting) return
+    // Closing the last window quits: asked here, while the window is still there to cancel.
+    if (!tray) return void (quitAnyway() ? (quitting = true) : e.preventDefault())
     e.preventDefault()
     win.getChildWindows().forEach((w) => w.close())
     win.hide()

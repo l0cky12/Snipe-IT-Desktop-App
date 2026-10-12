@@ -2447,6 +2447,15 @@ describe('permissions', () => {
     await expect(createSnipeIt(config, refused.fetch).canManagePermissions()).rejects.toThrow('Something else went wrong.')
   })
 
+  it('a 403 is about the whole key only when /version, which needs no permission, is refused too', async () => {
+    const keyRefused = (route: { status?: number; body: unknown }) => createSnipeIt(config, fakeFetch({ '/version': route }).fetch).keyRefused()
+    expect(await keyRefused({ status: 403, body: { status: 'error', messages: 'Two-factor authentication is required.' } })).toBe(true)
+    expect(await keyRefused({ status: 401, body: { message: 'Unauthenticated.' } })).toBe(true)
+    expect(await keyRefused({ body: { version: 'v8.3.4' } })).toBe(false)
+    const offline = (async () => { throw new TypeError('fetch failed') }) as typeof globalThis.fetch
+    expect(await createSnipeIt(config, offline).keyRefused()).toBe(false)
+  })
+
   it("a User's own permissions (granted or denied, not inherited) and their groups", async () => {
     const user = { id: 311, name: 'Jordan Reyes', permissions: { 'reports.view': '1', 'assets.delete': '-1', 'users.view': '0' }, groups: { total: 1, rows: [{ id: 2, name: 'Library Aides' }] } }
     const { fetch } = fakeFetch({ '/users/311': { body: user } })

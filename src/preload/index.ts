@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
-import type { LabelApi } from '../main/index'
+import type { LabelApi, WorkflowsApi } from '../main/index'
 import type { ReleaseApi } from '../main/release'
 import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
@@ -16,6 +16,7 @@ const call = (name: string) => (...args: unknown[]) =>
 
 const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
+  keyRefused: call('snipeit:keyRefused'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
   assetByTag: call('snipeit:assetByTag'),
@@ -80,6 +81,10 @@ contextBridge.exposeInMainWorld('reports', reports)
 
 const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
 contextBridge.exposeInMainWorld('releases', releases)
+
+const workflows: WorkflowsApi = { unsent: call('workflows:unsent') }
+contextBridge.exposeInMainWorld('workflows', workflows)
+
 const reminder: ReminderApi = {
   onOpen(listener) {
     const opened = () => listener()
