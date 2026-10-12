@@ -65,6 +65,8 @@ button, input, select { font-family: inherit; }
 .nav.sub { padding-left: 20px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
+/* Red, nudged toward the text colour so the page colour reads on it at 4.5:1 in either theme. */
+.badge.paused { background: color-mix(in srgb, var(--red), var(--text) 10%); color: var(--bg); }
 .settings-nav { margin-top: auto; }
 .panel { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
 .panel form { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px; }
@@ -106,14 +108,21 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* Lucide's icons as masks, so the edge color fills them. */
 .list-message::before, .settings-success::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 .notice::before, .ferpa::before { -webkit-mask-image: url(./icons/info.svg); }
+/* A done line, like an Audit's: the notice in green, with a check. */
+.notice.done { --edge: var(--green); }
+.notice.done::before { -webkit-mask-image: url(./icons/circle-check.svg); }
 
 /* Sheet: page header, then content. */
 .sheet { overflow: auto; }
 .empty { color: var(--dim); padding: 72px 40px; text-align: center; font: 500 22px var(--sans); }
-.head { display: flex; align-items: center; gap: 12px; padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 1; flex-wrap: wrap; }
-.head h1 { font: 600 26px/1.15 var(--sans); color: var(--text); margin: 0; flex: 1; letter-spacing: -.01em; }
-.head h1 .sub { display: block; font: 400 14px/1.4 var(--sans); color: var(--dim); margin-top: 2px; }
-.tag { display: inline-block; font: 700 13px/1 var(--mono); background: var(--navy); color: var(--gold); padding: 8px 12px; border-radius: 8px; letter-spacing: .02em; }
+.head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 7px 16px; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 1; flex-wrap: wrap; }
+/* The 44px top bar: the 13px/600 breadcrumb ("Locations / Library", the parent dim), then the page's buttons on the right. */
+/* min-width: 0 lets a long Record name shrink and wrap inside the bar instead of pushing it sideways. */
+.head h1 { min-width: 0; overflow-wrap: anywhere; font: 600 13px/20px var(--sans); padding: 4px 0; color: var(--text); margin: 0; }
+.head h1 .sub { margin-left: 8px; font-weight: 400; color: var(--dim); }
+.head > .actions { margin-left: auto; gap: 6px; }
+/* A form in the top bar (a Report's query, an Asset's Checkin) is the toolbar row under it. */
+.head > form.actions { flex: 1 0 100%; margin: 0 -16px -7px; padding: 8px 16px; border-top: 1px solid var(--line); }
 
 /* Controls: 28px tall, 1px border, 6px corners, one primary per group. */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -125,7 +134,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .actions :disabled { opacity: .45; cursor: default; }
 .actions button.quiet, .quick button { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 500; }
 .actions button.quiet.on, .quick button.on { border-color: var(--primary); color: var(--primary); }
-.checkout { padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); }
+.checkout, .sheet-form { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--side); }
+.sheet-form .checkout { padding: 0; border: 0; background: none; }
 .checkout .actions input:not([type]) { flex: 1; min-width: 160px; }
 .checkout .message.error { margin: 10px 0 0; }
 .targets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -134,25 +144,29 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .targets button:hover, .targets button:focus-visible { border-color: var(--primary); }
 .targets .dim { align-self: center; }
 
-/* Asset facts: a grid of soft tiles. */
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 20px 28px; }
-.cell { padding: 12px 14px; background: var(--side); border-radius: 12px; min-width: 0; overflow-wrap: anywhere; }
-.cell .k { font-size: 12.5px; color: var(--dim); margin-bottom: 4px; }
-.cell span { font-weight: 600; }
-/* The Asset's QR code and barcode, each on a tile; the codes themselves are black on white in both themes, as scanners need. */
-.codes { display: flex; flex-wrap: wrap; gap: 12px; padding: 0 28px 8px; }
-.codes figure { margin: 0; padding: 12px 14px; background: var(--side); border-radius: 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.codes figcaption { font-size: 12.5px; color: var(--dim); }
+/* Facts (a record's fields, an Asset's): a two-column key/value list, a 12px --dim key beside its 13px value, ruled like a table. */
+.facts { display: grid; grid-template-columns: fit-content(220px) minmax(0, 1fr); align-content: start; max-width: 640px; margin: 0; padding: 8px 16px; }
+.facts dt, .facts dd { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 0; border-bottom: 1px solid var(--line2); overflow-wrap: anywhere; }
+.facts dt { padding-right: 24px; font-size: 12px; color: var(--dim); }
+.facts dd { margin: 0; }
+/* An Asset's facts, with its QR code and barcode beside them when there's room. */
+.asset-top { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.asset-top .facts { flex: 1 1 360px; }
+/* The QR code and barcode, each on an 8px card; the codes themselves are black on white in both themes, as scanners need. */
+.codes { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; }
+.codes figure { margin: 0; padding: 12px 16px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.codes figcaption { font-size: 12px; color: var(--dim); }
 .codes .qr { width: 132px; height: 132px; display: block; border-radius: 6px; }
 .codes .barcode { display: block; max-width: 100%; height: 132px; width: auto; border-radius: 6px; }
 .codes .dim { margin: 0; max-width: 220px; text-align: center; }
-.section { padding: 18px 28px 6px; font: 600 16px var(--sans); color: var(--text); }
+.section { padding: 16px 16px 6px; font: 600 13px var(--sans); color: var(--text); }
 .rail .section { font-size: 15px; }
 /* A section title with its own controls beside it (the dashboard Overdue list's Temp only). */
 /* Scrolled to, it clears the sticky page header. */
 .section-bar { display: flex; align-items: baseline; gap: 16px; scroll-margin-top: 80px; }
 .section-bar label { display: inline-flex; align-items: center; gap: 6px; font: 400 13px var(--sans); cursor: pointer; }
 .history .flag { margin-left: 8px; }
+.history td > .flag:first-child { margin-left: 0; }
 
 /* Tables: 28px rows under a 30px header, --line2 row rules, no vertical rules. A cell that wraps (a note, a message) grows the row. */
 .history { border-collapse: collapse; width: 100%; }
@@ -167,10 +181,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* A form in a cell (a Quick Action's, a Report's schedule) still wraps, so a narrow window keeps it usable. */
 .history td :is(form.actions, form .actions) { flex-wrap: wrap; }
 .history td .actions :is(button, select, input) { min-height: 24px; height: 24px; padding: 0 8px; }
-.history .note { display: inline-block; color: var(--text); border: 1.5px solid var(--amber); border-radius: var(--r-pill); padding: 0 9px; font-size: 12.5px; font-weight: 600; line-height: 1.6; }
+.history .note { display: block; color: var(--dim); }
 .history .late { font-weight: 700; }
-.sheet .message.error { margin: 14px 28px; }
-.sheet-status .message { margin: 10px 28px; }
+.sheet .message.error { margin: 10px 16px; }
+.sheet-status .message { margin: 10px 16px; }
 
 /* Inventory Chart: a ledger of thick rounded bars, label | bar | total, segment counts underneath. */
 .chart { display: grid; grid-template-columns: var(--bar-name-w) 1fr auto; column-gap: 14px; align-items: center; padding-top: 6px; font-size: 13.5px; }
@@ -189,9 +203,9 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .bar-error { border-left: 3px solid var(--red); padding-left: 8px; line-height: 20px; margin-bottom: 22px; font-weight: 500; }
 
 /* Dashboard cards: the charts two to a row when there's room for two at 380px, else one; the Inventory Chart full width. */
-.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(380px, calc(50% - 8px)), 1fr)); gap: 16px; padding: 16px 28px 0; }
+.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(380px, calc(50% - 8px)), 1fr)); gap: 16px; padding: 16px 16px 0; }
 .card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 16px; min-width: 0; }
-.card.inventory { margin: 16px 28px 0; }
+.card.inventory { margin: 16px 16px 0; }
 .card > header { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 8px; }
 .card h2 { flex: 1; margin: 0; font: 600 14px var(--sans); color: var(--text); }
 .card > header button { min-height: 28px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--text); font: 500 12.5px var(--sans); cursor: pointer; }
@@ -219,6 +233,31 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .bars g.go { cursor: pointer; }
 .bars g.go:focus-visible { outline: none !important; }
 .bars g.go:focus-visible .hit { stroke: var(--mark); stroke-width: 2; }
+/* Upcoming audits: always the full row. Audit late and Audit due pinned left of today, as status dots with the count in text colour.
+   The Audit due band is a neutral wash: status colours stay off a series chart. The 2px --bg stroke rings each marker (r 5: 8px of blue). */
+.charts > .chart-card.wide { grid-column: 1 / -1; }
+.audit-next { margin: 0 0 6px; color: var(--text); }
+.audit-next .link { font-variant-numeric: tabular-nums; }
+.audit-strip { display: flex; align-items: flex-end; gap: 12px; }
+.audit-now { flex: none; list-style: none; margin: 0 0 22px; padding: 0 12px 0 0; border-right: 1px solid var(--line); display: grid; gap: 2px; }
+.audit-now li { display: flex; align-items: center; min-height: 28px; white-space: nowrap; }
+.audit-now .chip { font-weight: 400; min-height: 24px; }
+.audit-now b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.timeline { flex: 1; min-width: 0; height: 150px; }
+.timeline text { font: 12px var(--sans); font-variant-numeric: tabular-nums; fill: var(--dim); }
+.timeline .tick line { stroke: var(--line2); }
+.timeline .axis { stroke: var(--line); }
+.timeline .due { fill: var(--hover); }
+.timeline .stem { stroke: var(--series-1); stroke-width: 1; opacity: .5; }
+.timeline .day circle { fill: var(--series-1); stroke: var(--bg); stroke-width: 2; }
+.timeline .day circle.ring { fill: none; stroke: none; }
+.timeline .day { cursor: pointer; }
+/* Only each day's .hit area takes the pointer: a marker can spill past its own area into a close neighbour's. */
+.timeline .day :not(.hit) { pointer-events: none; }
+.timeline .day:hover circle:not(.ring) { opacity: .8; }
+.timeline .day:focus-visible { outline: none !important; }
+.timeline .day:focus-visible circle.ring { stroke: var(--mark); stroke-width: 2; }
+.timeline .cap { fill: var(--text); text-anchor: middle; font-weight: 600; font-variant-numeric: tabular-nums; }
 .week-line { position: relative; height: 240px; cursor: pointer; }
 .week-line text { font: 12px var(--sans); }
 .week-line .tick line { stroke: var(--line2); }
@@ -235,7 +274,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .week-line .tip span { color: var(--dim); font-size: 12px; }
 
 /* Health warnings: one line each with the tone as its edge and dot (red: fix now, amber: keep an eye on it), words in text colours. */
-.health { display: grid; gap: 6px; padding: 14px 28px 0; }
+.health { display: grid; gap: 6px; padding: 14px 16px 0; }
 .health-line { --dot: var(--grey); display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0; min-height: 28px; padding: 4px 10px 4px 12px;
                border: 1px solid var(--line); border-left: 3px solid var(--dot); border-radius: var(--r-ctl); color: var(--text); font-size: 13.5px; }
 .health-line::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
@@ -261,7 +300,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .link.mono { font-family: var(--mono); font-size: .93em; color: var(--primary); }
 .link:hover, .link:focus-visible { text-decoration: underline; }
 /* 24px tall to click where it stands alone (a table cell, a field's value), not inside a sentence. */
-:is(td, .cell) > .link { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; }
+:is(td, dd) > .link { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; }
 
 /* Status: a colored dot and the name in the text color, so the words carry the meaning. Late: a red dot. */
 .chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; }
@@ -276,11 +315,9 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .flag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--dot, var(--grey)); border-radius: 4px;
         color: var(--text); font: 600 11.5px/1 var(--sans); white-space: nowrap; }
 
-/* Settings: one card for the connection, one for About, on the paper background. */
-.settings-page { max-width: 760px; margin: 0 auto; padding: 36px 44px 48px; }
-.settings-page header { margin-bottom: 20px; }
-.settings-page h1 { font: 600 36px/1.1 var(--sans); color: var(--text); margin: 0 0 6px; letter-spacing: -.01em; }
-.settings-page h2 { font: 600 20px var(--sans); color: var(--text); margin: 0 0 4px; }
+/* Settings: one column at most 640px wide, each section a card. */
+.settings-page { max-width: calc(640px + 32px); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.settings-page h2 { font: 600 14px var(--sans); color: var(--text); margin: 0 0 4px; }
 .settings-page p { margin: 4px 0 12px; }
 .settings-page fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* Cards: --bg, a 1px --line border, 8px corners, no shadow. */
@@ -288,7 +325,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page label { display: block; font: 600 12px var(--sans); color: var(--dim); margin: 12px 0 6px; }
 .settings-page input, .settings-page select, .settings-page textarea, .settings-page button { min-height: 28px; font: 13px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 0 10px; transition: border-color var(--fast); }
 .settings-page input, .settings-page select, .settings-page textarea { width: 100%; min-width: 0; }
-.settings-page textarea { font-family: var(--mono); resize: vertical; padding: 6px 10px; }
+.settings-page textarea { font-family: var(--mono); resize: vertical; }
 .settings-page input:focus, .settings-page select:focus, .settings-page textarea:focus { border-color: var(--mark); }
 .settings-page button { cursor: pointer; white-space: nowrap; font: 500 12.5px var(--sans); background: var(--bg); }
 .settings-page button:hover:not(:disabled) { border-color: var(--primary); }
@@ -296,28 +333,25 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .connection-row { display: flex; gap: 10px; }
 .connection-row > div { flex: 1; }
 .settings-page input[readonly] { background: transparent; border-style: dashed; color: var(--dim); }
-.settings-page .hint { font-size: 13px; color: var(--dim); margin: 10px 0 0; }
+.settings-page .hint { font-size: 12px; color: var(--dim); margin: 10px 0 0; }
 .settings-page .check { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; font: 500 13px var(--sans); color: var(--text); }
 .settings-page .check input { flex: none; width: 14px; height: 14px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
 .settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .settings-page .check .inline-time { display: inline-block; width: auto; height: auto; min-height: 28px; margin: -6px 0 0 6px; padding: 0 10px; cursor: text; }
-.settings-footer { display: flex; align-items: center; gap: 16px; padding: 20px 4px; font-size: 13px; }
+.settings-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
-.settings-appearance, .settings-about { margin-top: 20px; }
 .settings-about dl { margin: 12px 0 16px; }
 .settings-about dl div { display: flex; justify-content: space-between; gap: 16px; margin: 8px 0; }
 .settings-about dt { color: var(--dim); }
 .settings-about dd { margin: 0; }
 .settings-page .clear-token { border-color: var(--red); background: transparent; }
-.settings-page .settings-success { margin: 4px 0 12px; }
-.settings-page .message.error { margin: 4px 0 12px; }
+.settings-page :is(.settings-success, .message.error) { margin: 0; }
 
 /* Lists: a 44px top bar, the toolbar (search, filters, the Selection bar), a sortable table, Quick Actions per Asset row, a pager.
    All but the table stay put when a wide List scrolls sideways. */
 .topbar, .list-top, .pager { position: sticky; left: 0; }
 .topbar { min-height: 44px; padding: 3px 16px; gap: 8px; }
-.topbar h1 { flex: none; font: 600 13px/28px var(--sans); letter-spacing: 0; }
 .topbar .actions { margin-left: auto; gap: 6px; }
 .toolbar { gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 /* The Assets Views: a 38px tab bar, the open View underlined with --mark and showing its count. */
@@ -327,6 +361,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .view-tabs button:hover { color: var(--text); }
 .view-tabs button.on { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--mark); }
 .view-tabs .count { color: var(--dim); font-weight: 500; font-size: 12px; }
+/* Between the built-in Views and the Operator's Saved Reports. */
+.view-tabs .tab-sep { align-self: center; flex: none; width: 1px; height: 16px; margin: 0 8px; background: var(--line); }
 .toolbar > input:not(.filter) { flex: 1 1 160px; min-width: 160px; max-width: 360px; }
 .toolbar .filter { flex: 0 1 150px; min-width: 120px; }
 /* The Selection bar: the count, select-all, its Bulk Actions and Clear, at the toolbar's right end; it takes its own row
@@ -334,9 +370,14 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .selection-bar { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .selection-bar > b { font-weight: 600; }
 .list-table td, .list-table th { white-space: nowrap; }
-/* Row states: hover, ticked, and selected (its Quick Action open) with the --mark bar. */
-.list-table tbody tr:not(.quick-form):hover td { background: var(--hover); }
+/* Row states: hover, ticked, focused by ↑/↓ (a --dim bar), and selected (open in the Asset panel) with the --mark bar. */
+.list-table tbody tr:hover td { background: var(--hover); }
 .list-table tr.ticked td { background: var(--selrow); }
+.list-table tr.cursor { scroll-margin: 48px 0 8px; }
+.list-table tr.cursor td { background: var(--hover); }
+.list-table tr.cursor td:first-child { box-shadow: inset 3px 0 0 var(--dim); }
+/* ↑/↓ give the row focus so Enter and Space act on it; its cursor bar shows it, so no ring. */
+.list-table tr:focus-visible { outline: none !important; }
 .list-table tr.sel td { background: var(--hover); }
 .list-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--mark); }
 .list-table td.tick, .list-table th.tick { width: 1%; padding: 0; }
@@ -356,26 +397,35 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .quick button { height: 24px; font: 500 12.5px var(--sans); padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; margin-right: 4px; transition: border-color var(--fast); }
 .quick button:hover:not(:disabled) { border-color: var(--primary); }
 .quick button:disabled { opacity: .35; cursor: default; }
+/* The Assets List with the Asset panel docked on its right: each scrolls on its own, so the List keeps its place. */
+.sheet:has(> .docked) { display: flex; flex-direction: column; overflow: hidden; }
+.docked { flex: 1; min-height: 0; display: flex; }
+.docked-list { flex: 1; min-width: 0; overflow: auto; }
+.asset-panel { flex: none; width: clamp(340px, 38%, 480px); overflow: auto; border-left: 1px solid var(--line); background: var(--bg); box-shadow: var(--shadow); }
+/* The panel takes focus so its keys work; it isn't a control, so it shows no ring (its buttons do). */
+.asset-panel:focus-visible { outline: none !important; }
+.asset-panel .head > .actions { flex-basis: 100%; }
+.asset-panel .actions { gap: 6px; }
+.asset-panel .notice { margin: 10px 16px 0; }
+.asset-panel .codes { padding: 0 16px 8px; }
+.asset-panel .section { padding: 14px 16px 6px; font-size: 14px; }
 :is(.list-table, .history) .quick-form td { background: var(--side); padding: 10px 16px; white-space: normal; }
 .quick-form .checkout { padding: 0; border: 0; background: none; }
 .list-message { margin: 12px 28px 0; display: inline-block; }
 .pager { justify-content: flex-end; gap: 6px; padding: 8px 16px; }
-.batch td { white-space: nowrap; }
-.batch td[role=status] { white-space: normal; width: 100%; }
 .form-grid.bulk-form { padding: 4px 16px 16px; }
 .bulk-rows { max-height: 40vh; overflow: auto; border-top: 1px solid var(--line); }
 .bulk-rows tr:last-child td { border-bottom: 0; }
+.bulk td { white-space: nowrap; }
+/* Checkout… and Checkin… on a Selection: the form sits in its panel as Edit shared fields' does. */
+.list-panel > fieldset > form { padding: 4px 16px 16px; border: 0; background: none; }
 .bulk td:last-child { white-space: normal; width: 100%; }
 fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .range { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13.5px; }
-.ferpa { margin: 14px 28px 0; font-weight: 400; }
+.ferpa { margin: 10px 16px 0; font-weight: 400; }
 .ferpa p { margin: 0 0 10px; line-height: 1.5; }
-.records { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 20px 28px; }
-.record-kind { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 16px; background: var(--bg); border: 1.5px solid var(--line); border-radius: 14px;
-               color: var(--text); font: 600 15px var(--sans); cursor: pointer; transition: border-color var(--fast); }
-.record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
 .all-fields summary { cursor: pointer; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px 16px; padding: 20px 28px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px 16px; padding: 16px; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
 .form-field.wide { grid-column: 1 / -1; }
 .form-field label { font: 600 12px var(--sans); color: var(--dim); }
@@ -386,53 +436,60 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 /* A field's error: the text color, after a red icon. */
 .field-error { --edge: var(--red); margin: 0; color: var(--text); font-size: 12px; font-weight: 500; }
 .field-error::before { position: static; display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -3px; }
-.record-form .message.error { margin: 14px 28px 0; }
+.record-form .message.error { margin: 10px 16px 0; }
 .confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Red as an outline, not text: no red passes 4.5:1 for text in both themes. The confirm's is heavier. */
 .actions button.danger { background: var(--bg); border-color: var(--red); color: var(--text); }
 .actions button.danger:not(.quiet) { box-shadow: inset 0 0 0 1px var(--red); }
 .choices { display: flex; flex-wrap: wrap; gap: 6px 16px; min-height: 28px; align-items: center; }
 .choices label { display: flex; align-items: center; gap: 6px; min-height: 24px; font: 13px var(--sans); color: var(--text); }
-.access-body { padding: 4px 28px 20px; display: grid; gap: 10px; }
-.access .message { margin: 6px 28px; }
+.access-body { padding: 4px 16px 16px; display: grid; gap: 10px; }
+.access-body .k { font: 600 12px var(--sans); color: var(--dim); }
+.access .message { margin: 6px 16px; }
 /* 24×24 to click, without making the outline taller. */
 .flag .chip-x { all: unset; display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -2px -6px -2px 0; border-radius: 4px; cursor: pointer; font-weight: 700; }
 .flag .chip-x:hover:not(:disabled) { background: var(--hover); }
 .flag .chip-x:disabled { opacity: .45; cursor: default; }
 .permissions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.permission-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 0 28px 28px; }
+.permission-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 0 16px 16px; }
 .permission-areas fieldset { border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 16px; display: grid; gap: 6px; }
 .permission-areas legend { font: 600 14px var(--sans); color: var(--text); padding: 0 6px; }
 .permission-areas label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 /* Something the Operator can't do here and why: not an error, not a success. */
-.notice { margin: 14px 28px 0; font-weight: 400; line-height: 1.5; }
+.notice { margin: 10px 16px 0; font-weight: 400; line-height: 1.5; }
 /* The CSV being imported: its columns' fields, and what Snipe-IT said about the rows. */
-.import-form { display: grid; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); background: var(--side); }
-.sheet .import-form > .actions, .sheet .import-form > .message { margin: 0 28px; }
+.import-form { display: grid; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); background: var(--side); }
+.sheet .import-form > .actions, .sheet .import-form > .message { margin: 0 16px; }
 .import-form label { display: flex; align-items: center; gap: 6px; }
 .import-errors td { white-space: normal; }
-.saved-reports { padding-top: 14px; border-bottom: 1px solid var(--line); }
-.saved-reports h2 { font: 600 16px var(--sans); color: var(--text); margin: 0 28px 6px; }
-.saved-reports > p.dim { margin: 0 28px 14px; font-size: 13.5px; }
+.saved-reports { padding-top: 16px; border-bottom: 1px solid var(--line); }
+.saved-reports h2 { font: 600 13px var(--sans); color: var(--text); margin: 0 16px 6px; }
+.saved-reports > p.dim { margin: 0 16px 12px; }
 .saved-reports .history tr:last-child td { border-bottom: 0; }
 .saved-reports .history td:last-child .actions { justify-content: flex-end; }
 .saved-reports .history td { vertical-align: middle; }
 /* A Report's schedule and last send, or the form changing it. */
 .schedule { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; white-space: normal; }
 
-/* Workflows: the page of cards, and a Workflow's field, Running list and Keys panel. */
-.workflow-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 20px 28px; }
-.workflow-card { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-                 color: var(--text); font: 13px var(--sans); cursor: pointer; transition: border-color var(--fast); }
-.workflow-card:hover, .workflow-card:focus-visible { border-color: var(--primary); }
+/* Workflows: the page of cards, and a Workflow's field, Running list and Keys panel. All records' kinds (and the Permission
+   groups) are the same card as a 28px row, growing when a long name wraps. */
+.workflow-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 16px; }
+.records { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px 12px; padding: 16px; }
+.workflow-card, .record-kind { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card);
+                               color: var(--text); font: 13px var(--sans); cursor: pointer; transition: border-color var(--fast); }
+.workflow-card:hover, .workflow-card:focus-visible, .record-kind:hover, .record-kind:focus-visible { border-color: var(--primary); }
+.record-kind { flex-direction: row; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-weight: 500; }
+.record-kind svg { flex: none; color: var(--dim); }
 .card-title { display: flex; align-items: center; gap: 8px; font: 600 14px var(--sans); }
 .card-title kbd { margin-left: auto; }
 .workflow { display: grid; grid-template-columns: minmax(0, 1fr) 248px; min-height: 100%; }
-.workflow-field { padding: 16px 28px 0; }
+.workflow-field { padding: 16px 16px 0; }
 .workflow-field .search { width: 100%; padding-left: 12px; }
 .workflow-field .message { min-height: 1.4em; }
 .undo-confirm { margin: 4px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--mark); }
-.pick-list { list-style: none; margin: 8px 28px; padding: 0; max-width: 480px; }
+.pause-bar { margin: 4px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: inset 3px 0 0 var(--red); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-weight: 500; }
+.pause-bar .actions { margin-left: auto; }
+.pick-list { list-style: none; margin: 8px 16px; padding: 0; max-width: 480px; }
 .pick-list li { display: flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 6px; cursor: pointer; }
 .pick-list li:hover { background: var(--hover); }
 .pick-list li.sel { background: var(--hover); font-weight: 600; box-shadow: inset 3px 0 0 var(--mark); }
@@ -457,7 +514,19 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .confirm-facts { display: grid; grid-template-columns: repeat(4, minmax(0, auto)); justify-content: start; gap: 4px 24px; margin: 0; }
 .confirm-facts dt { font-size: 12px; color: var(--dim); }
 .confirm-facts dd { margin: 0; }
+/* Repair intake's confirm sits under the field's form, since it has its own note field. */
+.workflow-main > .scan-confirm { margin: 0 28px; }
+.sub-result { display: block; color: var(--dim); }
+/* A done row whose text is a typed note (Repair intake) wraps instead of pushing the table wider; What wraps too, so
+   the result keeps room to read. */
+.running td:last-child .chip { white-space: normal; }
+.running td:last-child { min-width: 220px; }
+.running td:nth-last-child(2) { white-space: normal; }
 .options { margin: 8px 28px; }
 .options summary { cursor: pointer; }
 .options .actions { margin-top: 8px; }
 .running tr.line td { border-top: 1px solid var(--line); }
+/* Audit…'s form, in the Asset sheet or over a Selection. */
+.list-panel > .audit { padding: 8px 16px; }
+.audit > p { margin: 6px 0 0; font-size: 12px; }
+.audit label input { margin-left: 6px; }

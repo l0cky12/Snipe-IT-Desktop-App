@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartRows, fold, weekRows } from './Charts'
+import { chartRows, fold, hitSpans, nextMajorAudit, weekRows } from './Charts'
 
 const label = (id: number | null, name: string, type: string, color: string | null, count: number) => ({ id, name, type, color, count })
 
@@ -34,6 +34,30 @@ describe('dashboard chart rows', () => {
   it('folds nothing when there are N or fewer', () => {
     const rows = chartRows('assets', [label(1, 'Deployed', 'deployable', null, 3), label(2, 'Pending', 'pending', null, 1)])
     expect(fold(rows, 5, 'var(--dim)')).toBe(rows)
+  })
+})
+
+describe('Next major audit', () => {
+  const day = (d: string, n: number) => ({ day: d, assets: Array.from({ length: n }, (_, i) => ({ id: i }) as never) })
+
+  it('is the day with the most Assets due, the earlier day on a tie', () => {
+    expect(nextMajorAudit([day('2026-10-01', 2), day('2027-01-12', 9), day('2027-03-02', 4), day('2027-08-12', 9)])?.day).toBe('2027-01-12')
+  })
+
+  it('is no day when nothing is due', () => {
+    expect(nextMajorAudit([])).toBeUndefined()
+  })
+})
+
+describe('Upcoming audits hit areas', () => {
+  it('on close dates each marker is inside its own day\'s area only, and the areas meet without overlapping', () => {
+    // Consecutive days about 1.6px apart, as on a 600px-wide timeline, then a lone day.
+    const xs = [100, 101.6, 103.2, 300]
+    const spans = hitSpans(xs)
+    xs.forEach((x, i) => expect(spans.filter(([l, r]) => l <= x && x < r).map((s) => spans.indexOf(s))).toEqual([i]))
+    spans.slice(1).forEach(([l], i) => expect(l).toBe(spans[i][1]))
+    expect(spans[0][0]).toBe(88)
+    expect(spans[3][1]).toBe(312)
   })
 })
 

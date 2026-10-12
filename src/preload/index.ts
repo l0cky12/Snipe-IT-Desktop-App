@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
 import { fromWire, type SnipeItBridge } from '../main/snipeit'
-import type { LabelApi } from '../main/index'
+import type { LabelApi, WorkflowsApi } from '../main/index'
+import type { ReleaseApi } from '../main/release'
 import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
@@ -15,6 +16,7 @@ const call = (name: string) => (...args: unknown[]) =>
 
 const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
+  keyRefused: call('snipeit:keyRefused'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
   assetByTag: call('snipeit:assetByTag'),
@@ -25,9 +27,22 @@ const snipeIt: SnipeItBridge = {
   exactUsers: call('snipeit:exactUsers'),
   userSelectlist: call('snipeit:userSelectlist'),
   userCard: call('snipeit:userCard'),
+  supplierSelectlist: call('snipeit:supplierSelectlist'),
+  operatorName: call('snipeit:operatorName'),
+  repairTypeId: call('snipeit:repairTypeId'),
+  openMaintenances: call('snipeit:openMaintenances'),
+  maintenance: call('snipeit:maintenance'),
+  createMaintenance: call('snipeit:createMaintenance'),
+  updateMaintenance: call('snipeit:updateMaintenance'),
+  completeMaintenance: call('snipeit:completeMaintenance'),
+  deleteMaintenance: call('snipeit:deleteMaintenance'),
+  addAssetNote: call('snipeit:addAssetNote'),
+  appendUserNotes: call('snipeit:appendUserNotes'),
+  removeUserNotesLine: call('snipeit:removeUserNotesLine'),
   searchLocations: call('snipeit:searchLocations'),
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
+  audit: call('snipeit:audit'),
   dashboard: call('snipeit:dashboard'),
   health: call('snipeit:health'),
   list: call('snipeit:list'),
@@ -59,7 +74,7 @@ const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
-  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'),
+  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveRepairs: call('settings:saveRepairs'),
   saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }
@@ -67,6 +82,12 @@ contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
+contextBridge.exposeInMainWorld('releases', releases)
+
+const workflows: WorkflowsApi = { unsent: call('workflows:unsent') }
+contextBridge.exposeInMainWorld('workflows', workflows)
 
 const reminder: ReminderApi = {
   onOpen(listener) {

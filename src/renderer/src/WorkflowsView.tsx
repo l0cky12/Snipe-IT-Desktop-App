@@ -1,17 +1,20 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { ArchiveRestore, PackageCheck, Timer, type LucideIcon } from 'lucide-react'
-import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
+import { ArchiveRestore, PackageCheck, PackageOpen, Timer, Wrench, type LucideIcon } from 'lucide-react'
+import { cleanText, WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import { dueLabel } from '../../main/calendar'
+import { localDate } from '../../main/export'
 import type { StatusLabel } from '../../main/snipeit'
-import { OutcomeText } from './BatchView'
-import { assigneeName, cleanTag, type BulkCheckout, type BulkReturn, type Row } from './workflows'
+import { OutcomeText } from './ListView'
+import { assigneeName, cleanTag, fieldKey, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type IncomingRepair, type RepairIntake, type Row, type Runner } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
-export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Temp checkout']
-export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk checkout': PackageCheck, 'Bulk return': ArchiveRestore, 'Temp checkout': Timer }
+export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout']
+export const workflowIcon: Partial<Record<Workflow, LucideIcon>> = { 'Bulk checkout': PackageCheck, 'Bulk return': ArchiveRestore, 'Repair intake': Wrench, 'Incoming repair': PackageOpen, 'Temp checkout': Timer }
 const about: Partial<Record<Workflow, string>> = {
   'Bulk checkout': 'Find a User, then scan Assets and confirm each to check it out to them.',
   'Bulk return': 'Pick where returns go, then scan Assets to check them in.',
+  'Repair intake': 'Scan a broken Asset, say what happened, then check it in as Damaged and open a repair Maintenance.',
+  'Incoming repair': 'Scan an Asset back from repair, then make it Ready to Deploy and close its repair Maintenance.',
   'Temp checkout': 'Lend Assets to a User for the rest of the school day, due back at the end-of-day time.',
 }
 export const shortcut = (w: Workflow) => `Ctrl ${WORKFLOWS.indexOf(w) + 1}`
@@ -68,25 +71,28 @@ function KeysPanel({ keys, hint }: { keys: [key: string, does: string][]; hint: 
 export const UNDO_KEY = 'Ctrl Z'
 const UNDO_TIP = `${UNDO_KEY}: puts the newest done row back. Snipe-IT's History keeps both entries, emails it already sent stay sent, and the undo may send another.`
 
-// One Workflow's Running list, newest first, with Undo last and Clear. what: the Workflow's "what" cell for a row.
-// undoBlocked, clearBlocked: why each button is off ('' when it isn't).
-export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocked, onUndo, onOpenAsset, onClear }: {
+// One Workflow's Running list, newest first, with Undo last (when the Workflow has it) and Clear. what: the Workflow's
+// "what" cell for a row. undoBlocked, clearBlocked: why each button is off ('' when it isn't).
+export function RunningList<C>({ rows, paused, doneLabel, what, undoBlocked, clearBlocked, onUndo, onOpenAsset, onClear }: {
   rows: Row<C>[]
+  paused: boolean
   doneLabel: string
   what: (r: Row<C>) => ReactNode
   undoBlocked: string
   clearBlocked: string
-  onUndo: () => void
+  onUndo?: () => void
   onOpenAsset: (id: number) => void
   onClear: () => void
 }) {
   const done = rows.filter((r) => r.result.state === 'done').length
+  // The row whose line was just copied, and whether it was, so its button says so.
+  const [copied, setCopied] = useState<{ key: number; ok: boolean } | null>(null)
   return (
     <>
       <div className="section running-head">
         <span>{done} {doneLabel}</span>
         <div className="actions">
-          <button className="quiet" disabled={!!undoBlocked} title={undoBlocked ? `${undoBlocked}. ${UNDO_TIP}` : UNDO_TIP} onClick={onUndo}>Undo last</button>
+          {onUndo && <button className="quiet" disabled={!!undoBlocked} title={undoBlocked ? `${undoBlocked}. ${UNDO_TIP}` : UNDO_TIP} onClick={onUndo}>Undo last</button>}
           <button className="quiet" disabled={!!clearBlocked || rows.length === 0} title={clearBlocked || undefined} onClick={onClear}>Clear</button>
         </div>
       </div>
@@ -102,13 +108,18 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
               <td>{r.name || '—'}</td>
               <td>{what(r)}</td>
               <td>
-                {r.result.state === 'waiting' ? <span className="dim">Waiting…</span>
+                {r.result.state === 'waiting' ? <span className="dim">{paused ? 'Waiting (paused)' : 'Waiting…'}</span>
+                  : r.result.state === 'unsure' ? <span className="late">{NOT_SURE}: {r.result.reason}</span>
                   : r.result.state === 'confirm' ? <span className="dim">Waiting for confirm</span>
                   : r.result.state === 'choice' ? <span className="dim">Waiting for a choice</span>
-                  : r.result.state === 'undone' ? <span className="dim">Undone</span>
+                  : r.result.state === 'undone' ? <span className="dim">Undone{r.undoFailed && <>, but <span className="late">{r.undoFailed}</span></>}</span>
                   : r.result.state === 'neutral' ? <span className="dim">{r.result.text}</span>
                   : <OutcomeText outcome={r.result} />}
-                {r.undoFailed && <> <span className="late">Undo failed: {r.undoFailed}</span></>}
+                {(r.result.state === 'done' || r.result.state === 'undone') && r.sub?.map((s) => <span key={s} className="sub-result">{s}</span>)}
+                {r.result.state === 'done' && r.copy && (
+                  <button className="link" title={r.copy} onClick={() => navigator.clipboard.writeText(r.copy!).then(() => setCopied({ key: r.key, ok: true }), () => setCopied({ key: r.key, ok: false }))}>{copied?.key !== r.key ? 'Copy line' : copied.ok ? 'Copied' : "Couldn't copy"}</button>
+                )}
+                {r.undoFailed && r.result.state !== 'undone' && <> <span className="late">Undo failed: {r.undoFailed}</span></>}
               </td>
             </tr>
           ))}
@@ -119,14 +130,39 @@ export function RunningList<C>({ rows, doneLabel, what, undoBlocked, clearBlocke
   )
 }
 
+// Under the field while the queue is Paused (#73): why, what's waiting, and how to carry on. The buttons don't take focus,
+// so scanning carries on into the field. A slow-down counts down and carries on by itself.
+function PauseBar({ runner, onSettings }: { runner: Pick<Runner, 'paused' | 'pending' | 'resume' | 'dropWaiting'>; onSettings: () => void }) {
+  const p = runner.paused
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (p?.kind !== 'rateLimited') return
+    const timer = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(timer)
+  }, [p])
+  if (!p) return null
+  const button = (label: string, onClick: () => void, quiet = true) =>
+    <button key={label} type="button" className={quiet ? 'quiet' : undefined} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{label}</button>
+  const resume = button('Resume', () => runner.resume(), false)
+  const drop = button('Drop waiting', () => runner.dropWaiting())
+  const settings = button('Settings', onSettings)
+  return (
+    <div className="pause-bar" role="group" aria-label="Paused">
+      <span>{pauseSays(p, runner.pending)}</span>
+      <div className="actions">{p.kind === 'rateLimited' ? [drop] : p.kind === 'key' ? [settings, resume, drop] : [resume, drop, settings]}</div>
+    </div>
+  )
+}
+
 // Bulk return (#58). The field is never disabled and takes focus on every step change and when the window comes back,
 // so the scanner's next keystrokes always land in it.
-export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: {
+export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone, onSettings }: {
   flow: BulkReturn
   locations: StatusLabel[]
   field: RefObject<HTMLInputElement | null>
   onOpenAsset: (id: number) => void
   onDone: () => void
+  onSettings: () => void
 }) {
   const [text, setText] = useState('')
   const [status, setStatus] = useState('')
@@ -203,6 +239,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
             {...(!here && { role: 'combobox', 'aria-expanded': true, 'aria-controls': 'return-locations', 'aria-activedescendant': shown[hi] ? `return-location-${shown[hi].id}` : undefined })}
           />
           <p className="message" role="status">{status}</p>
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
           {confirm && (
             // In place under the field, which keeps focus so no scan is lost; the buttons don't take it either.
             <div className="actions undo-confirm" role="group" aria-label="Undo last">
@@ -213,7 +250,7 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
           )}
         </form>
         {here ? (
-          <RunningList rows={flow.runner.rows} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+          <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="checked in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
             what={(r) => (
               <>
                 {/* A row's Location shows only when it differs from the current one (after Change Location). */}
@@ -247,10 +284,11 @@ export function BulkReturnView({ flow, locations, field, onOpenAsset, onDone }: 
 // Bulk checkout (#57), and Temp checkout (#61 §7) on the same steps with a due time in the header. Step 1 finds the User (exact match on Enter, else Snipe-IT's picker list as the Operator types);
 // step 2 scans Assets for them, each confirmed in place under the field, which keeps focus so no scan is lost. Someone
 // else's Asset opens a choice there instead: Move to this User (a click, or Tab then Enter) or Stop (Esc).
-export function BulkCheckoutView({ flow, field, onOpenAsset }: {
+export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   flow: BulkCheckout
   field: RefObject<HTMLInputElement | null>
   onOpenAsset: (id: number) => void
+  onSettings: () => void
 }) {
   const [text, setText] = useState('')
   const [status, setStatus] = useState('')
@@ -275,9 +313,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   typed.current = q
   const shown = !user && list?.q === q ? list.users : []
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
+  // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
   useEffect(() => {
     setText(''); setList(null); setMoved(null); setEditing(null); field.current?.focus()
-  }, [step])
+  }, [fieldKey(step)])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
     flow.runner.enter()
@@ -410,6 +449,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             {...(!user && { role: 'combobox', 'aria-expanded': shown.length > 0, 'aria-controls': 'checkout-users', 'aria-activedescendant': shown[hi] ? `checkout-user-${shown[hi].id}` : undefined })}
           />
           <p className="message" role="status">{status}</p>
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
           {open && a && (
             // The buttons don't take focus when clicked either, so the next scan still lands in the field. A choice's
             // fix-it button is reached with Tab (Enter on the field never picks it); Esc there stops it too.
@@ -465,7 +505,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
             </details>
           </>
         )}
-        <RunningList rows={flow.runner.rows} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
+        <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="checked out" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()}
           what={(r) => (r.line ? <strong>{flow.summary(r)}</strong> : r.what || `To ${r.ctx.user.name}`)} />
         <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
       </div>
@@ -478,6 +518,276 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
         : user
         ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}${temp ? ' until the due time' : ''}.`} />
         : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight'], [UNDO_KEY, 'Undo last']]} hint="Type a name, email or employee number, or scan an ID card." />}
+    </div>
+  )
+}
+
+// Repair intake (#59). The scan field takes each Asset Tag; a scanned Asset's confirm opens under it with the note
+// field, which takes focus (the note is required), and gives it back to the scan field once confirmed or cancelled.
+// Undo last (Ctrl+Z on the empty scan field, or the button) puts the newest intake back.
+export function RepairIntakeView({ flow, field, repairTypeId, onOpenAsset, onSettings }: {
+  flow: RepairIntake
+  field: RefObject<HTMLInputElement | null>
+  /** Settings' Maintenance type for repairs, the last step of the fallback chain. */
+  repairTypeId: number | null
+  onOpenAsset: (id: number) => void
+  onSettings: () => void
+}) {
+  const [text, setText] = useState('')
+  const [note, setNote] = useState('')
+  const [status, setStatus] = useState('')
+  const noteField = useRef<HTMLInputElement>(null)
+  const open = flow.runner.open
+  const key = open?.row.key
+  useEffect(() => {
+    flow.runner.enter()
+    flow.open(repairTypeId)
+    const back = () => document.activeElement === document.body && (noteField.current ?? field.current)?.focus()
+    window.addEventListener('focus', back)
+    return () => (window.removeEventListener('focus', back), flow.runner.leave())
+  }, [])
+  useEffect(() => {
+    setNote('')
+    ;(key ? noteField : field).current?.focus()
+  }, [key])
+  // Text that cleans away to nothing ("***") hasn't said what happened; a link stays, for the write to refuse.
+  const stated = (v: string) => { try { return cleanText(v) ? v : '' } catch { return v } }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setStatus('')
+    // Enter on the empty field confirms the open confirm (or Undo); a scan confirms its own tag, or skips the waiting one.
+    if (!cleanTag(text)) return void (open ? setStatus(flow.runner.confirmOpen()) : flow.runner.confirm && undo())
+    setStatus(flow.scan(text))
+    setText('')
+  }
+  async function submitNote(e?: React.FormEvent) {
+    e?.preventDefault()
+    try { cleanText(note) } catch (err) { return setStatus((err as Error).message) }
+    setStatus(await flow.runner.submitText(stated(note), null))
+    setNote(flow.runner.open?.text ?? '')
+  }
+  function cancel() {
+    flow.runner.cancelOpen()
+    setStatus('')
+  }
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && (open || flow.runner.confirm)) return e.preventDefault(), open ? cancel() : flow.runner.cancelUndo()
+  }
+  // Ctrl+Z only on the empty scan field: in the note field (or with text typed) it's the usual text undo.
+  function onScanKeyDown(e: React.KeyboardEvent) {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+    onKeyDown(e)
+  }
+
+  const a = open?.row.before
+  const undoConfirm = flow.runner.confirm
+  const announce = open && `Confirm ${open.row.tag}: ${open.says}? Say what happened, then Enter. Esc to cancel.`
+  return (
+    <div className="workflow">
+      <div className="workflow-main">
+        <header className="head"><h1>Repair intake<span className="sub">Scan a broken Asset</span></h1></header>
+        <form className="workflow-field" onSubmit={onSubmit}>
+          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onScanKeyDown} placeholder="Scan the Asset Tag of a broken Asset" aria-label="Asset Tag" />
+          {flow.blocked ? <p className="message error" role="alert">{flow.blocked}</p> : <p className="message" role="status">{status}</p>}
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
+          {undoConfirm && (
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
+              <span>{undoConfirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
+        </form>
+        {open && a && (
+          <form className="scan-confirm" aria-label="Confirm repair intake" onSubmit={submitNote}>
+            <div className="confirm-tag mono">{a.assetTag}</div>
+            <dl className="confirm-facts">
+              {([['Name', a.name], ['Asset Model', a.model], ['Status Label', a.status], ['Assignee', a.assignee?.name ?? "Isn't checked out"]] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
+            </dl>
+            <p>→ {open.says}</p>
+            <input ref={noteField} value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(stated(e.target.value)); setStatus('') }} onKeyDown={onKeyDown}
+              placeholder="What happened to the Asset (e.g. cracked screen, won't power on)" aria-label="What happened to the Asset (required)" aria-required="true" />
+            <p className="dim">Describe the Asset, never the student: Snipe-IT keeps this in History for good.</p>
+            <div className="actions">
+              <button type="submit" onMouseDown={(e) => e.preventDefault()}>Confirm</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
+            </div>
+          </form>
+        )}
+        <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="taken in" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
+        <p className="sr-only" aria-live="polite">{announce ?? undoConfirm ?? flow.runner.announce}</p>
+      </div>
+      {open
+        ? <KeysPanel keys={[['Enter', 'Confirm (note required)'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
+        : undoConfirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : <KeysPanel keys={[['Enter', 'Scan'], [UNDO_KEY, 'Undo last']]} hint="Each scanned Asset is confirmed with what happened, then checked in as Damaged and a repair Maintenance opened. Undo last puts the newest one back." />}
+    </div>
+  )
+}
+
+// Incoming repair (#60). "Repaired by" is picked once for everything coming back from that Supplier. The scan field keeps focus through the confirm (scan,
+// then Enter or the same tag again); Tab or a click reaches the Repair cost and Note, where Enter confirms too. An Asset
+// that isn't Damaged opens a choice there instead: Make ready anyway (a click, or Tab to it and Enter) or Stop (Esc).
+export function IncomingRepairView({ flow, field, repairTypeId, onOpenAsset, onSettings }: {
+  flow: IncomingRepair
+  field: RefObject<HTMLInputElement | null>
+  /** Settings' Maintenance type for repairs, the last step of the fallback chain. */
+  repairTypeId: number | null
+  onOpenAsset: (id: number) => void
+  onSettings: () => void
+}) {
+  const [text, setText] = useState('')
+  const [note, setNote] = useState('')
+  const [status, setStatus] = useState('')
+  const [suppliers, setSuppliers] = useState<StatusLabel[]>([])
+  const open = flow.runner.open
+  const key = open?.row.key
+  useEffect(() => {
+    flow.runner.enter()
+    flow.open(repairTypeId)
+    flow.suppliers().then(setSuppliers, (e: Error) => setStatus(`Couldn't load the Suppliers: ${e.message}`))
+    const back = () => document.activeElement === document.body && field.current?.focus()
+    window.addEventListener('focus', back)
+    return () => (window.removeEventListener('focus', back), flow.runner.leave())
+  }, [])
+  // A new confirm starts with an empty note; the scan field has focus again once one opens or closes.
+  useEffect(() => {
+    setNote('')
+    field.current?.focus()
+  }, [key])
+
+  function askUndo() {
+    setStatus(flow.runner.askUndo())
+    field.current?.focus()
+  }
+  function undo() {
+    flow.runner.undo()
+    field.current?.focus()
+  }
+  function cancel() {
+    flow.runner.cancelOpen()
+    setStatus('')
+    field.current?.focus()
+  }
+  const done = (said: string) => (setStatus(said), field.current?.focus())
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setStatus('')
+    // Enter on the empty field confirms the open confirm (never a choice's fix-it button) or the open Undo.
+    if (!cleanTag(text)) return void (open ? setStatus(flow.runner.confirmOpen()) : flow.runner.confirm && undo())
+    setStatus(flow.scan(text))
+    setText('')
+  }
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && (open || flow.runner.confirm)) return e.preventDefault(), open ? cancel() : flow.runner.cancelUndo()
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !text) return e.preventDefault(), askUndo()
+  }
+  // Enter in the Repair cost or Note field confirms with what was typed; a scan landing there is caught as one.
+  async function fieldKey(e: React.KeyboardEvent, submit: () => Promise<string>) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    const said = await submit()
+    if (flow.runner.open?.row.key === key) setStatus(said)
+    else done(said)
+  }
+  function pickSupplier(id: string) {
+    flow.setSupplier(suppliers.find((s) => String(s.id) === id) ?? null)
+    field.current?.focus()
+  }
+
+  const a = open?.row.before
+  const choice = open?.choice
+  const m = flow.found?.open
+  const others = flow.found?.others ?? 0
+  const days = m?.startDate ? Math.max(0, Math.round((Date.parse(localDate(new Date())) - Date.parse(m.startDate)) / 864e5)) : null
+  const undoConfirm = flow.runner.confirm
+  // The Supplier picked stays listed even when the list couldn't be loaded again.
+  const listed = flow.supplier && !suppliers.some((s) => s.id === flow.supplier!.id) ? [flow.supplier, ...suppliers] : suppliers
+  const said = open && (choice
+    ? `${open.row.tag} is ${a?.status}, not Damaged. ${choice.fix}: click it, or Tab to it and Enter. Esc to Stop.`
+    : `Confirm ${open.row.tag}: ${flow.says}? Enter or rescan to confirm, Esc to cancel.`)
+  return (
+    <div className="workflow">
+      <div className="workflow-main">
+        <header className="head">
+          <h1>Incoming repair<span className="sub">Scan each Asset back from repair</span></h1>
+          <div className="actions">
+            <label className="dim">Repaired by{' '}
+              <select value={flow.supplier?.id ?? ''} onChange={(e) => pickSupplier(e.target.value)} aria-label="Repaired by (Supplier)">
+                <option value="">No Supplier</option>
+                {listed.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
+          </div>
+        </header>
+        <form className="workflow-field" onSubmit={onSubmit}>
+          <input ref={field} autoFocus className="search" value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} onKeyDown={onKeyDown} placeholder="Scan the Asset Tag of an Asset back from repair" aria-label="Asset Tag" />
+          {flow.blocked ? <p className="message error" role="alert">{flow.blocked}</p> : <p className="message" role="status">{status}</p>}
+          <PauseBar runner={flow.runner} onSettings={onSettings} />
+          {undoConfirm && (
+            <div className="actions undo-confirm" role="group" aria-label="Undo last">
+              <span>{undoConfirm}</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={undo}>Undo</button>
+              <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.runner.cancelUndo()}>Cancel</button>
+            </div>
+          )}
+        </form>
+        {open && a && (
+          // The buttons don't take focus when clicked, so the next scan still lands in the field.
+          <div className="scan-confirm" role="group" aria-label={choice ? 'Not Damaged' : 'Confirm incoming repair'} onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), cancel())}>
+            {choice && <p>This Asset is <strong>{a.status}</strong>, not Damaged.</p>}
+            <div className="confirm-tag mono">{a.assetTag}</div>
+            <dl className="confirm-facts">
+              {([
+                ['Asset Model', a.model], ['Status Label', a.status],
+                ['Maintenance', m ? `Opened ${m.startDate ?? '(no date)'}${days === null ? '' : `, ${days} day${days === 1 ? '' : 's'} away`}${others ? ` (${others} other open)` : ''}` : 'None open'],
+                ...(m ? [['Intake note', m.notes]] as const : []),
+              ] as const).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '—'}</dd></div>)}
+            </dl>
+            <p>→ {flow.says}</p>
+            <div className="actions">
+              <label className="dim">Repair cost{' '}
+                <input value={flow.cost} onChange={(e) => { flow.setCost(e.target.value); setStatus('') }} onKeyDown={(e) => fieldKey(e, () => flow.submitCost(flow.cost))}
+                  inputMode="decimal" placeholder="Optional, e.g. 45" aria-label="Repair cost (optional)" title="What the repair cost, e.g. 45 or $45.00. Kept on the Maintenance, never as the purchase cost." />
+              </label>
+              <label className="dim">Note{' '}
+                <input value={note} onChange={(e) => { setNote(e.target.value); flow.runner.setText(e.target.value); setStatus('') }} onKeyDown={(e) => fieldKey(e, () => flow.submitNote(note).then((said) => (setNote(flow.runner.open?.text ?? ''), said)))}
+                  placeholder="Optional" aria-label="Note (optional)" />
+              </label>
+            </div>
+            {choice ? (
+              <div className="actions">
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => done(flow.runner.fixOpen())}>{choice.fix}</button>
+                <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Stop</button>
+              </div>
+            ) : (
+              <div className="actions">
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => done(flow.runner.confirmOpen())}>Confirm</button>
+                <button type="button" className="quiet" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
+              </div>
+            )}
+          </div>
+        )}
+        <RunningList rows={flow.runner.rows} paused={!!flow.runner.paused} doneLabel="made ready" undoBlocked={flow.runner.undoBlocked} clearBlocked={flow.runner.clearBlocked} onUndo={askUndo} onOpenAsset={onOpenAsset} onClear={() => flow.runner.clear()} what={(r) => r.what} />
+        <p className="sr-only" aria-live="polite">{said ?? undoConfirm ?? flow.runner.announce}</p>
+      </div>
+      {choice
+        ? <KeysPanel keys={[['Tab Enter', choice.fix], ['Esc', 'Stop']]} hint="Enter on the field and rescanning never make it ready. Scanning a different Asset Tag stops this one; nothing is written." />
+        : open
+        ? <KeysPanel keys={[['Enter', 'Confirm (or rescan the same tag)'], ['Tab', 'Repair cost, then Note'], ['Esc', 'Cancel']]} hint="Scanning a different Asset Tag skips this one; nothing is written without a confirm." />
+        : undoConfirm
+        ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
+        : <KeysPanel keys={[['Enter', 'Scan'], [UNDO_KEY, 'Undo last']]} hint="Each scanned Asset is confirmed, then made Ready to Deploy and its repair Maintenance closed. Undo last puts the newest one back." />}
     </div>
   )
 }

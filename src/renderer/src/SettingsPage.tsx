@@ -11,12 +11,13 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
   const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
   const [automaticAt, setAutomaticAt] = useState(settings.tempCheckout.automaticAt)
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
+  const [repairType, setRepairType] = useState(settings.repairTypeId?.toString() ?? '')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
   // Default Location is no longer offered; saving clears any previously stored one.
@@ -46,8 +47,9 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     {message && <p className="settings-success" role="status">{message}</p>}
     {error && <p className="message error" role="alert">{error}</p>}
   </>
-  return <div className="settings-page">
-    <header><h1>Settings</h1><p className="dim">Connect to Snipe-IT with your API token.</p></header>
+  return <>
+  <header className="head"><h1>Settings</h1></header>
+  <div className="settings-page">
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
       setApiKey(''); onSaved(saved); setConnectionSaves((n) => n + 1); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
@@ -64,8 +66,8 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
               setVersion(result.version); setMessage('Connected successfully. Credentials have not been saved yet.')
             })}>Test connection</button></div>
           <p className="hint">{settings.plaintext ? 'No OS password store found: saved unencrypted, readable only by your user account.' : 'Encrypted with your OS credential store when available.'}</p>
+          <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save settings'}</button><span className="dim">Changes apply immediately after saving.</span></div>
         </section>
-        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save settings'}</button><span className="dim">Changes apply immediately after saving.</span></div>
       </fieldset>
     </form>
     {place === 'connection' && notes}
@@ -98,8 +100,8 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
             <button type="button" onClick={(e) => { if (e.currentTarget.form?.reportValidity()) run(async () => setMessage(`Test email sent to ${await window.settings.testMail(mail)}. Check that inbox.`), 'mail') }}>Send test email</button></div>
           {recipient.error && settings.hasToken && <p className="hint">{recipient.error}</p>}
           <p className="hint">Reports go only to your own Snipe-IT email address. The password is encrypted with your OS credential store when available.</p>
+          <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save email settings'}</button></div>
         </section>
-        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save email settings'}</button></div>
       </fieldset>
     </form>
     {place === 'mail' && notes}
@@ -151,7 +153,22 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'calendar' && notes}
-    <section className="settings-section settings-appearance">
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
+      const saved = await window.settings.saveRepairs(repairType)
+      setRepairType(saved.repairTypeId?.toString() ?? ''); onSaved(saved); setMessage('Repair settings saved.')
+    }, 'repairs') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>Repairs</h2><p className="dim">How Repair intake opens a repair Maintenance.</p>
+          <label htmlFor="repair-type">Maintenance type for repairs</label>
+          <input id="repair-type" inputMode="numeric" placeholder="Blank: found in Snipe-IT" value={repairType} onChange={(e) => { setRepairType(e.target.value); setMessage('') }} />
+          <p className="hint">Only needed if your API key can't read Maintenance types and Snipe-IT has no Repair Maintenance yet. A whole number above 0, or blank.</p>
+        </section>
+        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save repair settings'}</button></div>
+      </fieldset>
+    </form>
+    {place === 'repairs' && notes}
+    <section className="settings-section">
       <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
       <label htmlFor="appearance">Theme</label>
       <select id="appearance" value={settings.appearance} onChange={(e) => {
@@ -166,4 +183,5 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
     </section>
   </div>
+  </>
 }
