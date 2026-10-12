@@ -217,6 +217,12 @@ describe('Assets Views', () => {
     expect(opening({ filters: report.filters }, report)).toEqual({ view: 'all', search: 'cart', filters: { location_id: '2' }, sort: { key: 'name', order: 'asc' } })
   })
 
+  it("a Health warning's drill opens filtered to its gap, most urgent first: deactivated Users by most Assets, Licenses by fewest Free seats", () => {
+    expect(listQuery('assets', opening({ filters: { missing: 'location' } }))).toEqual({ view: 'all', search: '', filters: { missing: 'location' }, sort: undefined, order: undefined })
+    expect(listQuery('users', opening({ filters: { activated: '0' }, sort: { key: 'assets', order: 'desc' } }))).toEqual({ search: '', filters: { activated: '0' }, sort: 'assets', order: 'desc' })
+    expect(listQuery('licenses', opening({ filters: {}, sort: { key: 'free', order: 'asc' } }))).toEqual({ search: '', filters: {}, sort: 'free', order: 'asc' })
+  })
+
   it('the Selection survives switching Views, and "Select all N matching" adds the open View\'s Assets to it', async () => {
     const asset = (id: number) => ({ id, name: `NOMMA-${id}` })
     // Ticked on All, then Audit late's first page loads with one of them on it.
