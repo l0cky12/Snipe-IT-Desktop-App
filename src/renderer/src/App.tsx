@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
@@ -13,7 +14,7 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createRepairIntake, NOT_ALLOWED, type Runner } from './workflows'
+import { createBulkCheckout, createBulkReturn, createRepairIntake, createTempCheckout, NOT_ALLOWED, type Runner } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
 
@@ -133,8 +134,13 @@ export function App() {
   const [, changed] = useReducer((n: number) => n + 1, 0)
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  // Temp checkout reads the end-of-day time and School calendar as saved now, at each scan.
+  const savedSettings = useRef<Settings | null>(null)
+  savedSettings.current = settings
+  const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
+    () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
   const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
-  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner }
+  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Temp checkout': tempCheckout.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -219,6 +225,7 @@ export function App() {
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
+    tempCheckout.reset()
     repairIntake.reset()
     cancel(); setAsset(null); setPanel(null); setRecent([]); bulkEpoch.current++; bulkBusy.current = false; setBulk(null); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
@@ -445,7 +452,7 @@ export function App() {
       </aside>
       <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
-        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
