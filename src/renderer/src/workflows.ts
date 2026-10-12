@@ -110,9 +110,10 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag'>, act: 
         const step = await act(asset, row.ctx)
         if (mine !== generation) return
         if ('confirm' in step) {
-          // At most one open: a newer one skips the one still waiting, as a different scan would.
+          // At most one open: a newer one skips the one still waiting, as a different scan would. Latest wins: a newer
+          // scan (or line) since this one, whatever came of it, means this confirm never opens.
           skipOpen()
-          if (away) settle(row, { state: 'neutral', text: SKIPPED }, { what: step.what ?? '' })
+          if (away || row.key !== next) settle(row, { state: 'neutral', text: SKIPPED }, { what: step.what ?? '' })
           else {
             opened = { key: row.key, confirm: step.confirm, text: '' }
             update(row.key, { what: step.what ?? '', result: { state: 'confirm' } })
@@ -404,13 +405,16 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
+  // Bumped by reset (another server), so a Checkout or Undo still in flight never counts on the new server.
+  let session = 0
   // The header's "holds N Assets" follows each Checkout and Undo while that User is still the one being served.
-  const held = (userId: number, by: number) => {
-    if (step.step === 'scan' && step.user.id === userId) step = { ...step, user: { ...step.user, assets: step.user.assets + by } }
+  const held = (userId: number, by: number, from: number) => {
+    if (from === session && step.step === 'scan' && step.user.id === userId) step = { ...step, user: { ...step.user, assets: step.user.assets + by } }
   }
 
   const runner = createRunner<CheckoutCtx>(bridge, async (a, { user, round, expectedCheckin, note }) => {
     const what = `To ${user.name}`
+    const mine = session
     if (a.assignee?.type === 'user' && a.assignee.id === user.id) return { neutral: 'Already theirs', what }
     // ponytail: someone else's Asset is refused for now; the choice step (Move to this User / Stop) is #91.
     if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}`)
@@ -420,8 +424,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     if (step.step !== 'scan' || step.round !== round) return { neutral: SKIPPED, what }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
-      held(user.id, 1)
+      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, fromStatusId: a.statusId ?? undefined, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      held(user.id, 1, mine)
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
         if (now.assignee?.type !== 'user' || now.assignee.id !== user.id) throw new Error(`${a.assetTag} is no longer checked out to ${user.name}`)
@@ -429,8 +433,9 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         // A Checkin with no Location moves it to its Default Location, so "no Location" can't be put back while it has one.
         if (a.locationId === null && now.defaultLocation) throw new Error(`${a.assetTag} had no Location; a Checkin would move it to its Default Location, ${now.defaultLocation}`)
-        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout') })
-        held(user.id, -1)
+        // Checkin's own last read checks both again.
+        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined })
+        held(user.id, -1, mine)
       }
       return { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }
     }
@@ -504,6 +509,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     },
     reset() {
       attempt++
+      session++
       step = { step: 'user' }
       options = NO_OPTIONS
       runner.reset()

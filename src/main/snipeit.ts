@@ -67,7 +67,9 @@ export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?:
 
 export type StatusLabel = { id: number; name: string }
 
-export type CheckinOptions = { statusId?: number; locationId?: number; note?: string }
+/** A Checkin. fromAssignee and fromStatusId: who it must still be checked out to and the Status Label it must still have,
+ *  checked on Checkin's own last read (an Undo never undoes someone else's Checkout or overwrites a label set since). */
+export type CheckinOptions = { statusId?: number; locationId?: number; note?: string; fromAssignee?: Pick<Assignee, 'type' | 'id'>; fromStatusId?: number }
 
 /** The User a Workflow's first step found, for its header. assets: how many Assets they hold. */
 export type UserCard = { id: number; name: string; username: string; employeeNum: string; assets: number }
@@ -1559,10 +1561,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.
-    async checkin(id: number, { statusId, locationId, note }: CheckinOptions): Promise<void> {
+    async checkin(id: number, { statusId, locationId, note, fromAssignee, fromStatusId }: CheckinOptions): Promise<void> {
       if (locationId !== undefined) checkId(locationId, 'Location')
       const body = await current(id)
       if (!body.assigned_to) throw new Error(`${body.asset_tag} is not checked out, so there is nothing to check in.`)
+      if (fromAssignee && (body.assigned_to.type !== fromAssignee.type || body.assigned_to.id !== fromAssignee.id)) throw new Error(`${body.asset_tag} is checked out to ${body.assigned_to.name} now`)
+      if (fromStatusId !== undefined && body.status_label?.id !== fromStatusId) throw new Error(`${body.asset_tag} is '${body.status_label?.name ?? 'no status'}' now`)
       const result = await request(`/hardware/${id}/checkin`, {
         status_id: statusId ?? body.status_label?.id,
         ...(locationId !== undefined && { location_id: locationId }),

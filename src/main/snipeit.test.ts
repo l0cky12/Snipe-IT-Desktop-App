@@ -544,6 +544,18 @@ describe('checkin', () => {
     expect(posted(requests)).toEqual([])
   })
 
+  it("refuses, writing nothing, when its own read finds another Assignee or Status Label than the caller expects", async () => {
+    const { fetch, requests } = checkinWith(chromebook)
+    const snipeIt = createSnipeIt(config, fetch)
+    // Checked out to User 311, 'Deployed' (id 2).
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'user', id: 312 } })).rejects.toThrow('NOMMA-004812 is checked out to Jordan Reyes now')
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'location', id: 311 } })).rejects.toThrow('NOMMA-004812 is checked out to Jordan Reyes now')
+    await expect(snipeIt.checkin(4812, { fromAssignee: { type: 'user', id: 311 }, fromStatusId: 1 })).rejects.toThrow("NOMMA-004812 is 'Deployed' now")
+    expect(posted(requests)).toEqual([])
+    await snipeIt.checkin(4812, { statusId: 1, fromAssignee: { type: 'user', id: 311 }, fromStatusId: 2 })
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 1 } }])
+  })
+
   it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
     const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
     const { fetch } = checkinWith(chromebook, { body: refused })
