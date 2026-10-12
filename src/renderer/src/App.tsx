@@ -1,20 +1,20 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
-import { WORKFLOWS, type Workflow } from '../../main/notes'
+import { END_OF_DAY } from '../../main/calendar'
+import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
-import { ListView, drillTo, listName, missingWhat, reportDrill, type BulkAction, type BulkRun, type Drill } from './ListView'
-import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
+import { ListView, drillTo, eachInTurn, listName, missingWhat, reportDrill, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { ReportsView } from './ReportsView'
 import { ImportView } from './ImportView'
 import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createRepairIntake, NOT_ALLOWED, type Runner } from './workflows'
+import { createBulkCheckout, createBulkReturn, createRepairIntake, createTempCheckout, NOT_ALLOWED, type Runner } from './workflows'
 import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
 
@@ -39,6 +39,15 @@ export { NOT_ALLOWED }
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
+
+// What an Audit did: the next audit date it moved to, or Snipe-IT's missing audit interval, which leaves none; and always
+// the date it was, so the Operator knows what to put back.
+const NO_INTERVAL = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date'
+const wasDate = (was: string | null) => (was ? `was ${was}` : 'had none')
+/** The Asset sheet's line after an Audit. */
+export const auditedLine = ({ was, next }: Audited) => `${next ? `Audited. Next audit ${next}` : NO_INTERVAL} (${wasDate(was)})`
+/** One Asset's result in the Audit Bulk Action. */
+export const auditedResult = ({ was, next }: Audited) => (next ? `Audited, next ${next}, ${wasDate(was)}` : `${NO_INTERVAL} (${wasDate(was)})`)
 
 // Where a keydown goes. 'panel': the Scan/Search panel opens and takes it, for Ctrl+K from anywhere or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
@@ -94,9 +103,9 @@ const kindName: Record<SearchKind, string> = { users: 'Users', locations: 'Locat
 // The kinds a match opens (the Assets List filtered to it); the stocked kinds are only listed.
 const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind === 'locations' || kind === 'models'
 
-// What the main area shows besides an Asset: the dashboard, the batch, a report, Import, the All records page, a List, or one record's fields.
+// What the main area shows besides an Asset: the dashboard, a Workflow, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+type View = { page: 'dashboard' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; assetView?: AssetView; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 type Panel = { asset: AssetWithHistory; form?: SheetForm; n: number }
 
@@ -113,24 +122,25 @@ export function App() {
   // Lookup's matches of the other kinds; Users, Locations and Asset Models open the Assets List filtered to them, the stocked kinds are listed only (until #1).
   const [others, setOthers] = useState<Matches[]>([])
   const [recent, setRecent] = useState<AssetSummary[]>([])
-  // Assets gathered for one Checkout or Checkin (session only, like recent scans), and the last run over them.
-  const [batch, setBatch] = useState<BatchItem[]>([])
-  const [batchRun, setBatchRun] = useState<{ busy: boolean; last: BatchAction | null }>({ busy: false, last: null })
-  // Bumped when Settings are saved; a run still going stops, since the rest of its Assets belong to the old server.
-  const batchEpoch = useRef(0)
-  // One run at a time: a second would act on the same Assets and overwrite the first's results.
-  const batchBusy = useRef(false)
-  // The last Bulk Action over a List's Selection, kept here like the batch's run so leaving the List mid-run loses nothing.
+  // The last Bulk Action over a List's Selection, kept here so leaving the List mid-run loses nothing.
   const [bulk, setBulk] = useState<(BulkRun & BulkAction) | null>(null)
+  // One run at a time: a second would act on the same Records and overwrite the first's results.
   const bulkBusy = useRef(false)
+  // Bumped when Settings point at another server; a run still going stops, since the rest of its Records belong to the old one.
+  const bulkEpoch = useRef(0)
   const bulkStop = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
   // Each Workflow's step, queue and Running list, kept for the session (in memory only) so leaving one loses nothing.
   const [, changed] = useReducer((n: number) => n + 1, 0)
   const [bulkCheckout] = useState(() => createBulkCheckout(window.snipeIt, { changed, failed: errorSound }))
   const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  // Temp checkout reads the end-of-day time and School calendar as saved now, at each scan.
+  const savedSettings = useRef<Settings | null>(null)
+  savedSettings.current = settings
+  const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
+    () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
   const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
-  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner }
+  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Temp checkout': tempCheckout.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -140,6 +150,8 @@ export function App() {
   const [opened, setOpened] = useState(0)
   // The Asset docked in the Asset panel on the Assets List, the form a Quick Action opened in it, and n, bumped on every open so it starts fresh.
   const [panel, setPanel] = useState<Panel | null>(null)
+  // What the last Audit of the Asset shown did, for the sheet's line; cleared by the next open.
+  const [audited, setAudited] = useState<{ id: number; result: Audited } | null>(null)
   // Set when an open docks in the Asset panel, which then takes focus instead of the Scan box.
   const docking = useRef(false)
   // The last panel n handed out; never reused, so work begun on a closed panel can't match one reopened on the same Asset.
@@ -213,8 +225,9 @@ export function App() {
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
+    tempCheckout.reset()
     repairIntake.reset()
-    cancel(); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
+    cancel(); setAsset(null); setPanel(null); setRecent([]); bulkEpoch.current++; bulkBusy.current = false; setBulk(null); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -250,46 +263,20 @@ export function App() {
       setOpened((n) => n + 1)
     }
     setMessage({ text: '' })
+    setAudited(null)
     setRecent((r) => [toSummary(full), ...r.filter((x) => x.id !== full.id)].slice(0, RECENT_MAX))
   }
 
   const pick = (id: number, form?: SheetForm) => run((isStale) => open(id, isStale, form))
-  // While the batch is open, a scanned or picked Asset joins it instead of opening.
-  const batching = !showSettings && view?.page === 'batch'
-  function addToBatch(...assets: AssetSummary[]) {
-    // Membership is read from the render-time batch for the message; the updater re-checks so a stale closure can never add a duplicate.
-    const known = assets.filter((a) => batch.some((b) => b.id === a.id)).length
-    setBatch((b) => [...b, ...assets.filter((a) => !b.some((x) => x.id === a.id))])
-    const added = assets.length - known
-    setMessage({ text: assets.length === 1
-      ? known ? `${assets[0].assetTag} is already in the batch` : `Added ${assets[0].assetTag} to the batch`
-      : `Added ${added} ${added === 1 ? 'Asset' : 'Assets'} to the batch${known ? `; ${known} already in it` : ''}` })
-  }
-  const choose = (a: AssetSummary) => (batching ? addToBatch(a) : pick(a.id))
-  async function runBatch(action: BatchAction, ids: number[]) {
-    if (batchBusy.current) return
-    batchBusy.current = true
-    const epoch = batchEpoch.current
-    const stale = () => epoch !== batchEpoch.current
-    const setOutcome = (id: number, outcome?: Outcome) => setBatch((b) => b.map((a) => (a.id === id ? { ...a, outcome } : a)))
-    // This run's rows start blank, so an earlier result can't pass for this one's.
-    ids.forEach((id) => setOutcome(id))
-    setBatchRun({ busy: true, last: action })
-    // A result that lands after Settings changed belongs to the old server; drop it.
-    await eachInTurn(ids, action.work, action.done, (id, outcome) => !stale() && setOutcome(id, outcome), stale)
-    if (stale()) return
-    batchBusy.current = false
-    setBatchRun((r) => ({ ...r, busy: false }))
-  }
 
-  // Acts on each Record in turn with the usual single edit or delete, so History credits the Operator for each; a failure
-  // doesn't stop the rest, Stop halts before the next one. Like the batch, it stops when Settings point at another server.
+  // Acts on each Record in turn with the usual single edit, delete, Checkout or Checkin, so History credits the Operator for each;
+  // a failure doesn't stop the rest, Stop halts before the next one. It stops when Settings point at another server.
   async function runBulk(action: BulkAction, run: BulkRun) {
     if (bulkBusy.current) return
     bulkBusy.current = true
     bulkStop.current = false
-    const epoch = batchEpoch.current
-    const stale = () => epoch !== batchEpoch.current
+    const epoch = bulkEpoch.current
+    const stale = () => epoch !== bulkEpoch.current
     // A retry passes the last run as its action; only the action is kept from it.
     const { kind, title, done, work, deletes } = action
     setBulk({ kind, title, done, work, deletes, ...run, busy: true })
@@ -304,17 +291,20 @@ export function App() {
   }
 
   // A rejected Checkout/Checkin throws before the refresh, so the sheet and typed inputs stay and the rail shows Snipe-IT's reason.
-  const act = (id: number, done: string, work: Promise<void>) =>
+  // after: what to do with the action's answer once it's done, even if the refresh then fails (an Audit's dates, which a
+  // second Audit would lose).
+  const act = <T,>(id: number, done: string, work: Promise<T>, after?: (result: T) => void) =>
     run(async (isStale) => {
-      await work
+      const result = await work
+      const refreshFailed = await open(id, isStale).then(() => '', (e: Error) => e.message)
+      if (!isStale()) after?.(result)
       // Don't let a failed refresh read as a failed action; retrying would only be refused.
-      await open(id, isStale).catch((e: Error) => {
-        throw new Error(`${done}, but couldn't refresh the Asset: ${e.message}`)
-      })
+      if (refreshFailed) throw new Error(`${done}, but couldn't refresh the Asset: ${refreshFailed}`)
     })
   const checkin = (id: number, options: CheckinOptions) => act(id, 'Checked in', window.snipeIt.checkin(id, options))
   const checkout = (id: number, options: CheckoutOptions) => act(id, 'Checked out', window.snipeIt.checkout(id, options))
   const changeStatus = (id: number, statusId: number) => act(id, 'Changed the status', window.snipeIt.updateStatus(id, statusId))
+  const audit = (id: number, options: AuditOptions) => act(id, 'Audited', window.snipeIt.audit(id, options), (result) => setAudited({ id, result }))
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -333,7 +323,6 @@ export function App() {
       setOthers([])
       // Leave the box alone if the next scan has already started typing into it.
       setQuery((current) => (current.trim() === q ? '' : current))
-      if (batching) return addToBatch(toSummary(result.assets[0]))
       await open(result.assets[0].id, isStale)
     })
   }
@@ -358,13 +347,17 @@ export function App() {
   // What the Asset sheet needs for one Asset; the full sheet and the Asset panel get the same, so the two act alike.
   const sheetProps = (a: AssetWithHistory, onDeleted: () => void): SheetProps => ({
     asset: a, baseUrl: settings?.baseUrl ?? '', defaultLocation: settings?.defaultLocation ?? null, locations, statusLabels,
-    onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
+    audited: audited?.id === a.id ? audited.result : undefined,
+    onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onAudit: audit, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
   })
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
   // n: the panel's open as the Bulk Action began, so a newer open (of the same Asset too) stays.
-  const refreshPanel = (id: number, n: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => setMessage({ text: e.message, error: true }))
+  const refreshPanel = (id: number, n: number) => {
+    const epoch = bulkEpoch.current
+    window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => epoch === bulkEpoch.current && setMessage({ text: e.message, error: true }))
+  }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
@@ -408,10 +401,6 @@ export function App() {
           <button aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
             <Boxes size={18} />All records
           </button>
-          <button aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
-            <ListChecks size={18} />Batch
-            {batch.length > 0 && <span className="badge">{batch.length}</span>}
-          </button>
           <button aria-label={`Workflows${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
             <WorkflowsIcon size={18} />Workflows
             {workflowsBusy > 0 && <span className="badge">{workflowsBusy}</span>}
@@ -438,7 +427,7 @@ export function App() {
           </form>
           {railMessage}
           <div className="list">
-            {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={choose} />}
+            {matches.assets.length > 0 && <AssetList label={matches.label} assets={matches.assets} selected={selected} onPick={(a) => pick(a.id)} />}
             {others.map((m) => 'error' in m
               ? <p key={m.kind} className="message error">{kindName[m.kind]}: {m.error}</p>
               : m.rows.length > 0 && (
@@ -457,20 +446,20 @@ export function App() {
                   })}
                 </div>
               ))}
-            {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={choose} />}
+            {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={(a) => pick(a.id)} />}
           </div>
         </div>}
       </aside>
       <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
-        : view?.page === 'workflow' && view.workflow === 'Bulk checkout' ? <BulkCheckoutView flow={bulkCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} />
-        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
-        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
+        : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} onNew={(k) => editRecord(k, null)}
           panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet key={opened} {...sheetProps(asset, () => deleted('assets', asset.id, asset.assetTag))} /> : <p className="empty">Scan an Asset Tag</p>}</main>
@@ -659,8 +648,47 @@ export function StatusForm({ asset: a, statusLabels, onSave, autoFocus = true }:
   )
 }
 
+// Audit…'s form, in the Asset sheet or for a Selection (count): Next audit, left blank for Snipe-IT's audit interval, and an
+// optional one-line note. It is the confirmation: Enter or Audit sends it, Esc cancels. A note with a link is refused here.
+// busy: another Bulk Action is still running, so this one would not start. autoFocus: false keeps a half-typed scan where it is.
+export function AuditForm({ count, busy: elsewhere, onAudit, onCancel, autoFocus = true }: { count?: number; busy?: boolean; onAudit: (o: AuditOptions) => Promise<void> | void; onCancel: () => void; autoFocus?: boolean }) {
+  const [nextAudit, setNextAudit] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      cleanText(note)
+    } catch (err) {
+      return setError((err as Error).message)
+    }
+    setError('')
+    setBusy(true)
+    await onAudit({ ...(nextAudit && { nextAudit }), ...(note.trim() && { note }) })
+    setBusy(false)
+  }
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    onCancel()
+  }
+  return (
+    <form className="audit" onSubmit={onSubmit} onKeyDown={onKeyDown} aria-label={count === undefined ? 'Audit' : 'Audit the Selection'}>
+      <div className="actions">
+        <label className="dim">Next audit <input autoFocus={autoFocus} type="date" value={nextAudit} onChange={(e) => setNextAudit(e.target.value)} title="Left blank, Snipe-IT's audit interval sets it" /></label>
+        <input value={note} onChange={(e) => (setNote(e.target.value), setError(''))} placeholder="Note (optional)" aria-label="Audit note" />
+        <button disabled={busy || elsewhere}>{busy ? 'Auditing…' : count === undefined ? 'Audit' : `Audit ${count.toLocaleString()} ${count === 1 ? 'Asset' : 'Assets'}`}</button>
+        <button type="button" className="quiet" onClick={onCancel}>Cancel</button>
+      </div>
+      <p className="dim">{nextAudit ? `Next audit ${nextAudit}.` : "Next audit left blank: Snipe-IT's audit interval sets it."} Records an Audit in History; it can't be undone.</p>
+      {error && <p className="message error" role="alert">{error}</p>}
+    </form>
+  )
+}
+
 /** The forms the Asset sheet opens under its header; a Quick Action opens one in the Asset panel. */
-export type SheetForm = 'checkin' | 'checkout' | 'status'
+export type SheetForm = 'checkin' | 'checkout' | 'status' | 'audit'
 /** What the Asset sheet needs; App builds it, so the full sheet and the Asset panel act the same way. */
 export type SheetProps = {
   asset: AssetWithHistory
@@ -671,6 +699,9 @@ export type SheetProps = {
   onCheckin: (id: number, o: CheckinOptions) => Promise<void>
   onCheckout: (id: number, o: CheckoutOptions) => Promise<void>
   onStatus: (id: number, statusId: number) => Promise<void>
+  onAudit: (id: number, o: AuditOptions) => Promise<void>
+  /** What the last Audit of this Asset did, shown as a line until the next open. */
+  audited?: Audited
   onOpenRecord: (kind: RecordKind, id: number) => void
   onOpenAsset: (id: number) => void
   onEdit: () => void
@@ -681,7 +712,7 @@ export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void;
 
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
-export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
+export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
   // Read as it renders, before a form's autoFocus moves it: a field holding text (a half-typed scan) keeps focus.
@@ -692,6 +723,8 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     if (docked && !initialForm && takesFocus) root.current?.focus()
   }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
+  // An Audit that went through closes its form, even when the refresh after it failed, so it isn't sent twice by mistake.
+  useEffect(() => { if (audited) setForm(null) }, [audited])
   // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'Escape' || !form) return
@@ -727,6 +760,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
           <button className={checkinReason(a) ? 'quiet' : undefined} disabled={!!checkinReason(a)} title={checkinReason(a)} aria-expanded={form === 'checkin'} onClick={() => toggle('checkin')}>Checkin</button>
           <button className={canCheckout ? undefined : 'quiet'} disabled={!canCheckout} title={checkoutReason(a)} aria-expanded={form === 'checkout'} onClick={() => toggle('checkout')}>Checkout…</button>
           <button className={`quiet${form === 'status' ? ' on' : ''}`} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED} aria-expanded={form === 'status'} onClick={() => toggle('status')}>Status</button>
+          {a.can.audit && <button className={`quiet${form === 'audit' ? ' on' : ''}`} aria-expanded={form === 'audit'} onClick={() => toggle('audit')}>Audit…</button>}
           <button className="quiet" onClick={onEdit} disabled={!a.can.update} title={a.can.update ? undefined : NOT_ALLOWED}>Edit</button>
           <PrintLabel baseUrl={baseUrl} assets={[a]} />
           <DeleteButton kind="assets" id={a.id} name={a.assetTag} onDeleted={onDeleted} allowed={a.can.delete} />
@@ -734,11 +768,13 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
         </div>
       </header>
       {docked?.notInView && <p className="notice">Not in this View</p>}
+      {audited && <p className={`notice${audited.next ? ' done' : ''}`} role="status">{auditedLine(audited)}</p>}
       {form && (
         <div className="sheet-form">
           {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} autoFocus={takesFocus} />}
           {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} autoFocus={takesFocus} />}
           {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} autoFocus={takesFocus} />}
+          {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} autoFocus={takesFocus} />}
         </div>
       )}
       <div className="asset-top">

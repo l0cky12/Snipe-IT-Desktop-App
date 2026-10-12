@@ -137,7 +137,7 @@ describe('lookup', () => {
         status: 'Deployed',
         statusMeta: 'deployed',
         assignee: { type: 'user', id: 311, name: 'Jordan Reyes', username: 'jreyes' },
-        can: { checkout: true, checkin: true, update: true, delete: true },
+        can: { checkout: true, checkin: true, update: true, delete: true, audit: true },
         matched: 'Assignee',
       },
     ])
@@ -715,10 +715,10 @@ describe('checkout', () => {
     expect(posted(requests)[0].body).toEqual({ status_id: 1, checkout_to_type: 'asset', assigned_asset: 77 })
   })
 
-  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day', async () => {
+  it('sends a Status Label override instead of the current one, and an Expected Checkin with its time of day (Central, to the second)', async () => {
     const { fetch, requests } = checkoutWith(ready)
     await createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, expectedCheckin: '2026-10-13 14:50' })
-    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50' })
+    expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50:00' })
   })
 
   it("refuses, writing nothing, when the Asset's Status Label isn't the one the caller expects it still has", async () => {
@@ -760,6 +760,46 @@ describe('checkout', () => {
     await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 999 })).rejects.toThrow(
       'The selected assigned user is invalid.',
     )
+  })
+})
+
+describe('audit', () => {
+  // Snipe-IT v8.6.3+ answers with the next audit date it set, as a date object (Helper::getFormattedDateObject).
+  const audited = (next: string | null) => ({ status: 'success', messages: 'Asset audited successfully.', payload: { asset_tag: 'NOMMA-004812', next_audit_date: next && { date: next, formatted: next } } })
+  const auditWith = (reply: { status?: number; body: unknown } = { body: audited('2027-10-10') }) =>
+    fakeFetch({ '/hardware/4812': { body: { ...chromebook, next_audit_date: { date: '2026-10-01', formatted: '2026-10-01' } } }, 'POST /hardware/4812/audit': reply })
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST').map((r) => r.body)
+
+  it('with nothing typed sends only the [Audit] note, so Snipe-IT sets the next audit date from its audit interval, and never a Location', async () => {
+    const { fetch, requests } = auditWith()
+    expect(await createSnipeIt(config, fetch).audit(4812, {})).toEqual({ was: '2026-10-01', next: '2027-10-10' })
+    expect(posted(requests)).toEqual([{ note: '[Audit]' }])
+  })
+
+  it('sends the typed note, cleaned, after the tag, and Next audit when filled in', async () => {
+    const { fetch, requests } = auditWith()
+    await createSnipeIt(config, fetch).audit(4812, { nextAudit: '2027-10-10', note: ' seen in *Room 204*,\n sticker replaced ' })
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([
+      { method: 'POST', path: '/hardware/4812/audit', body: { note: '[Audit] seen in Room 204, sticker replaced', next_audit_date: '2027-10-10' } },
+    ])
+  })
+
+  it('refuses a link in the note or a Next audit that is not a date, without asking Snipe-IT', async () => {
+    const { fetch, requests } = auditWith()
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.audit(4812, { note: 'see https://example.org' })).rejects.toThrow(/links/)
+    await expect(snipeIt.audit(4812, { nextAudit: '10/10/2027' })).rejects.toThrow(/YYYY-MM-DD/)
+    expect(posted(requests)).toEqual([])
+  })
+
+  it('says when Snipe-IT sent back no next audit date (it has no audit interval set)', async () => {
+    const { fetch } = auditWith({ body: audited(null) })
+    expect(await createSnipeIt(config, fetch).audit(4812, {})).toEqual({ was: '2026-10-01', next: null })
+  })
+
+  it("an Audit Snipe-IT refuses is thrown as Snipe-IT's reason", async () => {
+    const { fetch } = auditWith({ body: { status: 'error', messages: 'You do not have permission to audit this asset.', payload: null } })
+    await expect(createSnipeIt(config, fetch).audit(4812, {})).rejects.toThrow('You do not have permission to audit this asset.')
   })
 })
 
@@ -1429,7 +1469,7 @@ it('loads every page of Locations for the default dropdown', async () => {
 })
 
 // A List row whose available_actions say nothing: every action is allowed.
-const can = { checkout: true, checkin: true, update: true, delete: true }
+const can = { checkout: true, checkin: true, update: true, delete: true, audit: true }
 
 describe('list', () => {
   it('asks for one page of 50 from the offset, with the search, and returns the total and rows in app vocabulary', async () => {
@@ -2128,7 +2168,7 @@ describe('the other record kinds', () => {
     }
     const { fetch } = fakeFetch({ '/locations/12': { body: location } })
     expect(await createSnipeIt(config, fetch).record('locations', 12)).toEqual({
-      kind: 'locations', id: 12, name: 'Room 204', can: { checkout: true, checkin: true, update: true, delete: true },
+      kind: 'locations', id: 12, name: 'Room 204', can: { checkout: true, checkin: true, update: true, delete: true, audit: true },
       fields: [
         { label: 'Parent', value: 'Main Campus', link: { kind: 'locations', id: 1 } },
         { label: 'Manager', value: 'Morgan Lee', link: { kind: 'users', id: 7 } },
@@ -2219,6 +2259,18 @@ describe('create, edit and delete', () => {
     expect(await formFor({ date: '2026-10-01', formatted: '10/01/2026' })).toBe('2026-10-01')
   })
 
+  it('Edit Asset has Next audit date, filled in as Snipe-IT sends it and saved back, or cleared, so a mistaken Audit can be put back', async () => {
+    const { fetch, requests } = fakeFetch({ '/hardware/4812': { body: { ...editable, next_audit_date: { date: '2026-10-01', formatted: '2026-10-01' } } }, '/models/7': { body: { id: 7, fieldset: null } },
+      'PATCH /hardware/4812': { body: { status: 'success', messages: 'Updated.' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    const { fields, values } = await snipeIt.form('assets', 4812)
+    expect(fields.find((f) => f.key === 'next_audit_date')).toEqual({ key: 'next_audit_date', label: 'Next audit date', type: 'date' })
+    expect(values.next_audit_date).toBe('2026-10-01')
+    await snipeIt.save('assets', 4812, { next_audit_date: '2026-10-01' })
+    await snipeIt.save('assets', 4812, { next_audit_date: '' })
+    expect(requests.filter((r) => r.method === 'PATCH').map((r) => r.body)).toEqual([{ next_audit_date: '2026-10-01' }, { next_audit_date: null }])
+  })
+
   it("a note Snipe-IT sends rendered comes back as Markdown, so editing it keeps its links and emphasis", () => {
     expect(markdownOf('<p>Screen <strong>cracked</strong>, see <a href="https://help.example.org/t/12" rel="nofollow">ticket 12</a><br />Use <em>only</em> the <code>USB-C</code> charger</p>'))
       .toBe('Screen **cracked**, see [ticket 12](https://help.example.org/t/12)\nUse *only* the `USB-C` charger')
@@ -2304,7 +2356,7 @@ describe('create, edit and delete', () => {
   })
 
   it("a bulk edit offers the fields an Asset's own form does but its Asset Tag and Serial, and a User's Department, Location and Company", () => {
-    expect(BULK_FORMS.assets.map((f) => f.key)).toEqual(['model_id', 'status_id', 'expected_checkin', 'name', 'rtd_location_id', 'supplier_id', 'company_id', 'order_number',
+    expect(BULK_FORMS.assets.map((f) => f.key)).toEqual(['model_id', 'status_id', 'expected_checkin', 'next_audit_date', 'name', 'rtd_location_id', 'supplier_id', 'company_id', 'order_number',
       'purchase_date', 'purchase_cost', 'warranty_months', 'notes'])
     expect(BULK_FORMS.users.map((f) => f.key)).toEqual(['department_id', 'location_id', 'company_id'])
     // Left blank, a field is left as each Record has it, so none is required.
@@ -2335,9 +2387,9 @@ describe('create, edit and delete', () => {
 
 describe('permissions', () => {
   it("what an Asset's key may do comes from Snipe-IT's available_actions; an older Snipe-IT that doesn't say allows it", async () => {
-    const limited = { ...chromebook, available_actions: { checkout: true, checkin: false, update: false, delete: false } }
-    expect((await snipeItWith(limited).getAsset(4812)).can).toEqual({ checkout: true, checkin: false, update: false, delete: false })
-    expect((await snipeItWith(chromebook).getAsset(4812)).can).toEqual({ checkout: true, checkin: true, update: true, delete: true })
+    const limited = { ...chromebook, available_actions: { checkout: true, checkin: false, update: false, delete: false, audit: false } }
+    expect((await snipeItWith(limited).getAsset(4812)).can).toEqual({ checkout: true, checkin: false, update: false, delete: false, audit: false })
+    expect((await snipeItWith(chromebook).getAsset(4812)).can).toEqual({ checkout: true, checkin: true, update: true, delete: true, audit: true })
   })
 
   it('only an account Snipe-IT lets read groups (a superuser) can manage permissions; other failures still say what went wrong', async () => {
