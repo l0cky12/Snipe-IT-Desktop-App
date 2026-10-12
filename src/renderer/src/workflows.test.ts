@@ -22,7 +22,13 @@ function fakeBridge(assets: Asset[]) {
   const bridge = {
     assetByTag: vi.fn(async (tag: string) => (calls.push(`bytag ${tag}`), assets.find((a) => a.assetTag === tag) ?? null)),
     checkin: vi.fn(async (id: number, o: CheckinOptions) => { calls.push(`checkin ${id}`); checkins.push([id, o]) }),
-    checkout: vi.fn(async (id: number, o: CheckoutOptions) => { calls.push(`checkout ${id}`); checkouts.push([id, o]) }),
+    checkout: vi.fn(async (id: number, o: CheckoutOptions) => {
+      calls.push(`checkout ${id}`)
+      // Like Snipe-IT's checkout(): refuses when its own read finds another Status Label than fromStatusId.
+      const now = assets.find((a) => a.id === id)!
+      if (o.fromStatusId !== undefined && now.statusId !== o.fromStatusId) throw new Error(`${now.assetTag} is '${now.status}' now`)
+      checkouts.push([id, o])
+    }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
     getAsset: vi.fn(async (id: number) => {
       calls.push(`getAsset ${id}`)
@@ -392,7 +398,7 @@ describe('Bulk return', () => {
       const { flow, checkouts } = await returned(one)
       expect(flow.runner.confirm).toBe(`Undo: NOMMA-1 checked in from ${assignee.type === 'asset' ? 'Asset ' : ''}${assignee.name}? Enter to undo, Esc to cancel.`)
       await flow.runner.undo()
-      expect(checkouts).toEqual([[1, { targetType: assignee.type, targetId: assignee.id, statusId: 2, expectedCheckin: '2026-10-13', note: '[Undo] Bulk return' }]])
+      expect(checkouts).toEqual([[1, { targetType: assignee.type, targetId: assignee.id, statusId: 2, fromStatusId: 1, expectedCheckin: '2026-10-13', note: '[Undo] Bulk return' }]])
       expect(flow.runner.rows[0].result.state).toBe('undone')
     })
 
@@ -427,7 +433,7 @@ describe('Bulk return', () => {
     it('sends no Expected Checkin when it had none', async () => {
       const { flow, checkouts } = await returned(asset('NOMMA-1'))
       await flow.runner.undo()
-      expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk return' })
+      expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, fromStatusId: 1, expectedCheckin: undefined, note: '[Undo] Bulk return' })
     })
 
     it("offers no undo for a kept Status Label, which Snipe-IT won't check out, and says why", async () => {

@@ -645,6 +645,16 @@ describe('checkout', () => {
     expect(posted(requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311, expected_checkin: '2026-10-13 14:50' })
   })
 
+  it("refuses, writing nothing, when the Asset's Status Label isn't the one the caller expects it still has", async () => {
+    const relabelled = { ...ready, status_label: { id: 3, name: 'Loaner Pool', status_type: 'deployable', status_meta: 'deployable' } }
+    const { fetch, requests } = checkoutWith(relabelled)
+    await expect(createSnipeIt(config, fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, fromStatusId: 1 })).rejects.toThrow("NOMMA-004812 is 'Loaner Pool' now")
+    expect(posted(requests)).toEqual([])
+    const same = checkoutWith(ready)
+    await createSnipeIt(config, same.fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, fromStatusId: 1 })
+    expect(posted(same.requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311 })
+  })
+
   it('refuses another target type, a bad Status Label id or a malformed Expected Checkin without asking Snipe-IT', async () => {
     const { fetch, requests } = checkoutWith(ready)
     const snipeIt = createSnipeIt(config, fetch)

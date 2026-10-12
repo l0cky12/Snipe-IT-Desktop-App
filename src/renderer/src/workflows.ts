@@ -231,23 +231,17 @@ export function createBulkReturn(bridge: Pick<SnipeItBridge, 'assetByTag' | 'che
     // doesn't make one: an ordinary Checkout can have one too. So History says, only then: its newest Checkout is the one
     // returned (it's still checked in, as left). History that can't be read puts back an ordinary Checkout.
     const left = ready
-    const still = (now: Asset) => {
-      if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
-      // A label someone set since the return isn't overwritten with the old one.
-      if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
-    }
     const run = async (now: Asset, current: () => boolean) => {
-      still(now)
+      if (now.assignee) throw new Error(`${now.assetTag} is checked out to ${now.assignee.name} now`)
+      // A label someone set since the return isn't overwritten with the old one; Checkout's own last read checks it again.
+      if (now.statusId !== left) throw new Error(`${now.assetTag} is '${now.status}' now`)
       let due: string | undefined
       if (expectedCheckin && expectedCheckin.length > 10) {
-        const read = await bridge.getAsset(a.id)
+        const n = parseWorkflowNote((await bridge.getAsset(a.id)).history.find((h) => h.action === 'Checkout')?.note ?? null)
         if (!current()) return
-        // The History read is also the last look at the Asset before the write: anything changed meanwhile still refuses.
-        still(read)
-        const n = parseWorkflowNote(read.history.find((h) => h.action === 'Checkout')?.note ?? null)
         if (n && (n.undo ? n.due : n.workflow === 'Temp checkout')) due = expectedCheckin
       }
-      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
+      await bridge.checkout(a.id, { targetType: was.type, targetId: was.id, statusId: statusId ?? undefined, fromStatusId: left, expectedCheckin: expectedCheckin ?? undefined, note: undoNote('Bulk return', due) })
     }
     // Snipe-IT checks out only an Asset whose Status Label is deployable, so a kept label can't be undone from the list.
     const undo = keep ? `Snipe-IT can't check out an Asset with status '${a.status}'. Open ${a.assetTag} to put it back by hand.` : { says: `${a.assetTag} checked in from ${from}`, run }
