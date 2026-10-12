@@ -32,6 +32,8 @@ export type Asset = {
   warrantyEnd: string | null
   /** "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" when Snipe-IT (v8.7+) holds a time of day */
   expectedCheckin: string | null
+  /** When its current Checkout was made, "YYYY-MM-DD HH:MM"; null when Snipe-IT doesn't say */
+  lastCheckout: string | null
   /** The date of the Asset's last Audit, or null when it has never been Audited */
   lastAudited: string | null
   /** The date Snipe-IT expects its next Audit, or null when it has none */
@@ -207,13 +209,19 @@ export type Dashboard = {
   [K in DashboardPiece]?: Failed | {
     assets: StatusTally[]; categories: Tally[]; locations: Tally[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
-    overdue: (AssetSummary & { expectedCheckin: string; overdue: Lateness })[]
+    overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
   }[K]
 }
 
+/** An Overdue Asset on the dashboard; temp when it's an outstanding Temp checkout. Whole, so its Checkin Quick Action can run. */
+export type OverdueRow = Asset & { expectedCheckin: string; overdue: Lateness; temp: boolean }
+/** The dashboard Overdue list, or only its Temp checkouts (Health warning 5 counts that). */
+export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly ? rows.filter((r) => r.temp) : rows)
+
 /**
- * One load of the Health warnings' checks, each run at once and failing on its own. probe is the /version call: the version
+ * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
+ * dashboard's Overdue list instead). probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
  * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
  */
@@ -226,17 +234,18 @@ export type Health = {
 export type HealthLine =
   | { warning: 'unreachable' | 'key'; message: string }
   | { warning: 'tooOld'; version: string }
-  | { warning: 'auditLate' | 'auditDue'; count: number }
+  | { warning: 'auditLate' | 'auditDue' | 'temp'; count: number }
   | { warning: 'newer'; release: Release; running: string }
-  | { warning: 'tooOld' | 'auditLate' | 'auditDue'; error: string }
+  | { warning: 'tooOld' | 'auditLate' | 'auditDue' | 'temp'; error: string }
 /** The oldest Snipe-IT this app supports: v8.7 sends Expected Checkin with a time of day, which Temp checkout needs. */
 export const MIN_SNIPEIT = [8, 7] as const
 
 /**
  * The strip's lines, red before amber: none at 0. Snipe-IT unreachable or the key failing shows only that line. release:
  * GitHub's latest Snipe-IT release, from the main process's daily check (createReleaseCheck), if one is known and not hidden.
+ * Temp checkouts Overdue counts the dashboard's Overdue list (none until it has loaded).
  */
-export function healthLines({ probe, auditLate, auditDue }: Health, release?: Release | null): HealthLine[] {
+export function healthLines({ probe, auditLate, auditDue }: Health, release?: Release | null, overdue?: Dashboard['overdue']): HealthLine[] {
   if ('warning' in probe) return [probe]
   const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
@@ -244,9 +253,10 @@ export function healthLines({ probe, auditLate, auditDue }: Health, release?: Re
     : olderThan(running, MIN_SNIPEIT) ? [{ warning: 'tooOld', version: probe.version }] : []
   const latest = release && versionParts(release.tag)
   const newer: HealthLine[] = running && latest && olderThan(running, latest) && 'version' in probe ? [{ warning: 'newer', release, running: probe.version }] : []
-  const total = (warning: 'auditLate' | 'auditDue', t: number | Failed): HealthLine[] =>
-    typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
-  return [...tooOld, ...total('auditLate', auditLate), ...newer, ...total('auditDue', auditDue)]
+  const total = (warning: 'auditLate' | 'auditDue' | 'temp', t: number | Failed | undefined): HealthLine[] =>
+    t === undefined ? [] : typeof t !== 'number' ? [{ warning, error: t.error }] : t ? [{ warning, count: t }] : []
+  const temp = !overdue || 'error' in overdue ? overdue : overdue.tempError ? { error: overdue.tempError } : overdueList(overdue.rows, true).length
+  return [...tooOld, ...total('auditLate', auditLate), ...total('temp', temp), ...newer, ...total('auditDue', auditDue)]
 }
 // "v8.8.0", "8.8" or "v8.8.0 build 120 (g1a2b3c)" → [8, 8, 0]; null when it isn't a version.
 const versionParts = (v: string) => /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(v)?.slice(1).map((n) => Number(n ?? 0)) ?? null
@@ -591,6 +601,7 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     purchaseDate: raw.purchase_date?.date ?? null,
     warrantyEnd,
     expectedCheckin,
+    lastCheckout: (raw.last_checkout?.datetime ?? raw.last_checkout?.date)?.slice(0, 16) || null,
     lastAudited: dayOf(raw.last_audit_date),
     nextAudit: dayOf(raw.next_audit_date),
     endOfLife: raw.asset_eol_date?.date ?? null,
@@ -1087,6 +1098,34 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       ...(c.field_values_array?.length ? { type: c.type === 'checkbox' ? 'choices' as const : 'choice' as const, options: c.field_values_array }
         : { type: c.type === 'textarea' ? 'textarea' as const : c.format === 'DATE' ? 'date' as const : c.format === 'NUMERIC' ? 'number' as const : 'text' as const }),
     }))
+  }
+
+  // Outstanding Temp checkouts (#61 §2): of these Assets, the checked-out ones whose Expected Checkin has a time of day and
+  // whose current Checkout (last_checkout) has a Temp tag, its own or one an undo put back. Only Checkouts mentioning "Temp"
+  // are asked for (the parser reads tags loosely, so a hand-typed `[Temp  checkout …]` counts), newest first, until past the oldest candidate's last Checkout: usually one request.
+  // ponytail: only the dashboard calls it yet; the End-of-day reminder, Automatic check-in and the Out on temp View will.
+  // ponytail: untagged Checkouts aren't fetched, so a tag counts if it's no older than last_checkout. That misreads a web UI
+  // Checkout backdated to before an older tag, or an untagged one in the tag's minute; fetching every Checkout would fix it.
+  async function outstandingTemp(assets: Asset[]): Promise<Set<number>> {
+    const since = new Map(assets.flatMap((a) => (a.assignee && a.lastCheckout && a.expectedCheckin && a.expectedCheckin.length > 10 ? [[a.id, a.lastCheckout]] : [])))
+    const temp = new Set<number>()
+    if (!since.size) return temp
+    const oldest = [...since.values()].sort()[0]
+    for (let offset = 0; ; ) {
+      const params = new URLSearchParams({ action_type: 'checkout', item_type: 'asset', search: 'Temp', sort: 'created_at', order: 'desc', limit: String(PAGE_LIMIT), offset: String(offset) })
+      const page = await request<{ total: number; rows: RawActivity[] }>(`/reports/activity?${params}`)
+      if (isError(page)) throw new Error(reason(page.messages))
+      for (const r of page.rows) {
+        // To the minute: Snipe-IT logs the Checkout a moment after it sets last_checkout.
+        const when = r.created_at?.datetime.slice(0, 16) ?? ''
+        if (when && when < oldest) return temp
+        const from = r.item?.type === 'asset' ? since.get(r.item.id) : undefined
+        const note = from !== undefined && when >= from && parseWorkflowNote(plainText(r.note ?? ''))
+        if (note && (note.undo ? note.due : note.workflow === 'Temp checkout')) temp.add(r.item!.id)
+      }
+      offset += page.rows.length
+      if (!page.rows.length || offset >= page.total) return temp
+    }
   }
 
   return {
@@ -1679,9 +1718,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
-        entry('overdue', async () => (await assets!)
-          .flatMap((a) => (a.overdue === null ? [] : [{ ...toSummary(a), expectedCheckin: a.expectedCheckin!, overdue: a.overdue }]))
-          .sort((a, b) => b.overdue.minutes - a.overdue.minutes)),
+        // The Temp marks failing (say a 403 on the Activity Report) leaves the list, unmarked, with the reason.
+        entry('overdue', async () => {
+          const list = await assets!
+          const temp = await outstandingTemp(list).catch((e: Error) => e)
+          const rows = list
+            .flatMap((a) => (a.overdue === null ? [] : [{ ...a, expectedCheckin: a.expectedCheckin!, overdue: a.overdue, temp: temp instanceof Set && temp.has(a.id) }]))
+            .sort((a, b) => b.overdue.minutes - a.overdue.minutes)
+          return temp instanceof Error ? { rows, tempError: temp.message } : { rows }
+        }),
         entry('expiring', async () => (await assets!)
           .flatMap((a) => (a.warranty && !a.warranty.expired ? [{ ...toSummary(a), daysLeft: a.warranty.daysLeft }] : []))
           .sort((a, b) => a.daysLeft - b.daysLeft)),
