@@ -1079,6 +1079,22 @@ describe('Health warnings', () => {
     expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 })).toEqual([{ warning: 'tooOld', error: 'Not found' }])
   })
 
+  it('lines: Newer Snipe-IT available for any newer release, patches included, after Audit late', () => {
+    const release = (tag: string) => ({ tag, url: `https://github.com/grokability/snipe-it/releases/tag/${tag}` })
+    const newer = (running: string, tag: string) => healthLines({ probe: { version: running }, auditLate: 0, auditDue: 0 }, release(tag))
+    expect(newer('v8.8.0', 'v8.8.1')).toEqual([{ warning: 'newer', release: release('v8.8.1'), running: 'v8.8.0' }])
+    expect(newer('v8.9.1', 'v8.10.0')).toEqual([{ warning: 'newer', release: release('v8.10.0'), running: 'v8.9.1' }])
+    expect(newer('v8.8', 'v8.8.1')).toEqual([{ warning: 'newer', release: release('v8.8.1'), running: 'v8.8' }])
+    expect(newer('v8.7.4', 'v9.0.0')).toEqual([{ warning: 'newer', release: release('v9.0.0'), running: 'v8.7.4' }])
+    for (const [running, tag] of [['v8.8.0', 'v8.8.0'], ['v8.10.0', 'v8.9.1'], ['v8.8.0 build 120 (g1a2b3c)', 'v8.8.0'], ['v9.0.0', 'v8.9.1'], ['v8.8.0', 'latest'], ['nightly', 'v8.9.1']])
+      expect(newer(running, tag).filter((l) => l.warning === 'newer'), `${running} → ${tag}`).toEqual([])
+    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, null)).toEqual([])
+    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 }, release('v8.9.1'))).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+    expect(healthLines({ probe: { version: 'v8.6.0' }, auditLate: 2, auditDue: 3 }, release('v8.6.1')).map((l) => l.warning)).toEqual(['tooOld', 'auditLate', 'newer', 'auditDue'])
+    const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
+    expect(healthLines({ probe: down, auditLate: 0, auditDue: 0 }, release('v8.9.1'))).toEqual([down])
+  })
+
   it('lines: Snipe-IT unreachable or the key failing shows only that line', () => {
     const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
     expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
