@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
-import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceInput, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceChange, MaintenanceInput, OpenMaintenance, StatusLabel, UserCard } from '../../main/snipeit'
 import { parseCalendar, type SchoolTimes } from '../../main/calendar'
-import { cleanTag, createBulkCheckout, createBulkReturn, createRepairIntake, createRunner, createTempCheckout, fieldKey, NOT_ALLOWED, NOT_SENT, pauseSays } from './workflows'
+import { cleanTag, createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createRunner, createTempCheckout, fieldKey, NOT_ALLOWED, NOT_SENT, pauseSays, sharedRepairType } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
@@ -10,6 +10,10 @@ const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
   warrantyEnd: null, expectedCheckin: null, lastCheckout: null, lastAudited: null, nextAudit: null, endOfLife: null, purchaseCost: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true, audit: true }, ...more,
 })
 const flush = () => new Promise((r) => setTimeout(r, 0))
+// An open Repair Maintenance as the client gives it back.
+const maintenance = (id: number, more: Partial<OpenMaintenance> = {}): OpenMaintenance => ({
+  id, type: { id: 9, name: 'Repair' }, startDate: '2026-10-01', notes: '[Repair intake] cracked screen', supplier: null, cost: null, ...more,
+})
 const ITOFFICE: StatusLabel = { id: 8, name: 'IT Office' }
 const ROOM204: StatusLabel = { id: 4, name: 'Room 204' }
 const AVERY: UserCard = { id: 7, name: 'Avery Testwell', username: 'atestwell', employeeNum: '20417', assets: 2 }
@@ -53,10 +57,14 @@ function fakeBridge(assets: Asset[]) {
     addAssetNote: vi.fn(async (id: number, note: string) => { calls.push(`note ${id} ${note}`) }),
     operatorName: vi.fn(async () => (calls.push('me'), 'D. Tech')),
     repairTypeId: vi.fn(async (fallback: number | null): Promise<number | null> => (calls.push(`repair type ${fallback}`), 4)),
-    openMaintenances: vi.fn(async (id: number): Promise<{ id: number; type: StatusLabel | null }[]> => (calls.push(`open maintenances ${id}`), [])),
-    createMaintenance: vi.fn(async (m: MaintenanceInput) => (calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}`), 61)),
-    appendUserNotes: vi.fn(async (id: number, line: string) => { calls.push(`user notes ${id} ${line}`) }),
+    openMaintenances: vi.fn(async (id: number): Promise<OpenMaintenance[]> => (calls.push(`open maintenances ${id}`), [])),
+    createMaintenance: vi.fn(async (m: MaintenanceInput) => (calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}${m.supplierId ? ` supplier ${m.supplierId}` : ''}${m.cost ? ` cost ${m.cost}` : ''}`), 61)),
+    updateMaintenance: vi.fn(async (id: number, c: MaintenanceChange) => { calls.push(`edit maintenance ${id} ${JSON.stringify(c)}`) }),
+    completeMaintenance: vi.fn(async (id: number, note: string) => { calls.push(`complete maintenance ${id} ${note}`) }),
     deleteMaintenance: vi.fn(async (id: number) => { calls.push(`delete maintenance ${id}`) }),
+    maintenance: vi.fn(async (id: number): Promise<OpenMaintenance> => (calls.push(`maintenance ${id}`), maintenance(id))),
+    supplierSelectlist: vi.fn(async (text: string): Promise<StatusLabel[]> => (calls.push(`suppliers ${text}`), [])),
+    appendUserNotes: vi.fn(async (id: number, line: string) => { calls.push(`user notes ${id} ${line}`) }),
     removeUserNotesLine: vi.fn(async (id: number, line: string) => { calls.push(`remove user notes ${id} ${line}`) }),
   }
   return { bridge, calls, checkins, checkouts, history }
@@ -2074,7 +2082,7 @@ describe('Repair intake', () => {
     const fake = fakeBridge([asset('NOMMA-1')])
     const flow = createRepairIntake(fake.bridge, { changed: () => {} }, clock, 0)
     await flow.open(null)
-    expect(flow.blocked).toBe("No Status Label named 'Damaged' in Snipe-IT; ask an admin to create one")
+    expect(flow.blocked).toBe("No Status Label named 'Damaged' in Snipe-IT; ask a Snipe-IT superuser to create one")
     expect(flow.scan('NOMMA-1')).toBe(flow.blocked)
     expect(flow.runner.rows).toEqual([])
     // Created since: the next open finds it.
@@ -2168,7 +2176,7 @@ describe('Repair intake', () => {
 
   it('an open Repair Maintenance is reused, never a second one', async () => {
     const { flow, bridge, calls } = await opened([asset('NOMMA-1')])
-    bridge.openMaintenances.mockResolvedValueOnce([{ id: 50, type: { id: 2, name: 'Upgrade' } }, { id: 51, type: { id: 9, name: 'Repair' } }])
+    bridge.openMaintenances.mockResolvedValueOnce([maintenance(50, { type: { id: 2, name: 'Upgrade' } }), maintenance(51)])
     const row = await intake(flow, 'NOMMA-1')
     expect(calls.some((c) => c.startsWith('maintenance '))).toBe(false)
     expect(row.sub).toEqual(['Maintenance already open', 'User note added'])
@@ -2366,7 +2374,7 @@ describe('Repair intake', () => {
     it('a Maintenance that was open before the intake is left alone, and none is deleted when none was opened', async () => {
       const one = asset('NOMMA-1')
       const { flow, bridge, calls } = await opened([one])
-      bridge.openMaintenances.mockResolvedValueOnce([{ id: 51, type: { id: 9, name: 'Repair' } }])
+      bridge.openMaintenances.mockResolvedValueOnce([maintenance(51, { type: { id: 9, name: 'Repair' } })])
       await intake(flow, 'NOMMA-1')
       Object.assign(one, { assignee: null, status: 'damaged', statusId: 9, statusType: 'undeployable' })
       await (flow.runner.askUndo(), flow.runner.undo())
@@ -2438,6 +2446,460 @@ describe('Repair intake', () => {
       await intake(flow, 'NOMMA-1')
       const why = "Snipe-IT can't check out an Asset with status 'Pending'. Open NOMMA-1 to put it back by hand."
       expect(flow.runner.undoBlocked).toBe(why)
+    })
+  })
+})
+
+describe('Incoming repair', () => {
+  const DAMAGED: StatusLabel = { id: 9, name: 'Damaged' }
+  const ACME: StatusLabel = { id: 3, name: 'Acme Device Repair' }
+  const clock = () => new Date(2026, 9, 11, 10, 30)
+  const damaged = (tag: string, more: Partial<Asset> = {}) => asset(tag, { assignee: null, status: 'Damaged', statusId: 9, statusMeta: 'undeployable', statusType: 'undeployable', ...more })
+  // Opened against a fake Snipe-IT with Damaged and Ready to Deploy, and the Maintenance type the fallback chain finds.
+  async function opened(assets: Asset[], open: Record<string, OpenMaintenance[]> = {}, typeId: number | null = 9) {
+    const fake = fakeBridge(assets)
+    fake.bridge.statusLabels.mockImplementation(async () => (fake.calls.push('statusLabels'), [...LABELS, DAMAGED]))
+    fake.bridge.repairTypeId.mockImplementation(async (fallback) => (fake.calls.push(`repair type ${fallback}`), typeId))
+    fake.bridge.openMaintenances.mockImplementation(async (id) => (fake.calls.push(`open maintenances ${id}`), open[id] ?? []))
+    // Each Maintenance as Snipe-IT keeps it, edited, created and read back, open or completed. Like Snipe-IT, a cost of 0 is kept as none.
+    const stored = (cost: string | null | undefined) => (cost && Number(cost) ? cost : null)
+    const kept = new Map(Object.values(open).flat().map((m) => [m.id, { ...m }]))
+    fake.bridge.maintenance.mockImplementation(async (id) => (fake.calls.push(`read maintenance ${id}`), { ...kept.get(id)! }))
+    fake.bridge.createMaintenance.mockImplementation(async (m) => {
+      fake.calls.push(`maintenance ${m.assetId} type ${m.typeId} "${m.name}" ${m.startDate} ${m.notes}${m.supplierId ? ` supplier ${m.supplierId}` : ''}${m.cost ? ` cost ${m.cost}` : ''}`)
+      kept.set(61, maintenance(61, { type: { id: m.typeId, name: 'Repair' }, startDate: m.startDate, notes: m.notes, supplier: m.supplierId ? ACME : null, cost: stored(m.cost) }))
+      return 61
+    })
+    fake.bridge.updateMaintenance.mockImplementation(async (id, c) => {
+      fake.calls.push(`edit maintenance ${id} ${JSON.stringify(c)}`)
+      const m = kept.get(id)!
+      if ('supplierId' in c) m.supplier = c.supplierId ? ACME : null
+      if ('cost' in c) m.cost = stored(c.cost)
+    })
+    // A status change shows on the next lookup, as in Snipe-IT; the Asset the Workflow was given stays as it was.
+    fake.bridge.updateStatus.mockImplementation(async (id, statusId) => {
+      fake.calls.push(`status ${id} ${statusId}`)
+      const i = assets.findIndex((a) => a.id === id)
+      assets[i] = { ...assets[i], statusId, status: [...LABELS, DAMAGED].find((l) => l.id === statusId)?.name ?? '' }
+    })
+    const failed = vi.fn()
+    const flow = createIncomingRepair(fake.bridge, { changed: () => {}, failed }, clock, 0)
+    await flow.open(null)
+    expect(flow.blocked).toBe('')
+    fake.calls.length = 0
+    return { ...fake, flow, failed, kept }
+  }
+  const showing = async (flow: { runner: { open: unknown } }) => vi.waitFor(() => expect(flow.runner.open).not.toBeNull())
+  const settled = async (flow: { runner: { pending: number } }) => vi.waitFor(() => expect(flow.runner.pending).toBe(0))
+  // Scans the tag, types the Repair cost and note, and confirms with Enter on the empty field; resolves once written.
+  async function back(flow: Awaited<ReturnType<typeof opened>>['flow'], tag: string, cost = '', note = '') {
+    expect(flow.scan(tag)).toBe('')
+    await showing(flow)
+    flow.setCost(cost)
+    flow.runner.setText(note)
+    expect(flow.runner.confirmOpen()).toBe('')
+    await settled(flow)
+    return flow.runner.rows[0]
+  }
+  // Every call after the scan's lookups (bytag, open maintenances) and the write's re-read.
+  const writes = (calls: string[]) => calls.filter((c) => !c.startsWith('bytag') && !c.startsWith('open maintenances'))
+
+  it("finds Damaged and Ready to Deploy by name when it opens; either missing blocks every scan", async () => {
+    for (const labels of [LABELS, [DAMAGED, { id: 2, name: 'Deployed' }]]) {
+      const fake = fakeBridge([damaged('NOMMA-1')])
+      fake.bridge.statusLabels.mockResolvedValue(labels)
+      const flow = createIncomingRepair(fake.bridge, { changed: () => {} }, clock, 0)
+      await flow.open(null)
+      expect(flow.blocked).toBe(labels === LABELS ? "No Status Label named 'Damaged' in Snipe-IT; ask a Snipe-IT superuser to create one" : "No Status Label named 'Ready to Deploy' in Snipe-IT; ask a Snipe-IT superuser to create one")
+      expect(flow.scan('NOMMA-1')).toBe(flow.blocked)
+      expect(flow.runner.rows).toEqual([])
+    }
+  })
+
+  it('the confirm shows the open Maintenance and says exactly what will be written, with the Supplier and cost as typed', async () => {
+    const { flow } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    flow.setSupplier(ACME)
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    expect(flow.found).toMatchObject({ open: { id: 51, startDate: '2026-10-01', notes: '[Repair intake] cracked screen' }, others: 0 })
+    expect(flow.says).toBe('Make Ready to Deploy, note the return, close the repair Maintenance (Acme Device Repair)')
+    flow.setCost('$45')
+    expect(flow.says).toBe('Make Ready to Deploy, note the return, close the repair Maintenance (Acme Device Repair, $45.00)')
+    expect(flow.runner.open!.row.what).toBe('Back from repair (Acme Device Repair)')
+  })
+
+  describe('the Maintenance', () => {
+    it('one open: Ready to Deploy, the note, then the Supplier and cost on the Maintenance, then complete it with the note', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.setSupplier(ACME)
+      const row = await back(flow, 'NOMMA-1', '$45', 'screen replaced')
+      expect(calls).toEqual([
+        'bytag NOMMA-1', 'open maintenances 1', 'bytag NOMMA-1', 'open maintenances 1', 'status 1 1', 'note 1 [Incoming repair] screen replaced',
+        'edit maintenance 51 {"supplierId":3,"cost":"45.00"}', 'complete maintenance 51 [Incoming repair] screen replaced',
+      ])
+      expect(row).toMatchObject({ what: 'Back from repair (Acme Device Repair, $45.00)', result: { state: 'done', text: 'Ready' }, sub: ['Maintenance closed'] })
+    })
+
+    it('several open: the newest is closed and the rest left as is; with nothing given, no edit before completing', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51), maintenance(57), maintenance(50, { type: { id: 2, name: 'Upgrade' } })] })
+      const row = await back(flow, 'NOMMA-1')
+      expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]', 'complete maintenance 57 [Incoming repair]'])
+      expect(row).toMatchObject({ what: 'Back from repair', sub: ['Maintenance closed', '1 other open Maintenance left as is'] })
+    })
+
+    it('refuses, writing nothing, when the Maintenance changed while the confirm was open', async () => {
+      const open = { 1: [maintenance(51)] }
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], open)
+      flow.setSupplier(ACME)
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      bridge.openMaintenances.mockResolvedValueOnce([maintenance(51, { supplier: { id: 5, name: 'Campus Tech Supply' } })])
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "NOMMA-1's Maintenance changed since it was scanned" })
+      expect(writes(calls)).toEqual([])
+    })
+
+    it("the Maintenance's own Supplier is kept, not replaced by the header's", async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51, { supplier: { id: 5, name: 'Campus Tech Supply' } })] })
+      flow.setSupplier(ACME)
+      const row = await back(flow, 'NOMMA-1', '12.5')
+      expect(writes(calls)).toContain('edit maintenance 51 {"cost":"12.50"}')
+      expect(row.what).toBe('Back from repair (Campus Tech Supply, $12.50)')
+    })
+
+    it('none open, with a Supplier or cost: one is created with them and completed straight away', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')])
+      flow.setSupplier(ACME)
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      expect(flow.says).toBe('Make Ready to Deploy, note the return, create and close a repair Maintenance (Acme Device Repair)')
+      flow.runner.setText('screen replaced')
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(writes(calls)).toEqual([
+        'status 1 1', 'note 1 [Incoming repair] screen replaced',
+        'maintenance 1 type 9 "NOMMA-1 repair" 2026-10-11 [Incoming repair] No Repair intake record supplier 3', 'complete maintenance 61 [Incoming repair] screen replaced',
+      ])
+      expect(flow.runner.rows[0].sub).toEqual(['Maintenance created and closed'])
+    })
+
+    it('none open and nothing given: no Maintenance', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')])
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      expect(flow.says).toBe('Make Ready to Deploy, note the return, no Maintenance (nothing to record)')
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
+      expect(flow.runner.rows[0].sub).toEqual(['No Maintenance (nothing to record)'])
+    })
+
+    it('one must be created but no Repair type is found: the Supplier and cost go in the note instead', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1')], {}, null)
+      flow.setSupplier(ACME)
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      flow.setCost('45')
+      expect(flow.says).toBe('Make Ready to Deploy, note the return with the Supplier and Repair cost (no Repair type found for a Maintenance)')
+      flow.runner.setText('screen replaced')
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair | supplier: Acme Device Repair | cost: 45.00] screen replaced'])
+      expect(flow.runner.rows[0].sub).toEqual(['Maintenance not written: no Repair type found'])
+    })
+
+    it("a Maintenance step that fails leaves the Asset Ready and says why; a failed note says so in the result", async () => {
+      const { flow, bridge } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      bridge.completeMaintenance.mockRejectedValueOnce(new Error('This maintenance is already complete.'))
+      expect(await back(flow, 'NOMMA-1')).toMatchObject({ result: { state: 'done', text: 'Ready, but the Maintenance failed: This maintenance is already complete.' }, sub: ['Maintenance not closed'] })
+      bridge.addAssetNote.mockRejectedValueOnce(new Error('Snipe-IT returned HTTP 500'))
+      expect((await back(flow, 'NOMMA-2')).result).toEqual({ state: 'done', text: 'Ready, but the note failed: Snipe-IT returned HTTP 500' })
+    })
+  })
+
+  it('a status change that fails stops there: a red row, nothing else written', async () => {
+    const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    bridge.updateStatus.mockRejectedValueOnce(new Error('Snipe-IT said no'))
+    const row = await back(flow, 'NOMMA-1', '45')
+    expect(row.result).toEqual({ state: 'failed', reason: 'Snipe-IT said no' })
+    expect(bridge.updateStatus).toHaveBeenCalledWith(1, 1)
+    expect(writes(calls)).toEqual([])
+  })
+
+  it("a status change that timed out pauses (#73); on Resume, found Ready to Deploy, it isn't sent again and the note and Maintenance follow", async () => {
+    const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+    // The status change went through, but its answer never came back.
+    const usual = bridge.updateStatus.getMockImplementation()!
+    bridge.updateStatus.mockImplementationOnce(async (id, statusId) => { await usual(id, statusId); throw { message: 'Snipe-IT took too long to answer', kind: 'timeout' } })
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    flow.setCost('45')
+    flow.runner.setText('screen replaced')
+    expect(flow.runner.confirmOpen()).toBe('')
+    await vi.waitFor(() => expect(flow.runner.paused).not.toBeNull())
+    expect(flow.runner.rows[0].result).toEqual({ state: 'unsure', reason: 'Snipe-IT took too long to answer' })
+    expect(writes(calls)).toEqual(['status 1 1'])
+    await flow.runner.resume()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair] screen replaced', 'edit maintenance 51 {"cost":"45.00"}', 'complete maintenance 51 [Incoming repair] screen replaced'])
+    expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done', text: 'Ready: went through before the connection dropped' }, sub: ['Maintenance closed'] })
+  })
+
+  describe('Assets that are not Damaged', () => {
+    it('refuses checked out, Archived, already ready, and a key that may not edit it, writing nothing', async () => {
+      const { flow, calls, failed } = await opened([
+        asset('NOMMA-1', { status: 'Damaged', statusId: 9 }),
+        damaged('NOMMA-2', { status: 'Archived', statusId: 6, statusType: 'archived' }),
+        damaged('NOMMA-3', { status: 'Ready to Deploy', statusId: 1, statusType: 'deployable' }),
+        damaged('NOMMA-4', { can: { checkout: true, checkin: true, update: false, delete: true, audit: true } }),
+      ])
+      for (const tag of ['NOMMA-1', 'NOMMA-2', 'NOMMA-3', 'NOMMA-4']) flow.scan(tag)
+      await settled(flow)
+      expect(flow.runner.rows.map((r) => r.result)).toEqual([
+        { state: 'failed', reason: NOT_ALLOWED },
+        { state: 'failed', reason: 'Already ready: nothing to do' },
+        { state: 'failed', reason: 'NOMMA-2 is Archived, so it can\'t be back from repair' },
+        { state: 'failed', reason: "Checked out to Avery Testwell, so it can't be back from repair. Use Bulk return or Repair intake." },
+      ])
+      expect(failed).toHaveBeenCalledTimes(4)
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('another status with an open Repair Maintenance counts as Damaged, even Ready to Deploy', async () => {
+      const { flow } = await opened([damaged('NOMMA-1', { status: 'In Repair', statusId: 3 }), damaged('NOMMA-2', { status: 'Ready to Deploy', statusId: 1, statusType: 'deployable' })], { 1: [maintenance(51)], 2: [maintenance(52)] })
+      expect((await back(flow, 'NOMMA-1')).sub).toEqual(['Maintenance closed'])
+      expect((await back(flow, 'NOMMA-2')).sub).toEqual(['Maintenance closed'])
+    })
+
+    it('any other status is a choice: Enter and a rescan never pick Make ready anyway; Esc stops it', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      expect(flow.runner.open!.choice).toMatchObject({ fix: 'Make ready anyway', blocked: '', stop: 'not Damaged' })
+      expect(flow.runner.confirmOpen()).toBe('NOMMA-1: pick Make ready anyway or Stop')
+      expect(flow.scan('NOMMA-1')).toBe('NOMMA-1: pick Make ready anyway or Stop')
+      expect(await flow.submitNote('fixed')).toBe('NOMMA-1: pick Make ready anyway or Stop')
+      await flush()
+      expect(writes(calls)).toEqual([])
+      flow.runner.cancelOpen()
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'Stopped: not Damaged' })
+    })
+
+    it('Make ready anyway writes as a confirm would, with the cost and note typed', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'Broken', statusId: 4 })])
+      flow.setSupplier(ACME)
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      flow.setCost('abc')
+      expect(flow.runner.fixOpen()).toBe('Repair cost must be a number like 45 or 45.00.')
+      flow.setCost('30')
+      flow.runner.setText('hinge replaced')
+      expect(flow.runner.fixOpen()).toBe('')
+      await settled(flow)
+      expect(writes(calls)).toEqual([
+        'status 1 1', 'note 1 [Incoming repair] hinge replaced',
+        'maintenance 1 type 9 "NOMMA-1 repair" 2026-10-11 [Incoming repair] No Repair intake record supplier 3 cost 30.00', 'complete maintenance 61 [Incoming repair] hinge replaced',
+      ])
+    })
+  })
+
+  it("made ready anyway, the header's Supplier alone records no Maintenance: the Asset may never have gone for repair", async () => {
+    const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'Pending', statusId: 5, statusType: 'pending' })])
+    flow.setSupplier(ACME)
+    flow.scan('NOMMA-1')
+    await showing(flow)
+    expect(flow.says).toBe('Make Ready to Deploy, note the return, no Maintenance (nothing to record)')
+    flow.runner.fixOpen()
+    await settled(flow)
+    expect(writes(calls)).toEqual(['status 1 1', 'note 1 [Incoming repair]'])
+  })
+
+  it('shares one Repair type lookup with Repair intake for the session, looked up again while none is found or the Settings id changes', async () => {
+    const lookup = vi.fn(async (fallback: number | null) => (fallback === 12 ? 4 : null))
+    const shared = sharedRepairType(lookup)
+    expect(await shared.repairTypeId(null)).toBeNull()
+    expect(await shared.repairTypeId(null)).toBeNull()
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(lookup.mock.calls).toEqual([[null], [null], [12]])
+    lookup.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+    shared.reset()
+    await expect(shared.repairTypeId(12)).rejects.toThrow("Can't reach Snipe-IT")
+    expect(await shared.repairTypeId(12)).toBe(4)
+    expect(lookup).toHaveBeenCalledTimes(5)
+  })
+
+  describe('Repair cost', () => {
+    it('takes $45, 45 or 45.5 and writes 45.00; anything else keeps the confirm open; the purchase cost is never sent', async () => {
+      const { flow, bridge } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      for (const bad of ['abc', '-5', '4.567', '1,200']) {
+        flow.setCost(bad)
+        expect(flow.runner.confirmOpen()).toBe('Repair cost must be a number like 45 or 45.00.')
+        expect(flow.scan('NOMMA-1')).toBe('Repair cost must be a number like 45 or 45.00.')
+      }
+      flow.setCost(' $ 45.5 ')
+      // A link in the note keeps it open too.
+      flow.runner.setText('see https://example.org/ticket')
+      expect(flow.runner.confirmOpen()).toBe('Notes can’t contain links (http:// or https://).')
+      flow.runner.setText('')
+      flow.runner.confirmOpen()
+      await settled(flow)
+      expect(bridge.updateMaintenance).toHaveBeenCalledWith(51, { cost: '45.50' })
+      expect(JSON.stringify([...Object.values(bridge)].flatMap((f) => (f as { mock?: { calls: unknown[] } }).mock?.calls ?? []))).not.toMatch(/purchase/i)
+    })
+
+    it("Enter in the Repair cost field: a number confirms; anything else is checked as an Asset Tag, and scanned if it is one", async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      expect(await flow.submitCost('cracked')).toBe('Repair cost must be a number like 45 or 45.00.')
+      expect(flow.cost).toBe('cracked')
+      // A scan landing in the cost field: the waiting Asset is skipped, the new tag gets its own confirm.
+      expect(await flow.submitCost('NOMMA-2')).toBe('')
+      expect(flow.runner.rows.map((r) => r.tag)).toEqual(['NOMMA-2', 'NOMMA-1'])
+      expect(flow.runner.rows[1].result).toEqual({ state: 'neutral', text: 'Skipped: not confirmed' })
+      await showing(flow)
+      expect(flow.cost).toBe('')
+      expect(await flow.submitCost('20')).toBe('')
+      await settled(flow)
+      expect(writes(calls)).toEqual([
+        'status 2 1', 'note 2 [Incoming repair]', 'maintenance 2 type 9 "NOMMA-2 repair" 2026-10-11 [Incoming repair] No Repair intake record cost 20.00', 'complete maintenance 61 [Incoming repair]',
+      ])
+    })
+  })
+
+  describe('Undo last', () => {
+    async function undo(flow: Awaited<ReturnType<typeof opened>>['flow']) {
+      expect(flow.runner.askUndo()).toBe('')
+      await flow.runner.undo()
+      return flow.runner.rows[0]
+    }
+
+    it('puts the old Status Label back with an undo note, then reopens the Maintenance it closed with its earlier Supplier and cost', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1', { status: 'In Repair', statusId: 3 })], { 1: [maintenance(51, { cost: '10.00' })] })
+      flow.setSupplier(ACME)
+      await back(flow, 'NOMMA-1', '45')
+      calls.length = 0
+      expect(flow.runner.askUndo()).toBe('')
+      expect(flow.runner.confirm).toBe('Undo: NOMMA-1 made Ready to Deploy, its Maintenance closed? Enter to undo, Esc to cancel.')
+      await flow.runner.undo()
+      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 3', 'note 1 [Undo] Incoming repair', 'read maintenance 51', 'edit maintenance 51 {"supplierId":null,"cost":"10.00","reopen":true}'])
+      expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
+    })
+
+    it('deletes a Maintenance it created; one it only edited gets its fields back without reopening', async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 2: [maintenance(52, { supplier: ACME })] })
+      flow.setSupplier(ACME)
+      await back(flow, 'NOMMA-1')
+      calls.length = 0
+      await undo(flow)
+      expect(calls).toEqual(['bytag NOMMA-1', 'status 1 9', 'note 1 [Undo] Incoming repair', 'read maintenance 61', 'delete maintenance 61'])
+      bridge.completeMaintenance.mockRejectedValueOnce(new Error('This maintenance is already complete.'))
+      await back(flow, 'NOMMA-2', '8')
+      calls.length = 0
+      expect((await undo(flow)).result).toEqual({ state: 'undone' })
+      expect(calls.slice(-1)).toEqual(['edit maintenance 52 {"cost":null}'])
+    })
+
+    it('a free repair (Repair cost 0, which Snipe-IT keeps as none) is still undone: the Maintenance reopened, or deleted if it was created', async () => {
+      const { flow, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      await back(flow, 'NOMMA-1', '0')
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
+      expect(calls.slice(-1)).toEqual(['edit maintenance 51 {"cost":null,"reopen":true}'])
+      await back(flow, 'NOMMA-2', '0')
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: undefined })
+      expect(calls.slice(-1)).toEqual(['delete maintenance 61'])
+    })
+
+    it("stops when the status change fails, or the Asset isn't as it was left: the row stays done and says why", async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      await back(flow, 'NOMMA-1')
+      calls.length = 0
+      bridge.updateStatus.mockRejectedValueOnce(new Error('Snipe-IT said no'))
+      expect(await undo(flow)).toMatchObject({ result: { state: 'done' }, undoFailed: 'Snipe-IT said no' })
+      expect(writes(calls)).toEqual([])
+      bridge.assetByTag.mockResolvedValueOnce(damaged('NOMMA-1', { status: 'Pending', statusId: 5 }))
+      expect((await undo(flow)).undoFailed).toBe("NOMMA-1 is 'Pending' now")
+      bridge.assetByTag.mockResolvedValueOnce(asset('NOMMA-1', { statusId: 1 }))
+      expect((await undo(flow)).undoFailed).toBe('NOMMA-1 is checked out to Avery Testwell now')
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('leaves a Maintenance someone corrected since the return as it is, and says so', async () => {
+      const { flow, calls, kept } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      flow.setSupplier(ACME)
+      await back(flow, 'NOMMA-1', '45')
+      kept.get(51)!.cost = '54.00'
+      calls.length = 0
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: "the Maintenance wasn't reopened: it was changed since the return, so it was left as is" })
+      // The return's own sub-results ("Maintenance closed") aren't shown under Undone.
+      expect(flow.runner.rows[0].sub).toBeUndefined()
+      expect(calls.filter((c) => c.startsWith('edit') || c.startsWith('delete'))).toEqual([])
+      await back(flow, 'NOMMA-2')
+      // Its notes corrected, Supplier and Repair cost untouched: still left as is.
+      kept.get(61)!.notes = 'Screen replaced under warranty'
+      expect((await undo(flow)).undoFailed).toBe("the Maintenance wasn't deleted: it was changed since the return, so it was left as is")
+      expect(calls.filter((c) => c.startsWith('delete'))).toEqual([])
+    })
+
+    it("a one-word note or cost whose tag lookup fails is cleared, never kept unchecked; the field shows what's kept", async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+      flow.runner.setText('fixed')
+      expect(await flow.submitNote('fixed')).toBe("Couldn't check whether fixed is an Asset Tag: Can't reach Snipe-IT")
+      expect(flow.runner.open?.text).toBe('')
+      bridge.assetByTag.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+      flow.setCost('cracked')
+      expect(await flow.submitCost('cracked')).toBe("Couldn't check whether cracked is an Asset Tag: Can't reach Snipe-IT")
+      expect(flow.cost).toBe('')
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('a one-word note whose lookup is overtaken by a newer submission never confirms', async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1'), damaged('NOMMA-2')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      let release = (_: Asset | null) => {}
+      bridge.assetByTag.mockImplementationOnce(() => new Promise((r) => { release = r }))
+      const first = flow.submitNote('fixed')
+      const second = flow.submitNote('NOMMA-2')
+      release(null)
+      expect(await first).toBe('')
+      expect(await second).toBe('')
+      await settled(flow)
+      expect(flow.runner.rows.map((r) => [r.tag, r.result.state])).toEqual([['NOMMA-2', 'confirm'], ['NOMMA-1', 'neutral']])
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('Settings pointing at another server while the Maintenances are read again stop it before any write', async () => {
+      const { flow, bridge, calls } = await opened([damaged('NOMMA-1')], { 1: [maintenance(51)] })
+      flow.scan('NOMMA-1')
+      await showing(flow)
+      let release = (_: OpenMaintenance[]) => {}
+      bridge.openMaintenances.mockImplementationOnce(() => new Promise((r) => { release = r }))
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(bridge.openMaintenances).toHaveBeenCalledTimes(2))
+      flow.reset()
+      release([maintenance(51)])
+      await flush()
+      await flush()
+      expect(writes(calls)).toEqual([])
+    })
+
+    it('a note or Maintenance step that fails still leaves the row Undone, saying what was not put back', async () => {
+      const { flow, bridge } = await opened([damaged('NOMMA-1')])
+      flow.setSupplier(ACME)
+      await back(flow, 'NOMMA-1')
+      bridge.addAssetNote.mockRejectedValueOnce(new Error('HTTP 500'))
+      bridge.deleteMaintenance.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
+      expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: "the note failed: HTTP 500; the Maintenance wasn't deleted: Can't reach Snipe-IT" })
     })
   })
 })

@@ -14,8 +14,8 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createRepairIntake, createTempCheckout, NOT_ALLOWED, type Runner } from './workflows'
-import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
+import { createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createTempCheckout, NOT_ALLOWED, sharedRepairType, type Runner } from './workflows'
+import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, IncomingRepairView, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
@@ -140,8 +140,11 @@ export function App() {
   savedSettings.current = settings
   const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
     () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
-  const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
-  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending' | 'paused' | 'unsent'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Temp checkout': tempCheckout.runner }
+  // The two repair Workflows share one Repair type lookup (#60 §1).
+  const [repairType] = useState(() => sharedRepairType(window.snipeIt.repairTypeId))
+  const [repairIntake] = useState(() => createRepairIntake({ ...window.snipeIt, repairTypeId: repairType.repairTypeId }, { changed, failed: errorSound }))
+  const [incomingRepair] = useState(() => createIncomingRepair({ ...window.snipeIt, repairTypeId: repairType.repairTypeId }, { changed, failed: errorSound }))
+  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending' | 'paused' | 'unsent'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Incoming repair': incomingRepair.runner, 'Temp checkout': tempCheckout.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -229,7 +232,9 @@ export function App() {
     bulkCheckout.reset()
     bulkReturn.reset()
     tempCheckout.reset()
+    repairType.reset()
     repairIntake.reset()
+    incomingRepair.reset()
     cancel(); setAsset(null); setPanel(null); setRecent([]); bulkEpoch.current++; bulkBusy.current = false; setBulk(null); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
@@ -463,6 +468,7 @@ export function App() {
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
+        : view?.page === 'workflow' && view.workflow === 'Incoming repair' ? <IncomingRepairView flow={incomingRepair} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} onSettings={openSettings} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />

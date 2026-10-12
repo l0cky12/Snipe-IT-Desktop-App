@@ -108,6 +108,8 @@ const components = stock([{ name: '8GB DDR4 SODIMM', serial: null, qty: 20, rema
 // Maintenance types (v8.6+: a maintenance_type_id). Operator keys can't read the type list; any Repair Maintenance gives the type away.
 const maintenanceTypeRows = named(['Repair', 'Upgrade', 'Software Support'])
 const typeDetails = (name) => ({ ...maintenanceTypeRows.find((t) => t.name === name), tag_color: null })
+// A Maintenance's cost as Snipe-IT sends it: formatted, with thousands separators.
+const money = (v) => (v === null || v === undefined || v === '' ? null : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
 const log = []
 const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
@@ -219,6 +221,16 @@ for (const a of assets) {
   Object.assign(a, { supplier: pick(suppliers, a.id), company: companies[0], order_number: `PO-${2024000 + (a.id % 12)}` })
   a.custom_fields ??= { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:00:${(a.id >> 8).toString(16).padStart(2, '0')}:${(a.id & 255).toString(16).padStart(2, '0')}`.toUpperCase() } }
 }
+// Who repairs things: a Supplier no Asset was bought from.
+suppliers.push({ id: 3, name: 'Acme Device Repair' })
+// Back from repair (Incoming repair): Damaged Assets, two with an open Repair Maintenance (one already naming its
+// Supplier and a cost), one without. Repair intake opened them days ago.
+const away = assets.filter((a) => !a.assigned_to && a.status_label.id === 1).slice(0, 3)
+for (const a of away) a.status_label = statuses.find((s) => s.name === 'Damaged')
+away.slice(0, 2).forEach((a, i) => maintenances.push({
+  id: maintenances.length + 1, asset: { id: a.id, name: a.name, asset_tag: a.asset_tag }, name: `${a.asset_tag} damaged`, title: `${a.asset_tag} damaged`, notes: ['[Repair intake] cracked screen, dropped in hallway', "[Repair intake] won't power on"][i],
+  supplier: i ? suppliers[2] : null, cost: i ? money(30) : null, start_date: { date: day(-9 - i * 5), formatted: day(-9 - i * 5) }, completed_at: null, maintenance_type: 'Repair', asset_maintenance_type: '', maintenance_type_details: typeDetails('Repair'),
+}))
 const tally = (list, test) => list.filter(test).length
 const makerOf = (a) => a.manufacturer ?? a.model.manufacturer
 Object.assign(lists, {
@@ -329,10 +341,10 @@ const refused = { status: 'error', messages: 'You do not have permission to acce
 // The methods each path answers, as Snipe-IT routes them; any other method or path gets Snipe-IT's catch-all 404.
 // A new endpoint below needs its path here too.
 const routes = [
-  [/^(users\/me|users\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
+  [/^(users\/me|users\/selectlist|suppliers\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -369,16 +381,35 @@ createServer(async (req, res) => {
     const type = maintenanceTypeRows.find((t) => t.id === body.maintenance_type_id)
     if (!item || !type || !body.name || !body.start_date) return fail({ ...(!type && { maintenance_type_id: ['The selected maintenance type id is invalid.'] }), ...(!body.name && { name: ['The name field is required.'] }) })
     const m = { id: Math.max(0, ...maintenances.map((x) => x.id)) + 1, asset: { id: item.id, name: item.name, asset_tag: item.asset_tag }, name: body.name, title: body.name, notes: body.notes ?? null,
+      supplier: suppliers.find((s) => s.id === body.supplier_id) ?? null, cost: money(body.cost),
       maintenance_type: type.name, asset_maintenance_type: '', maintenance_type_details: { ...type, tag_color: null }, start_date: { date: body.start_date, formatted: body.start_date }, completed_at: null }
     maintenances.push(m)
     return send({ status: 'success', messages: 'Maintenance created.', payload: { id: m.id } })
   }
-  // Snipe-IT soft-deletes a Maintenance; here it's just gone.
-  if ((m = path.match(/^maintenances\/(\d+)$/)) && req.method === 'DELETE') {
-    const i = maintenances.findIndex((x) => x.id === +m[1])
-    if (i < 0) return send({ status: 'error', messages: 'Maintenance not found', payload: null }, 404)
-    maintenances.splice(i, 1)
-    return send({ status: 'success', messages: 'Maintenance deleted.', payload: null })
+  if ((m = path.match(/^maintenances\/(\d+)(\/complete)?$/))) {
+    const found = maintenances.find((x) => x.id === +m[1])
+    if (!found) return send({ status: 'error', messages: 'Maintenance not found.', payload: null }, 404)
+    if (m[2]) {
+      if (found.completed_at) return fail('This maintenance is already complete.')
+      const at = new Date().toISOString().replace('T', ' ').slice(0, 19)
+      Object.assign(found, { completed_at: { datetime: at, formatted: at.slice(0, 10) }, completed_by: { id: 900, name: 'Demo Tech' } })
+      return send({ status: 'success', messages: 'Maintenance completed.', payload: found })
+    }
+    // Snipe-IT soft-deletes a Maintenance; here it's just gone.
+    if (req.method === 'DELETE') return maintenances.splice(maintenances.indexOf(found), 1), send({ status: 'success', messages: 'Maintenance deleted.', payload: null })
+    if (req.method === 'GET') return send(found)
+    if ('cost' in body && body.cost !== null && !(Number(body.cost) >= 0)) return fail({ cost: ['The cost must be at least 0.'] })
+    Object.assign(found, {
+      ...('supplier_id' in body && { supplier: suppliers.find((s) => s.id === body.supplier_id) ?? null }), ...('cost' in body && { cost: money(body.cost) }),
+      ...('completed_at' in body && { completed_at: body.completed_at, completed_by: null }),
+    })
+    return send({ status: 'success', messages: 'Maintenance updated.', payload: found })
+  }
+  // Snipe-IT's Supplier picker: first 50 by name, any Operator.
+  if (path === 'suppliers/selectlist') {
+    const q = (url.searchParams.get('search') ?? '').toLowerCase()
+    const found = [...suppliers].sort((a, b) => a.name.localeCompare(b.name)).filter((s) => s.name.toLowerCase().includes(q)).slice(0, 50)
+    return send({ results: found.map((s) => ({ id: s.id, text: s.name, image: null })), pagination: { more: false } })
   }
   if ((m = path.match(/^notes\/(\d+)\/store$/))) {
     const a = assets.find((x) => x.id === +m[1])

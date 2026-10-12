@@ -1,10 +1,10 @@
 // The Workflows shell (#56): each Workflow's scan queue and Running list, and the Workflows built on it.
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
-import type { Asset, Assignee, CheckoutOptions, Failure, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, Assignee, CheckoutOptions, Failure, OpenMaintenance, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
 import { dueAt, dueLabel, realDate, realTime, stamp, type SchoolTimes } from '../../main/calendar'
 import { localDate } from '../../main/export'
-import { cleanText, parseWorkflowNote, undoNote, userNotesLine, workflowNote } from '../../main/notes'
+import { cleanText, parseWorkflowNote, repairCost, undoNote, userNotesLine, workflowNote } from '../../main/notes'
 import type { Outcome } from './ListView'
 
 // Why an action is off when Snipe-IT says the Operator's key may not do it.
@@ -18,11 +18,12 @@ export type Result = { state: 'waiting' } | { state: 'confirm' } | { state: 'cho
 /** How Undo last puts a done row back. says: what was done, for the confirm. run: the opposite Snipe-IT action, given the
  *  Asset as it is now; it throws, saying what it found, when the Asset is no longer as the Workflow left it. current: false
  *  once Settings points at another server; after each of its own awaits, run writes nothing more unless it's still true.
- *  It may resolve to the Undone row's sub-results (a later step that failed doesn't stop it being Undone). */
-export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void | string[]> }
+ *  Once the Asset is put back, it may resolve to what it couldn't put back besides (Incoming repair: "Undone, but …"),
+ *  or to the Undone row's sub-results (Repair intake: a later step that failed doesn't stop it being Undone). */
+export type Undo = { says: string; run: (now: Asset, current: () => boolean) => Promise<void | string | string[]> }
 /** One scan in a Running list. ctx is what the Workflow was set to when it was scanned (Bulk return: the Location).
  *  before: the Asset as the lookup found it, before the Workflow acted. undo: how to put it back, or why it can't be.
- *  undoFailed: why the last Undo of it didn't happen. */
+ *  undoFailed: why the last Undo of it didn't happen; once Undone, what that Undo couldn't put back. */
 export type Row<C = unknown> = {
   key: number; time: string; tag: string; assetId: number | null; name: string; what: string; ctx: C; result: Result
   before: Asset | null; undo?: Undo | string; undoFailed?: string
@@ -40,12 +41,13 @@ export type Done = { text: string; what?: string; undo?: Undo | string; sub?: st
  *  several steps finishes the ones after its first there, given the text typed: they were never sent. */
 export type Write = { write: (now: Asset, text: string) => Promise<Done>; left?: (now: Asset, text: string) => Done | null | Promise<Done | null> }
 /** A confirm step (#56 §3): its Write, run once confirmed. needs: when it has text it can't go without, what the status
- *  line says while that's empty ("Say what happened"). says: what will be written, for the card. */
-export type Confirm = Write & { needs?: string; says?: string }
-/** A choice step (#56 §3): an Asset that can't go through as scanned, and its Write, the fix-it action, run once picked.
- *  fix: the fix-it button's label; blocked: why it's off ('' when it isn't); stop: what's in the way, for "Stopped: <stop>".
- *  Only an explicit pick runs it: Enter and a same-tag rescan never do. */
-export type Choice = Write & { fix: string; blocked: string; stop: string }
+ *  line says while that's empty ("Say what happened"). says: what will be written, for the card. check: what's wrong with
+ *  the text typed or the Workflow's other fields ('' when nothing), which keeps it open. */
+export type Confirm = Write & { needs?: string; says?: string; check?: (text: string) => string }
+/** A choice step (#56 §3): an Asset that can't go through as scanned, and its Write, the fix-it action, run once picked
+ *  with any text typed. fix: the fix-it button's label; blocked: why it's off ('' when it isn't); stop: what's in the
+ *  way, for "Stopped: <stop>"; check: as a confirm's. Only an explicit pick runs it: Enter and a same-tag rescan never do. */
+export type Choice = Write & { fix: string; blocked: string; stop: string; check?: (text: string) => string }
 /** What a Workflow's step does to one scanned Asset: done at once, a neutral row, a confirm or choice first, or a write
  *  sent at once (send); or a throw with the refusal. Only the Write is sent again or checked after a pause. */
 export type Act<C> = (asset: Asset, ctx: C) => Promise<Done | { neutral: string; what?: string } | { confirm: Confirm; what?: string } | { choice: Choice; what?: string } | { send: Write }>
@@ -106,6 +108,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
   const writes = new Map<number, { write: Write; text: string; unsure?: string }>()
   // Off the Workflow's page: a confirm that would open is skipped, so nothing waits for an Operator who isn't looking.
   let away = false
+  // Bumped by each field submission checked as a tag, so an older lookup never confirms or clears newer input.
+  let typing = 0
   let paused: Pause | null = null
   // The rows that waited through a pause (by key): on Resume, each one's confirm comes up only once the one before is answered.
   const held = new Set<number>()
@@ -281,6 +285,8 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     const { confirm, choice, text } = opened
     if (choice) return `${openRow()!.tag}: pick ${choice.fix} or Stop`
     if (confirm!.needs && !text.trim()) return confirm!.needs
+    const wrong = confirm!.check?.(text)
+    if (wrong) return wrong
     queueWrite(confirm!, text.trim())
     return ''
   }
@@ -347,26 +353,38 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     /** The open choice's fix-it button, clicked (or Tab, then Enter): its write joins the queue. Returns why not ('' when it went). */
     fixOpen(): string {
       if (!opened?.choice) return ''
-      if (opened.choice.blocked) return opened.choice.blocked
-      queueWrite(opened.choice, '')
+      const { blocked, check } = opened.choice
+      const wrong = blocked || check?.(opened.text)
+      if (wrong) return wrong
+      queueWrite(opened.choice, opened.text.trim())
       return ''
     },
     /** Esc, Done or leaving: the open confirm's Asset is skipped, or the open choice's stopped; never written. */
     cancelOpen: skipOpen,
+    /** One word typed into a field of the open confirm may be a scan that landed there: it's checked as an Asset Tag,
+     *  and if it is one, clear() empties that field and it's scanned. Resolves to what the status line should say, or
+     *  null when it isn't a tag (or isn't one word), so the field keeps it. */
+    async typedTag(raw: string, ctx: C, clear: () => void): Promise<string | null> {
+      const key = opened?.key
+      const mine = ++typing
+      const word = cleanTag(raw)
+      if (!key || !word || /\s/.test(word)) return null
+      const asset = await bridge.assetByTag(word).catch((e: Error) => e)
+      // Esc, another scan, newer input or leaving while it was looked up: this text no longer belongs to the confirm.
+      if (opened?.key !== key || mine !== typing) return ''
+      // It may have been a scan, so it never becomes the text unchecked (onChange already stored it): clear() empties
+      // that field. The confirm stays open.
+      if (asset instanceof Error) return clear(), `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
+      if (!asset) return null
+      clear()
+      return this.scan(word, ctx)
+    },
     /** Enter in a confirm's text field. One word is checked as an Asset Tag first, and is a scan of it if it is one;
      *  anything else is the text, and confirms. Returns what the status line should say. */
     async submitText(raw: string, ctx: C): Promise<string> {
-      const key = opened?.key
-      const word = cleanTag(raw)
-      if (key && word && !/\s/.test(word)) {
-        const asset = await bridge.assetByTag(word).catch((e: Error) => e)
-        // Esc, another scan or leaving while it was looked up: this text no longer belongs to the confirm.
-        if (opened?.key !== key) return ''
-        // It may have been a scan, so it never becomes the text unchecked (onChange already stored it); the confirm stays open.
-        if (asset instanceof Error) return (opened.text = ''), `Couldn't check whether ${word} is an Asset Tag: ${asset.message}`
-        // The text was the tag, so nothing has been said yet.
-        if (asset) return (opened.text = ''), this.scan(word, ctx)
-      }
+      // The text was the tag, so nothing has been said yet.
+      const scanned = await this.typedTag(raw, ctx, () => opened && (opened.text = ''))
+      if (scanned !== null) return scanned
       if (!opened) return ''
       opened.text = raw
       return confirmOpen()
@@ -415,10 +433,12 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
         if (mine !== generation) return
         // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
         if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-        const sub = await run(now, () => mine === generation)
+        const got = await run(now, () => mine === generation)
         if (mine !== generation) return
-        announce = `${row.tag}: Undone`
-        update(row.key, { result: { state: 'undone' }, undoFailed: undefined, ...(sub && { sub, copy: undefined }) })
+        const left = (typeof got === 'string' && got) || undefined
+        announce = `${row.tag}: Undone${left ? `, but ${left}` : ''}`
+        // An Undone row shows the Undo's own sub-results, never the ones from when it was done ("Maintenance closed").
+        update(row.key, { result: { state: 'undone' }, undoFailed: left, sub: Array.isArray(got) ? got : undefined, copy: undefined })
       } catch (e) {
         if (mine !== generation) return
         announce = `${row.tag}: ${(e as Error).message}`
@@ -843,25 +863,94 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
 export type BulkCheckout = ReturnType<typeof createBulkCheckout>
 
 export const DAMAGED = 'Damaged'
-export const NO_DAMAGED = `No Status Label named '${DAMAGED}' in Snipe-IT; ask an admin to create one`
-const isRepair = (t: StatusLabel | null, typeId: number) => !!t && (t.id === typeId || t.name.trim().toLowerCase() === 'repair')
-/** What Repair intake needs from Snipe-IT before a scan: the Damaged label, and the Maintenance type with the Settings
- *  id it was looked up with. */
-type RepairSetup = { damaged: number; typeId: number | null; fallback: number | null }
+const noLabel = (name: string) => `No Status Label named '${name}' in Snipe-IT; ask a Snipe-IT superuser to create one`
+export const NO_DAMAGED = noLabel(DAMAGED)
+const isRepair = (t: StatusLabel | null, typeId: number | null) => !!t && (t.id === typeId || t.name.trim().toLowerCase() === 'repair')
+/** What a repair Workflow needs from Snipe-IT before a scan: its Status Labels' ids by name, and the Maintenance type
+ *  for repairs with the Settings id it was looked up with. */
+type RepairSetup = { labels: Record<string, number>; typeId: number | null; fallback: number | null }
+
+/** The Maintenance type for repairs, looked up once per session and shared by Repair intake and Incoming repair (#60
+ *  §1): looked up again while none is found, or when the Settings id it was looked up with changes. */
+export function sharedRepairType(lookup: SnipeItBridge['repairTypeId']) {
+  let kept: { fallback: number | null; id: Promise<number | null> } | null = null
+  return {
+    repairTypeId(fallback: number | null): Promise<number | null> {
+      if (kept?.fallback === fallback) return kept.id
+      const mine = { fallback, id: lookup(fallback) }
+      kept = mine
+      const forget = () => { if (kept === mine) kept = null }
+      mine.id.then((id) => id === null && forget(), forget)
+      return mine.id
+    },
+    /** Settings pointing at another server. */
+    reset() {
+      kept = null
+    },
+  }
+}
+
+// Repair intake and Incoming repair look up their Status Labels (by name, ignoring case) and the Maintenance type
+// (#59 §3's fallback chain) when they open, and keep them for the session. What isn't found yet is looked for again at
+// the next open; a type found is kept until the Settings id changes, which may be what the Operator just corrected.
+function repairSetup(bridge: Pick<SnipeItBridge, 'statusLabels' | 'repairTypeId'>, names: string[], events: Events) {
+  let setup: Promise<RepairSetup> | null = null
+  let found: Partial<RepairSetup> = {}
+  let blocked = ''
+  // Bumped by reset, so a lookup for the old server never lands.
+  let attempt = 0
+  return {
+    /** Why no scan is taken (a Status Label missing, or Snipe-IT couldn't be read), or ''. */
+    get blocked() { return blocked },
+    /** For a scan: what the last open looked up, once it's in. */
+    get: () => setup ?? Promise.reject(new Error(noLabel(names[0]))),
+    /** fallback: Settings' Maintenance type for repairs. */
+    async open(fallback: number | null): Promise<void> {
+      const typeKept = found.typeId != null && found.fallback === fallback
+      if (found.labels && typeKept) return
+      const mine = ++attempt
+      const was = found
+      const next = (async (): Promise<RepairSetup> => {
+        let labels = was.labels
+        if (!labels) {
+          const all = await bridge.statusLabels()
+          labels = {}
+          for (const name of names) {
+            const id = all.find((l) => l.name.trim().toLowerCase() === name.toLowerCase())?.id
+            if (id === undefined) throw new Error(noLabel(name))
+            labels[name] = id
+          }
+        }
+        return { labels, typeId: typeKept ? was.typeId! : await bridge.repairTypeId(fallback), fallback }
+      })()
+      setup = next
+      try {
+        const s = await next
+        if (mine !== attempt) return
+        found = s
+        blocked = ''
+      } catch (e) {
+        if (mine !== attempt) return
+        blocked = (e as Error).message
+      }
+      events.changed()
+    },
+    reset() {
+      attempt++
+      setup = null
+      found = {}
+      blocked = ''
+    },
+  }
+}
 
 // Repair intake (#59): each scanned Asset is confirmed with what happened to it (required), then checked in as Damaged
 // (or just marked Damaged if it isn't checked out), a repair Maintenance is opened, and a User who held it gets a User
 // notes line. Each step after the first runs only once the first worked, and none undoes an earlier one. Only the
 // first step can pause the Workflow (#73); a later one that fails is its sub-result.
 export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'getAsset' | 'checkin' | 'checkout' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'operatorName' | 'repairTypeId' | 'openMaintenances' | 'createMaintenance' | 'deleteMaintenance' | 'appendUserNotes' | 'removeUserNotesLine'>, events: Events, now = () => new Date(), pace = PACE_MS) {
-  // Looked up when the Workflow opens and kept for the session; what isn't found yet (Damaged, a Repair type) is looked
-  // for again at the next open.
-  let setup: Promise<RepairSetup> | null = null
-  let found: Partial<RepairSetup> = {}
-  let blocked = ''
-  // Bumped by reset, so a lookup for the old server never lands.
-  let attempt = 0
-  // Bumped by reset too: an intake still writing stops before its next step, which would go to the new server.
+  const setup = repairSetup(bridge, [DAMAGED], events)
+  // Bumped by reset: an intake still writing stops before its next step, which would go to the new server.
   let session = 0
   // "(by <Operator>)", read when the Workflow opens; failing, it's read again when a User notes line needs it.
   let operator: Promise<string> | null = null
@@ -880,7 +969,7 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
   }
 
   const runner = createRunner<null>(bridge, async (a) => {
-    const { damaged, typeId } = await (setup ?? Promise.reject(new Error(NO_DAMAGED)))
+    const { labels: { [DAMAGED]: damaged }, typeId } = await setup.get()
     const held = a.assignee
     // Checked out, it's a Checkin; otherwise the Asset is edited (its Status Label and a note).
     if (held ? !a.can.checkin : !a.can.update) throw new Error(NOT_ALLOWED)
@@ -980,46 +1069,256 @@ export function createRepairIntake(bridge: Pick<SnipeItBridge, 'assetByTag' | 'k
   return {
     runner,
     /** Why no scan is taken (no Damaged label, or Snipe-IT couldn't be read), or ''. */
-    get blocked() { return blocked },
+    get blocked() { return setup.blocked },
     /** Opening the Workflow: looks up what it doesn't have yet. fallback: Settings' Maintenance type for repairs. */
     async open(fallback: number | null): Promise<void> {
       operatorName().catch(() => {})
-      // A type found is kept until the Settings id changes, which may be what the Operator just corrected.
-      const typeKept = found.typeId != null && found.fallback === fallback
-      if (found.damaged !== undefined && typeKept) return
-      const mine = ++attempt
-      const was = found
-      const next = (async (): Promise<RepairSetup> => {
-        const damaged = was.damaged ?? (await bridge.statusLabels()).find((l) => l.name.trim().toLowerCase() === DAMAGED.toLowerCase())?.id
-        if (damaged === undefined) throw new Error(NO_DAMAGED)
-        return { damaged, typeId: typeKept ? was.typeId! : await bridge.repairTypeId(fallback), fallback }
-      })()
-      setup = next
-      try {
-        const s = await next
-        if (mine !== attempt) return
-        found = s
-        blocked = ''
-      } catch (e) {
-        if (mine !== attempt) return
-        blocked = (e as Error).message
-      }
-      events.changed()
+      await setup.open(fallback)
     },
-    scan: (raw: string) => blocked || runner.scan(raw, null),
+    scan: (raw: string) => setup.blocked || runner.scan(raw, null),
     /** Settings were saved: a new API token on the same server may be another Operator, so "(by …)" is read again. */
     forgetOperator() {
       operator = null
     },
     reset() {
-      attempt++
       session++
-      setup = null
-      found = {}
-      blocked = ''
+      setup.reset()
       operator = null
       runner.reset()
     },
   }
 }
 export type RepairIntake = ReturnType<typeof createRepairIntake>
+
+const newest = (list: OpenMaintenance[]) => list.reduce<OpenMaintenance | null>((n, m) => (n && n.id > m.id ? n : m), null)
+/** What an Incoming repair scan was made under: the "Repaired by" Supplier then. Once its confirm or choice opens, also
+ *  what the scan found (the newest open Repair Maintenance, how many others, the Repair type id, and whether it counts
+ *  as Damaged) and the Repair cost typed there, as typed. */
+export type IncomingCtx = { supplier: StatusLabel | null; cost: string; found?: { open: OpenMaintenance | null; others: number; typeId: number | null; damaged: boolean } }
+// A Repair cost as typed: '' when none, else `45.00`; throws with a message when it isn't a number.
+const costOf = (raw: string) => (raw.trim() ? repairCost(raw) : '')
+// Snipe-IT stores a Repair cost of 0 as none, so null, '' and 0.00 all read back as no cost.
+const noCost = (c: string | null) => (c && Number(c) !== 0 ? c : null)
+const wrong = (f: () => unknown) => { try { return f(), '' } catch (e) { return (e as Error).message } }
+// "(Acme Device Repair, $45.00)", or '' with neither.
+const given = (supplier: StatusLabel | null, cost: string) => {
+  const g = [supplier?.name, cost && `$${cost}`].filter(Boolean).join(', ')
+  return g && ` (${g})`
+}
+const backFrom = (supplier: StatusLabel | null, cost: string) => `Back from repair${given(supplier, cost)}`
+// The Maintenance step (#60 §1): close the open one, create one and close it (only when a Supplier or Repair cost was
+// given), or, with no Repair type to create one with, put the Supplier and Repair cost in the note so nothing typed is
+// lost. An Asset made ready anyway (not Damaged) may never have gone for repair, so there the header's Supplier alone
+// records nothing; a Repair cost typed for it does.
+type Plan = 'close' | 'create' | 'note' | 'none'
+function planOf({ supplier, cost, found }: IncomingCtx): { plan: Plan; supplier: StatusLabel | null; cost: string } {
+  const { open, typeId, damaged } = found!
+  const c = wrong(() => costOf(cost)) ? '' : costOf(cost)
+  // The Maintenance's own Supplier is kept; the header's fills one that has none.
+  const s = open?.supplier ?? supplier
+  return { plan: open ? 'close' : !c && !(s && damaged) ? 'none' : typeId === null ? 'note' : 'create', supplier: s, cost: c }
+}
+
+// Incoming repair (#60): pick who repaired them once ("Repaired by"), then each scanned Asset is confirmed (with an
+// optional Repair cost and note), made Ready to Deploy, its return noted in History, and its open Repair Maintenance
+// closed with the Supplier and cost. Nothing after the status change undoes it. Only the status change can pause the
+// Workflow (#73); a later step that fails is in the row's result.
+export function createIncomingRepair(
+  bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'updateStatus' | 'addAssetNote' | 'statusLabels' | 'repairTypeId' | 'openMaintenances' | 'maintenance' | 'createMaintenance' | 'updateMaintenance' | 'completeMaintenance' | 'deleteMaintenance' | 'supplierSelectlist'>,
+  events: Events, now = () => new Date(), pace = PACE_MS,
+) {
+  const setup = repairSetup(bridge, [DAMAGED, READY], events)
+  let supplier: StatusLabel | null = null
+  // Bumped by reset: a return still writing stops before its next step, which would go to the new server.
+  let session = 0
+  const sameSession = (mine: number) => {
+    if (mine !== session) throw new Error('Stopped: Settings changed')
+  }
+  const next = (): IncomingCtx => ({ supplier, cost: '' })
+
+  const runner = createRunner<IncomingCtx>(bridge, async (a, ctx) => {
+    const { labels: { [DAMAGED]: damaged, [READY]: ready }, typeId } = await setup.get()
+    if (a.assignee) throw new Error(`Checked out to ${assigneeName(a.assignee)}, so it can't be back from repair. Use Bulk return or Repair intake.`)
+    if (a.statusType === 'archived') throw new Error(`${a.assetTag} is Archived, so it can't be back from repair`)
+    if (!a.can.update) throw new Error(NOT_ALLOWED)
+    const openRepairs = async () => (await bridge.openMaintenances(a.id)).filter((m) => isRepair(m.type, typeId))
+    const repairs = await openRepairs()
+    // The newest is closed: Snipe-IT's ids grow with each new Maintenance.
+    const open = newest(repairs)
+    if (a.statusId === ready && !open) throw new Error('Already ready: nothing to do')
+    // Another status with an open Repair Maintenance counts as Damaged: someone changed the label by hand.
+    const isDamaged = a.statusId === damaged || !!open
+    ctx.found = { open, others: Math.max(0, repairs.length - 1), typeId, damaged: isDamaged }
+
+    const write = async (current: Asset, text: string): Promise<Done> => {
+      if (current.assignee || current.statusId !== a.statusId) throw new Error(`${a.assetTag} changed since it was scanned`)
+      // Taken before the re-read, so Settings pointing at another server meanwhile stops it before the first write.
+      const mine = session
+      const still = () => sameSession(mine)
+      // Its Maintenances are read again, so a Supplier or Repair cost someone set on it since the scan is never overwritten.
+      const fresh = newest(await openRepairs())
+      if (fresh?.id !== open?.id || fresh?.supplier?.id !== open?.supplier?.id || fresh?.cost !== open?.cost) throw new Error(`${a.assetTag}'s Maintenance changed since it was scanned`)
+      // Built first, so a link in it refuses before anything is written.
+      noteFor(text)
+      still()
+      await bridge.updateStatus(a.id, ready)
+      return rest(text, mine)
+    }
+    const noteFor = (text: string) => {
+      const { plan, supplier: s, cost } = planOf(ctx)
+      return workflowNote('Incoming repair', plan === 'note' ? { text, supplier: s?.name, cost: cost || undefined } : { text })
+    }
+    // The steps after the status change, which never pause: each failure is in the result text or a sub-result.
+    const rest = async (text: string, mine: number): Promise<Done> => {
+      const still = () => sameSession(mine)
+      const { plan, supplier: s, cost } = planOf(ctx)
+      const note = noteFor(text)
+      still()
+      // "Ready, but <step> failed: <reason>" (#60 §2).
+      const failed: string[] = []
+      await bridge.addAssetNote(a.id, note).catch((e: Error) => failed.push(`the note failed: ${e.message}`))
+      still()
+      // What the undo puts back: the Maintenance's fields it changed, whether it closed it, or the one it created.
+      const change: { supplierId?: number; cost?: string } = {}
+      const madeOn = localDate(now())
+      const madeNotes = workflowNote('Incoming repair', { text: 'No Repair intake record' })
+      let closed = false
+      let created: number | null = null
+      const sub: string[] = []
+      if (plan === 'close') {
+        try {
+          if (s && !open!.supplier) change.supplierId = s.id
+          if (cost) change.cost = cost
+          if (Object.keys(change).length) await bridge.updateMaintenance(open!.id, change)
+          still()
+          await bridge.completeMaintenance(open!.id, note)
+          closed = true
+          sub.push('Maintenance closed')
+        } catch (e) {
+          sub.push('Maintenance not closed')
+          failed.push(`the Maintenance failed: ${(e as Error).message}`)
+        }
+        const n = ctx.found!.others
+        if (n) sub.push(`${n} other open Maintenance${n === 1 ? '' : 's'} left as is`)
+      } else if (plan === 'create') {
+        try {
+          created = await bridge.createMaintenance({
+            assetId: a.id, typeId: typeId!, name: `${a.assetTag} repair`, startDate: madeOn, notes: madeNotes,
+            ...(s && { supplierId: s.id }), ...(cost && { cost }),
+          })
+          still()
+          await bridge.completeMaintenance(created, note)
+          sub.push('Maintenance created and closed')
+        } catch (e) {
+          sub.push(`Maintenance ${created === null ? 'not written' : 'created, not closed'}`)
+          failed.push(`the Maintenance failed: ${(e as Error).message}`)
+        }
+      } else sub.push(plan === 'note' ? 'Maintenance not written: no Repair type found' : 'No Maintenance (nothing to record)')
+
+      // Undo: the old Status Label and an undo note, then the Maintenance as it was. Only a failed status change stops it.
+      const run = async (now: Asset): Promise<string> => {
+        if (now.assignee) throw new Error(`${a.assetTag} is checked out to ${assigneeName(now.assignee)} now`)
+        // A label someone set since the return isn't overwritten with the old one.
+        if (now.statusId !== ready) throw new Error(`${a.assetTag} is '${now.status}' now`)
+        if (!now.can.update) throw new Error(NOT_ALLOWED)
+        const mine = session
+        await bridge.updateStatus(a.id, a.statusId!)
+        sameSession(mine)
+        const notBack: string[] = []
+        await bridge.addAssetNote(a.id, undoNote('Incoming repair')).catch((e: Error) => notBack.push(`the note failed: ${e.message}`))
+        sameSession(mine)
+        const touched = closed || Object.keys(change).length > 0
+        if (touched || created !== null) {
+          // Read again first: a Supplier or Repair cost someone corrected since the return is never overwritten or deleted.
+          const id = created ?? open!.id
+          const wrote = created !== null
+            ? { supplier: s?.id ?? null, cost: cost || null, type: typeId, startDate: madeOn, notes: madeNotes }
+            : { supplier: change.supplierId ?? open!.supplier?.id ?? null, cost: change.cost ?? open!.cost, type: open!.type?.id ?? null, startDate: open!.startDate, notes: open!.notes }
+          try {
+            const m = await bridge.maintenance(id)
+            sameSession(mine)
+            if ((m.supplier?.id ?? null) !== wrote.supplier || noCost(m.cost) !== noCost(wrote.cost) || (m.type?.id ?? null) !== wrote.type || m.startDate !== wrote.startDate || m.notes !== wrote.notes) throw new Error('it was changed since the return, so it was left as is')
+            if (created !== null) await bridge.deleteMaintenance(created)
+            else await bridge.updateMaintenance(open!.id, { ...('supplierId' in change && { supplierId: open!.supplier?.id ?? null }), ...('cost' in change && { cost: open!.cost }), ...(closed && { reopen: true }) })
+          } catch (e) {
+            notBack.push(`the Maintenance wasn't ${created !== null ? 'deleted' : closed ? 'reopened' : 'put back'}: ${(e as Error).message}`)
+          }
+        }
+        return notBack.join('; ')
+      }
+      const says = `${a.assetTag} made Ready to Deploy${closed ? ', its Maintenance closed' : created !== null ? ', a Maintenance created' : ''}`
+      return { text: `Ready${failed.length ? `, but ${failed.join('; ')}` : ''}`, what: backFrom(plan === 'none' ? null : s, cost), sub, undo: { says, run } }
+    }
+
+    // The header's Supplier shows only where it will be recorded.
+    const what = backFrom(isDamaged ? (open?.supplier ?? ctx.supplier) : null, '')
+    // A link in the note, or a Repair cost that isn't a number, keeps it open.
+    const check = (text: string) => wrong(() => (workflowNote('Incoming repair', { text }), costOf(ctx.cost)))
+    // A status change that lost the connection may have gone through: made Ready to Deploy, the rest is sent then. An
+    // Asset scanned as Ready already can't tell, so it's sent again whole: the Maintenance re-read, and the same label.
+    const left = (now: Asset, text: string) => (a.statusId !== ready && !now.assignee && now.statusId === ready ? rest(text, session) : null)
+    if (isDamaged) return { what, confirm: { check, write, left } }
+    return { what, choice: { fix: 'Make ready anyway', blocked: '', stop: 'not Damaged', check, write, left } }
+  }, events, now, pace)
+
+  const openCtx = () => runner.open?.row.ctx
+
+  return {
+    runner,
+    /** Why no scan is taken (Damaged or Ready to Deploy missing, or Snipe-IT couldn't be read), or ''. */
+    get blocked() { return setup.blocked },
+    /** "Repaired by": the Supplier for Assets scanned from now on, or null. */
+    get supplier() { return supplier },
+    setSupplier(s: StatusLabel | null) {
+      supplier = s
+      events.changed()
+    },
+    /** Snipe-IT's Supplier picker list. ponytail: its first 50 by name, no search; a school has a few repair Suppliers. */
+    suppliers: () => bridge.supplierSelectlist(''),
+    /** Opening the Workflow: looks up what it doesn't have yet. fallback: Settings' Maintenance type for repairs. */
+    open: (fallback: number | null) => setup.open(fallback),
+    scan: (raw: string) => setup.blocked || runner.scan(raw, next()),
+    /** The open confirm's or choice's Maintenance found, and how many other open ones there are; or null. */
+    get found() { return openCtx()?.found ?? null },
+    /** What the open confirm or choice will write, with the Repair cost typed so far; or null. */
+    get says() {
+      const ctx = openCtx()
+      if (!ctx) return null
+      const { plan, supplier: s, cost } = planOf(ctx)
+      const g = given(s, cost)
+      const step = {
+        close: `, close the repair Maintenance${g}`,
+        create: `, create and close a repair Maintenance${g}`,
+        note: ` with the ${[s && 'Supplier', cost && 'Repair cost'].filter(Boolean).join(' and ')} (no Repair type found for a Maintenance)`,
+        none: ', no Maintenance (nothing to record)',
+      }[plan]
+      return `Make Ready to Deploy, note the return${step}`
+    },
+    /** The open confirm's or choice's Repair cost, as typed. */
+    get cost() { return openCtx()?.cost ?? '' },
+    setCost(raw: string) {
+      const ctx = openCtx()
+      if (ctx) ctx.cost = raw
+      events.changed()
+    },
+    /** Enter in the Repair cost field: a number (or nothing) confirms; anything else may be a scan that landed there, so
+     *  it's checked as an Asset Tag, and kept with the confirm when it isn't one. Returns what the status line says. */
+    async submitCost(raw: string): Promise<string> {
+      const ctx = openCtx()
+      if (!ctx) return ''
+      ctx.cost = raw
+      const bad = wrong(() => costOf(raw))
+      if (!bad) return runner.confirmOpen()
+      return (await runner.typedTag(raw, next(), () => (ctx.cost = ''))) ?? bad
+    },
+    /** Enter in the Note field: the shell's one-word Asset Tag check, then it confirms. */
+    submitNote: (raw: string) => runner.submitText(raw, next()),
+    reset() {
+      session++
+      supplier = null
+      setup.reset()
+      runner.reset()
+    },
+  }
+}
+export type IncomingRepair = ReturnType<typeof createIncomingRepair>
