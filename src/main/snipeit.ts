@@ -195,11 +195,12 @@ export type ListQuery = { search?: string; filters?: Record<string, string>; sor
  * tempError: why Asset rows carry no Temp marks (say the Activity Report is refused). */
 export type ListPage<K extends ListKind> = { total: number; rows: (ListRows[K] & { can: Can })[]; why?: string; tempError?: string }
 
-/** The dashboard pieces: the charts (assets is Assets by Status Label), the five Inventory Chart bars, then the two tables. */
-export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
+/** The dashboard pieces: the charts (assets is Assets by Status Label, audits is Upcoming audits), the five Inventory Chart
+ * bars, then the two tables. */
+export const DASHBOARD_PIECES = ['assets', 'categories', 'locations', 'audits', 'licenses', 'accessories', 'consumables', 'components', 'users', 'overdue', 'expiring'] as const
 export type DashboardPiece = (typeof DASHBOARD_PIECES)[number]
 /** The pieces built from the one Asset list; the screen groups them so they share a fetch. */
-export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'overdue', 'expiring']
+export const ASSET_PIECES: readonly DashboardPiece[] = ['assets', 'categories', 'locations', 'audits', 'overdue', 'expiring']
 /** Health warnings worked out from lists the dashboard fetches anyway (the Asset list, the Licenses list): asked for beside
  * the pieces so each list is fetched once, and even when its pieces are hidden. Not in Customize. */
 export const HEALTH_PIECES = ['missing', 'runningOut'] as const
@@ -216,14 +217,17 @@ export type StatusTally = Tally & { type: string; color: string | null }
 export type Failed = { error: string }
 /** A kind counted by quantity: the used side (In use, Checked out, Used, Holding) and the available side. */
 export type Split = { used: number; available: number }
+/** One day of the Upcoming audits timeline: the Assets whose next audit date it is ("YYYY-MM-DD"). */
+export type AuditDay = { day: string; assets: AssetSummary[] }
 
 /**
  * One entry per requested piece: its data, or { error } with the reason it couldn't load.
- * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out).
+ * Tallies most first, Overdue Assets most late first, Expiring Warranties soonest first (expired ones left out),
+ * Upcoming audits soonest first.
  */
 export type Dashboard = {
   [K in DashboardPiece | HealthPiece]?: Failed | {
-    assets: StatusTally[]; categories: Tally[]; locations: Tally[]
+    assets: StatusTally[]; categories: Tally[]; locations: Tally[]; audits: AuditDay[]
     licenses: Split; accessories: Split; consumables: Split; components: Split; users: Split
     overdue: { rows: OverdueRow[]; tempError?: string }
     expiring: (AssetSummary & { daysLeft: number })[]
@@ -241,13 +245,16 @@ export const overdueList = (rows: OverdueRow[], tempOnly: boolean) => (tempOnly 
  * One load of the Health warnings' checks, each run at once and failing on its own (Temp checkouts Overdue comes from the
  * dashboard's Overdue list instead). probe is the /version call: the version
  * Snipe-IT runs, or that it can't be reached or refuses the key (which every other check would hit too). The Audit late and
- * Audit due totals are Snipe-IT's own (its /hardware/audit routes), for the Upcoming audits timeline (#112) to share.
+ * Audit due totals are Snipe-IT's own (its /hardware/audit routes), shared with the Upcoming audits timeline. dueThrough is
+ * the latest next audit date among the Audit due Assets (null when none, or the check failed): Snipe-IT's Audit warning
+ * setting can't be read, so this is how far the timeline shades Audit due.
  * deactivated: the Assets checked out to deactivated Users, and how many Users hold them.
  */
 export type Health = {
   probe: { version: string } | { warning: 'unreachable' | 'key'; message: string } | Failed
   auditLate: number | Failed
   auditDue: number | Failed
+  dueThrough: string | null
   deactivated: { assets: number; users: number } | Failed
 }
 /** One line of the Health warnings strip, or why its check couldn't run. */
@@ -268,7 +275,7 @@ export const MIN_SNIPEIT = [8, 7] as const
  * Overdue counts the dashboard's Overdue list (none until it has loaded). missing and runningOut come with the dashboard's
  * lists; still loading (left out), they add no line yet.
  */
-export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Health & Pick<Dashboard, HealthPiece>, release?: Release | null, overdue?: Dashboard['overdue']): HealthLine[] {
+export function healthLines({ probe, auditLate, auditDue, deactivated, missing, runningOut }: Omit<Health, 'dueThrough'> & Pick<Dashboard, HealthPiece>, release?: Release | null, overdue?: Dashboard['overdue']): HealthLine[] {
   if ('warning' in probe) return [probe]
   const running = 'version' in probe ? versionParts(probe.version) : null
   const tooOld: HealthLine[] = 'error' in probe ? [{ warning: 'tooOld', error: probe.error }]
@@ -624,6 +631,23 @@ function overdueOf(now: Date, due: string): Lateness | null {
 
 // A Snipe-IT date object's day ("YYYY-MM-DD"), whether it came as a date or a datetime.
 const dayOf = (d: { date?: string; datetime?: string } | null | undefined) => (d?.date ?? d?.datetime)?.slice(0, 10) || null
+
+/** The Upcoming audits timeline's days: from today to the same date 12 months ahead, both included, soonest first.
+ * ponytail: every Asset due in the window crosses IPC as a summary, so a day opens with no request; fetch a day's
+ * Assets on click instead if a fleet ever makes that payload slow. */
+function auditDays(assets: Asset[], today: Date): AuditDay[] {
+  const last = daysFrom(today, `${today.getFullYear() + 1}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`)
+  const days = new Map<string, AssetSummary[]>()
+  for (const a of assets) {
+    // Archived Assets are never Audit due, even when "show archived in list" puts them in the Asset list.
+    if (!a.nextAudit || a.statusMeta === 'archived') continue
+    const ahead = daysFrom(today, a.nextAudit)
+    if (ahead < 0 || ahead > last) continue
+    if (!days.has(a.nextAudit)) days.set(a.nextAudit, [])
+    days.get(a.nextAudit)!.push(toSummary(a))
+  }
+  return [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, assets]) => ({ day, assets }))
+}
 
 function toAsset(raw: RawAsset, today: Date): Asset {
   const expectedCheckin = expectedCheckinOf(raw.expected_checkin)
@@ -1799,12 +1823,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // The Health warnings' checks: four small requests at once, each failing on its own. Runs on open and Refresh only.
     async health(): Promise<Health> {
       const failed = (e: Error): Failed => ({ error: e.message })
-      const total = async (path: string) => {
-        const body = await request<{ total?: unknown }>(`${path}?limit=1`)
+      // A list's total and its first row (all limit=1 asks for).
+      const peek = async (path: string, sort = '') => {
+        const body = await request<{ total?: unknown; rows?: RawAsset[] }>(`${path}?limit=1${sort}`)
         if (isError(body)) throw new Error(reason(body.messages))
         if (typeof body.total !== 'number') throw new Error(`Snipe-IT didn't send a total for ${path.slice(1)}.`)
-        return body.total
+        return { total: body.total, rows: body.rows ?? [] }
       }
+      // Latest first, so the one row it sends is where Audit due ends, without a second request.
+      const due = peek('/hardware/audit/due', '&sort=next_audit_date&order=desc')
       // Deactivated Users, most Assets first, counted until one holds none: usually one page. Only Assets count, not seats.
       const countDeactivated = async () => {
         let assets = 0, users = 0
@@ -1820,7 +1847,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
           if (!page.rows.length || offset >= page.total) return { assets, users }
         }
       }
-      const [probe, auditLate, auditDue, deactivated] = await Promise.all([
+      const [probe, auditLate, auditDue, dueThrough, deactivated] = await Promise.all([
         request<{ version?: unknown }>('/version').then(
           (body): Health['probe'] => isError(body) ? { error: reason(body.messages) }
             : typeof body.version === 'string' ? { version: body.version } : { error: "Snipe-IT didn't say which version it runs." },
@@ -1829,11 +1856,12 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             // /version needs no permission, so a 403 on it is about the whole key (since v8.8: 2FA not enrolled, or User-Agent blocked).
             : e.kind === 'key' || e.kind === 'forbidden' ? { warning: 'key', message: e.message }
             : failed(e)),
-        total('/hardware/audit/overdue').catch(failed),
-        total('/hardware/audit/due').catch(failed),
+        peek('/hardware/audit/overdue').then((b) => b.total, failed),
+        due.then((b) => b.total, failed),
+        due.then((b) => dayOf(b.rows[0]?.next_audit_date), () => null),
         countDeactivated().catch(failed),
       ])
-      return { probe, auditLate, auditDue, deactivated }
+      return { probe, auditLate, auditDue, dueThrough, deactivated }
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
@@ -1844,7 +1872,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const wants = (...p: (DashboardPiece | HealthPiece)[]) => p.some((x) => pieces.includes(x))
       // The charts, the tables and the missing fields all come from the Asset list, so it's fetched once for them all.
       const raw = wants(...ASSET_PIECES, 'missing') ? allRows<RawAsset>('/hardware') : undefined
-      const assets = wants('overdue', 'expiring', 'missing') ? raw!.then((rows) => rows.map((r) => toAsset(r, now))) : undefined
+      const assets = wants('audits', 'overdue', 'expiring', 'missing') ? raw!.then((rows) => rows.map((r) => toAsset(r, now))) : undefined
       // The Licenses bar and Running out share one Licenses list.
       const licenses = wants('licenses', 'runningOut') ? allRows<Record<string, unknown>>('/licenses') : undefined
       // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on, so the Status Label chart
@@ -1882,6 +1910,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }),
         entry('categories', async () => tally(await raw!, (r) => named(r.category, 'No Category'))),
         entry('locations', async () => tally(await raw!, (r) => named(r.location, 'No Location'))),
+        entry('audits', async () => auditDays(await assets!, now)),
         // The Temp marks failing (say a 403 on the Activity Report) leaves the list, unmarked, with the reason.
         entry('overdue', async () => {
           const { rows: marked, tempError } = await markTemp(await assets!)
