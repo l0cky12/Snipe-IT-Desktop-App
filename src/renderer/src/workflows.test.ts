@@ -28,6 +28,7 @@ function fakeBridge(assets: Asset[]) {
       const now = assets.find((a) => a.id === id)
       if (o.fromAssignee && (now?.assignee?.type !== o.fromAssignee.type || now.assignee.id !== o.fromAssignee.id)) throw new Error(`${now?.assetTag} is checked out to ${now?.assignee?.name} now`)
       if (o.fromStatusId !== undefined && now?.statusId !== o.fromStatusId) throw new Error(`${now?.assetTag} is '${now?.status}' now`)
+      if (o.noDefaultLocation && now?.defaultLocation) throw new Error(`${now.assetTag} has a Default Location now, ${now.defaultLocation}; a Checkin would move it there`)
       checkins.push([id, o])
     }),
     checkout: vi.fn(async (id: number, o: CheckoutOptions) => {
@@ -35,6 +36,7 @@ function fakeBridge(assets: Asset[]) {
       // Like Snipe-IT's checkout(): refuses when its own read finds another Status Label than fromStatusId.
       const now = assets.find((a) => a.id === id)!
       if (o.fromStatusId !== undefined && now.statusId !== o.fromStatusId) throw new Error(`${now.assetTag} is '${now.status}' now`)
+      if (o.fromLocationId !== undefined && now.locationId !== o.fromLocationId) throw new Error(`${now.assetTag} is at ${now.location || 'no Location'} now`)
       checkouts.push([id, o])
     }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
@@ -816,7 +818,7 @@ describe('Bulk checkout', () => {
       expect(checkouts).toEqual([])
       flow.runner.confirmOpen()
       await settled(flow)
-      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 1, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
+      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
       expect(calls.slice(-3)).toEqual(['bytag NOMMA-1', 'bytag NOMMA-1', 'checkout 1'])
       expect(flow.runner.rows[0].result).toEqual({ state: 'done', text: 'Checked out' })
       // Without options: no Expected Checkin, just the tag.
@@ -825,7 +827,7 @@ describe('Bulk checkout', () => {
       await opened(flow)
       flow.runner.confirmOpen()
       await settled(flow)
-      expect(checkouts[1]).toEqual([2, { targetType: 'user', targetId: 7, fromStatusId: 1, expectedCheckin: undefined, note: '[Bulk checkout]' }])
+      expect(checkouts[1]).toEqual([2, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: undefined, note: '[Bulk checkout]' }])
     })
 
     it("options are checked when set: a note can't hold a link", async () => {
@@ -845,16 +847,19 @@ describe('Bulk checkout', () => {
       expect(checkouts).toEqual([])
     })
 
-    it("Checkout's own last read refuses a Status Label changed since the write's re-read", async () => {
-      const assets = [ready('NOMMA-1')]
+    it("Checkout's own last read refuses a Status Label or Location changed since the write's re-read", async () => {
+      const assets = [ready('NOMMA-1'), ready('NOMMA-2')]
       const { flow, bridge, checkouts } = await scanning(assets)
-      flow.scan('NOMMA-1')
-      await opened(flow)
-      bridge.assetByTag.mockResolvedValueOnce(ready('NOMMA-1'))
-      assets[0] = ready('NOMMA-1', { status: 'Loaner Pool', statusId: 3 })
-      flow.runner.confirmOpen()
-      await settled(flow)
-      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: "NOMMA-1 is 'Loaner Pool' now" })
+      for (const [i, changed, reason] of [[0, { status: 'Loaner Pool', statusId: 3 }, "NOMMA-1 is 'Loaner Pool' now"], [1, { location: 'Room 204', locationId: 4 }, 'NOMMA-2 is at Room 204 now']] as const) {
+        const tag = `NOMMA-${i + 1}`
+        flow.scan(tag)
+        await opened(flow)
+        bridge.assetByTag.mockResolvedValueOnce(ready(tag))
+        assets[i] = ready(tag, changed)
+        flow.runner.confirmOpen()
+        await settled(flow)
+        expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason })
+      }
       expect(checkouts).toEqual([])
       expect(flow.step).toMatchObject({ user: { assets: AVERY.assets } })
     })
@@ -958,7 +963,7 @@ describe('Bulk checkout', () => {
       expect(flow.runner.askUndo()).toBe('')
       expect(flow.runner.confirm).toBe('Undo: NOMMA-1 → Avery Testwell? Enter to undo, Esc to cancel.')
       await flow.runner.undo()
-      expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1 }]])
+      expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: false }]])
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
 
@@ -1026,12 +1031,22 @@ describe('Bulk checkout', () => {
       expect(checkins).toEqual([])
     })
 
+    it("Checkin's own last read refuses an Asset that had no Location and has been given a Default Location since Undo's read", async () => {
+      const { flow, bridge, checkins, assets } = await checkedOut({ location: '', locationId: null, defaultLocation: '' })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      assets[0] = now({ defaultLocation: 'IT Office' })
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 has a Default Location now, IT Office; a Checkin would move it there')
+      expect(checkins).toEqual([])
+    })
+
     it('checks in with no Location an Asset that had none and has no Default Location', async () => {
       const { flow, bridge, checkins } = await checkedOut({ location: '', locationId: null, defaultLocation: '' })
       bridge.assetByTag.mockResolvedValueOnce(now())
       flow.runner.askUndo()
       await flow.runner.undo()
-      expect(checkins).toEqual([[1, { statusId: 1, locationId: undefined, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1 }]])
+      expect(checkins).toEqual([[1, { statusId: 1, locationId: undefined, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: true }]])
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
   })

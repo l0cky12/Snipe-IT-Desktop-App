@@ -556,6 +556,15 @@ describe('checkin', () => {
     expect(posted(requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 1 } }])
   })
 
+  it('refuses, writing nothing, when a Checkin with no Location would move it to a Default Location the caller expects it not to have', async () => {
+    const { fetch, requests } = checkinWith({ ...chromebook, location: null, rtd_location: { id: 8, name: 'IT Office' } })
+    await expect(createSnipeIt(config, fetch).checkin(4812, { noDefaultLocation: true })).rejects.toThrow('NOMMA-004812 has a Default Location now, IT Office; a Checkin would move it there')
+    expect(posted(requests)).toEqual([])
+    const none = checkinWith({ ...chromebook, location: null, rtd_location: null })
+    await createSnipeIt(config, none.fetch).checkin(4812, { noDefaultLocation: true })
+    expect(posted(none.requests)).toEqual([{ method: 'POST', path: '/hardware/4812/checkin', body: { status_id: 2 } }])
+  })
+
   it("a Checkin Snipe-IT rejects is thrown as Snipe-IT's reason", async () => {
     const refused = { status: 'error', messages: 'That asset is already checked in.', payload: null }
     const { fetch } = checkinWith(chromebook, { body: refused })
@@ -708,6 +717,19 @@ describe('checkout', () => {
     const same = checkoutWith(ready)
     await createSnipeIt(config, same.fetch).checkout(4812, { targetType: 'user', targetId: 311, statusId: 2, fromStatusId: 1 })
     expect(posted(same.requests)[0].body).toEqual({ status_id: 2, checkout_to_type: 'user', assigned_user: 311 })
+  })
+
+  it("refuses, writing nothing, when the Asset isn't at the Location the caller expects (null: none)", async () => {
+    const { fetch, requests } = checkoutWith(ready)
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 4 })).rejects.toThrow('NOMMA-004812 is at Library now')
+    await expect(snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: null })).rejects.toThrow('NOMMA-004812 is at Library now')
+    expect(posted(requests)).toEqual([])
+    await snipeIt.checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 9 })
+    const nowhere = checkoutWith({ ...ready, location: null })
+    await expect(createSnipeIt(config, nowhere.fetch).checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: 9 })).rejects.toThrow('NOMMA-004812 is at no Location now')
+    await createSnipeIt(config, nowhere.fetch).checkout(4812, { targetType: 'user', targetId: 311, fromLocationId: null })
+    expect(posted(requests).length + posted(nowhere.requests).length).toBe(2)
   })
 
   it('refuses another target type, a bad Status Label id or a malformed Expected Checkin without asking Snipe-IT', async () => {

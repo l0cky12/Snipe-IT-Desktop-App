@@ -424,7 +424,7 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
     if (step.step !== 'scan' || step.round !== round) return { neutral: SKIPPED, what }
     const write = async (now: Asset): Promise<Done> => {
       if (now.assignee || now.statusId !== a.statusId || now.locationId !== a.locationId) throw new Error(`${a.assetTag} changed since it was scanned`)
-      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, fromStatusId: a.statusId ?? undefined, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
+      await bridge.checkout(a.id, { targetType: 'user', targetId: user.id, fromStatusId: a.statusId ?? undefined, fromLocationId: a.locationId, expectedCheckin: expectedCheckin || undefined, note: workflowNote('Bulk checkout', { text: note }) })
       held(user.id, 1, mine)
       // Undo: a Checkin putting back the Status Label and Location it had (Snipe-IT's Checkin would send it to its Default Location).
       const run = async (now: Asset) => {
@@ -433,8 +433,8 @@ export function createBulkCheckout(bridge: Pick<SnipeItBridge, 'assetByTag' | 'c
         if (now.statusId !== a.statusId) throw new Error(`${a.assetTag} is '${now.status}' now`)
         // A Checkin with no Location moves it to its Default Location, so "no Location" can't be put back while it has one.
         if (a.locationId === null && now.defaultLocation) throw new Error(`${a.assetTag} had no Location; a Checkin would move it to its Default Location, ${now.defaultLocation}`)
-        // Checkin's own last read checks both again.
-        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined })
+        // Checkin's own last read checks all three again.
+        await bridge.checkin(a.id, { statusId: a.statusId ?? undefined, locationId: a.locationId ?? undefined, note: undoNote('Bulk checkout'), fromAssignee: { type: 'user', id: user.id }, fromStatusId: a.statusId ?? undefined, noDefaultLocation: a.locationId === null })
         held(user.id, -1, mine)
       }
       return { text: 'Checked out', undo: { says: `${a.assetTag} → ${user.name}`, run } }

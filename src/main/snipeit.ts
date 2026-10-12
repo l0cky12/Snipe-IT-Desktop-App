@@ -68,8 +68,9 @@ export type AssetWithHistory = Asset & { history: HistoryEntry[]; historyError?:
 export type StatusLabel = { id: number; name: string }
 
 /** A Checkin. fromAssignee and fromStatusId: who it must still be checked out to and the Status Label it must still have,
- *  checked on Checkin's own last read (an Undo never undoes someone else's Checkout or overwrites a label set since). */
-export type CheckinOptions = { statusId?: number; locationId?: number; note?: string; fromAssignee?: Pick<Assignee, 'type' | 'id'>; fromStatusId?: number }
+ *  checked on Checkin's own last read (an Undo never undoes someone else's Checkout or overwrites a label set since).
+ *  noDefaultLocation: it must have no Default Location then, which a Checkin with no Location would move it to. */
+export type CheckinOptions = { statusId?: number; locationId?: number; note?: string; fromAssignee?: Pick<Assignee, 'type' | 'id'>; fromStatusId?: number; noDefaultLocation?: boolean }
 
 /** The User a Workflow's first step found, for its header. assets: how many Assets they hold. */
 export type UserCard = { id: number; name: string; username: string; employeeNum: string; assets: number }
@@ -89,8 +90,9 @@ export const lateness = ({ days, minutes }: Lateness) =>
 
 /** A Checkout to a User, a Location or another Asset. statusId: the Status Label to set instead of the current one (it
  *  must be deployable). fromStatusId: the Status Label the Asset must still have, checked on Checkout's own last read (an
- *  Undo never overwrites a label set since). expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
-export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; fromStatusId?: number; expectedCheckin?: string; note?: string }
+ *  Undo never overwrites a label set since). fromLocationId: the Location it must still be at then (null: none).
+ *  expectedCheckin: "YYYY-MM-DD", or "YYYY-MM-DD HH:MM" with a time of day. */
+export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; fromStatusId?: number; fromLocationId?: number | null; expectedCheckin?: string; note?: string }
 const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
 /** What the rail shows for a match or a recent scan. */
@@ -1540,7 +1542,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // Checkout allowed: no Assignee and a deployable status. Snipe-IT requires a status, so the current one is sent
     // unless another is given (Snipe-IT accepts only a deployable one).
-    async checkout(id: number, { targetType, targetId, statusId, fromStatusId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
+    async checkout(id: number, { targetType, targetId, statusId, fromStatusId, fromLocationId, expectedCheckin, note }: CheckoutOptions): Promise<void> {
       if (!Object.hasOwn(TARGET_NAME, targetType)) throw new Error('An Asset can only be checked out to a User, a Location or another Asset.')
       checkId(targetId, TARGET_NAME[targetType])
       if (statusId !== undefined) checkId(statusId, 'status')
@@ -1548,6 +1550,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await current(id)
       if (body.assigned_to) throw new Error(`${body.asset_tag} is already checked out to ${body.assigned_to.name}. Check it in first.`)
       if (fromStatusId !== undefined && body.status_label?.id !== fromStatusId) throw new Error(`${body.asset_tag} is '${body.status_label?.name ?? 'no status'}' now`)
+      if (fromLocationId !== undefined && (body.location?.id ?? null) !== fromLocationId) throw new Error(`${body.asset_tag} is at ${body.location?.name ?? 'no Location'} now`)
       if (body.status_label?.status_meta !== 'deployable')
         throw new Error(`${body.asset_tag} is "${body.status_label?.name ?? 'no status'}", which can't be checked out.`)
       const result = await request(`/hardware/${id}/checkout`, {
@@ -1561,12 +1564,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     // Checkin allowed: the Asset has an Assignee. Snipe-IT requires a status, so the current one is kept unless another is chosen.
-    async checkin(id: number, { statusId, locationId, note, fromAssignee, fromStatusId }: CheckinOptions): Promise<void> {
+    async checkin(id: number, { statusId, locationId, note, fromAssignee, fromStatusId, noDefaultLocation }: CheckinOptions): Promise<void> {
       if (locationId !== undefined) checkId(locationId, 'Location')
       const body = await current(id)
       if (!body.assigned_to) throw new Error(`${body.asset_tag} is not checked out, so there is nothing to check in.`)
       if (fromAssignee && (body.assigned_to.type !== fromAssignee.type || body.assigned_to.id !== fromAssignee.id)) throw new Error(`${body.asset_tag} is checked out to ${body.assigned_to.name} now`)
       if (fromStatusId !== undefined && body.status_label?.id !== fromStatusId) throw new Error(`${body.asset_tag} is '${body.status_label?.name ?? 'no status'}' now`)
+      if (noDefaultLocation && body.rtd_location) throw new Error(`${body.asset_tag} has a Default Location now, ${body.rtd_location.name}; a Checkin would move it there`)
       const result = await request(`/hardware/${id}/checkin`, {
         status_id: statusId ?? body.status_label?.id,
         ...(locationId !== undefined && { location_id: locationId }),
