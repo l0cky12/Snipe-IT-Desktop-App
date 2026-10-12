@@ -151,6 +151,8 @@ app.whenReady().then(() => {
     nativeTheme.themeSource = saved.appearance
     return saved
   })
+  // Never clears the session: only Settings that point at another server do that.
+  handle('settings:saveRepairs', (_e, input: string) => store.saveRepairs(input))
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
   // The Newer Snipe-IT available Health warning; its check failing shows nothing. From source it asks only
@@ -160,7 +162,7 @@ app.whenReady().then(() => {
   handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
   handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'operatorName', 'repairTypeId', 'openMaintenances', 'createMaintenance', 'addAssetNote', 'appendUserNotes', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {

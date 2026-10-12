@@ -15,8 +15,8 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
-import { createBulkCheckout, createBulkReturn, createTempCheckout, NOT_ALLOWED } from './workflows'
-import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
+import { createBulkCheckout, createBulkReturn, createRepairIntake, createTempCheckout, NOT_ALLOWED, type Runner } from './workflows'
+import { BUILT, BulkCheckoutView, BulkReturnView, errorSound, RepairIntakeView, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 import { Bars, ChartCard, Donut, Timeline, auditRows, chartRows, longDay, type ChartPiece } from './Charts'
 
 const statusColor: Record<string, string> = {
@@ -135,6 +135,8 @@ export function App() {
   savedSettings.current = settings
   const [tempCheckout] = useState(() => createTempCheckout(window.snipeIt, { changed, failed: errorSound },
     () => ({ endOfDay: savedSettings.current?.tempCheckout.endOfDay ?? END_OF_DAY, calendar: savedSettings.current?.schoolCalendar ?? [] })))
+  const [repairIntake] = useState(() => createRepairIntake(window.snipeIt, { changed, failed: errorSound }))
+  const runners: Partial<Record<Workflow, Pick<Runner, 'rows' | 'pending'>>> = { 'Bulk checkout': bulkCheckout.runner, 'Bulk return': bulkReturn.runner, 'Repair intake': repairIntake.runner, 'Temp checkout': tempCheckout.runner }
   const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
@@ -213,10 +215,12 @@ export function App() {
   function saved(value: Settings) {
     const over = startsOver(settings, value)
     setSettings(value)
+    repairIntake.forgetOperator()
     if (!over) return
     bulkCheckout.reset()
     bulkReturn.reset()
     tempCheckout.reset()
+    repairIntake.reset()
     cancel(); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
@@ -373,7 +377,7 @@ export function App() {
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
 
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
-  const workflowsBusy = bulkCheckout.runner.pending + bulkReturn.runner.pending + tempCheckout.runner.pending
+  const workflowsBusy = Object.values(runners).reduce((n, r) => n + r!.pending, 0)
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -465,8 +469,9 @@ export function App() {
         </div>}
       </aside>
       <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onDrill={go} onAuditDay={onAuditDay} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
-        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => (w === 'Bulk checkout' ? bulkCheckout : w === 'Temp checkout' ? tempCheckout : bulkReturn).runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
+        : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} />
+        : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />

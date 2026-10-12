@@ -11,11 +11,12 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
   const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
+  const [repairType, setRepairType] = useState(settings.repairTypeId?.toString() ?? '')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
   // Default Location is no longer offered; saving clears any previously stored one.
@@ -141,6 +142,21 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'calendar' && notes}
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
+      const saved = await window.settings.saveRepairs(repairType)
+      setRepairType(saved.repairTypeId?.toString() ?? ''); onSaved(saved); setMessage('Repair settings saved.')
+    }, 'repairs') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>Repairs</h2><p className="dim">How Repair intake opens a repair Maintenance.</p>
+          <label htmlFor="repair-type">Maintenance type for repairs</label>
+          <input id="repair-type" inputMode="numeric" placeholder="Blank: found in Snipe-IT" value={repairType} onChange={(e) => { setRepairType(e.target.value); setMessage('') }} />
+          <p className="hint">Only needed if your API key can't read Maintenance types and Snipe-IT has no Repair Maintenance yet. A whole number above 0, or blank.</p>
+        </section>
+        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save repair settings'}</button></div>
+      </fieldset>
+    </form>
+    {place === 'repairs' && notes}
     <section className="settings-section">
       <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
       <label htmlFor="appearance">Theme</label>
