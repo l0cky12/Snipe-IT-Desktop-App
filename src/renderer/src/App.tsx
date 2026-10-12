@@ -1039,8 +1039,10 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
               <tr><th>Asset Tag</th><th>Asset</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th><th className="quick">Quick Actions</th></tr>
             </thead>
             <tbody>
-              {rows.map((a) => [
-                <tr key={a.id}>
+              {/* One keyed group per Asset, so a row leaving doesn't remount an open Checkin form below it. */}
+              {rows.map((a) => (
+                <Fragment key={a.id}>
+                <tr>
                   {tag(a, a.temp && <span className="flag c-blue">Temp</span>)}
                   <td>{a.name || a.model || '—'}</td>
                   <td>{a.assignee?.name}</td>
@@ -1050,15 +1052,16 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
                     <button disabled={!a.can.checkin} onClick={() => (setCheckingIn(checkingIn === a.id ? null : a.id), setOverdueMessage({ text: '' }))}
                       className={checkingIn === a.id ? 'on' : undefined} title={checkinReason(a)}>Checkin</button>
                   </td>
-                </tr>,
-                checkingIn === a.id && (
-                  <tr key={`${a.id}-quick`} className="quick-form">
+                </tr>
+                {checkingIn === a.id && (
+                  <tr className="quick-form">
                     <td colSpan={6}>
                       <CheckinForm asset={a} statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={checkin(a.assetTag)} />
                     </td>
                   </tr>
-                ),
-              ])}
+                )}
+                </Fragment>
+              ))}
             </tbody>
           </table>
           {rows.length === 0 && <p className="empty">{only ? 'No Temp checkouts Overdue' : 'Nothing Overdue'}</p>}
