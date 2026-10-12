@@ -65,7 +65,7 @@ export function ImportView() {
         </table>
       )}
       {files?.length === 0 && <p className="empty">No CSVs uploaded yet</p>}
-      {!files && !error && <p className="message list-message" role="status">Loading…</p>}
+      {!files && !error && <p className="empty" role="status">Loading…</p>}
     </>
   )
 }
