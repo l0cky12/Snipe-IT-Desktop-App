@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
+import { auditedLine, auditedResult, CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -174,6 +174,20 @@ describe('the stored dashboard layout', () => {
   it('unreadable or unknown entries are dropped', () => {
     expect(layoutFrom('not json')).toEqual(layoutFrom(null))
     expect(layoutFrom(JSON.stringify([{ piece: 'gone', show: false }, null]))).toEqual(layoutFrom(null))
+  })
+})
+
+describe('what an Audit says it did', () => {
+  it('gives the next audit date and the one it was, so a mistake can be put back', () => {
+    expect(auditedLine({ was: '2026-10-01', next: '2027-10-10' })).toBe('Audited. Next audit 2027-10-10 (was 2026-10-01)')
+    expect(auditedLine({ was: null, next: '2027-10-10' })).toBe('Audited. Next audit 2027-10-10 (had none)')
+    expect(auditedResult({ was: '2026-10-01', next: '2027-10-10' })).toBe('Audited, next 2027-10-10, was 2026-10-01')
+  })
+
+  it('warns when Snipe-IT sent back no next audit date, because it has no audit interval set', () => {
+    const warning = 'Audited. Snipe-IT has no audit interval set, so this Asset now has no next audit date (was 2026-10-01)'
+    expect(auditedLine({ was: '2026-10-01', next: null })).toBe(warning)
+    expect(auditedResult({ was: '2026-10-01', next: null })).toBe(warning)
   })
 })
 

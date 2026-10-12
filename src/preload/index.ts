@@ -34,6 +34,7 @@ const snipeIt: SnipeItBridge = {
   searchLocations: call('snipeit:searchLocations'),
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
+  audit: call('snipeit:audit'),
   dashboard: call('snipeit:dashboard'),
   health: call('snipeit:health'),
   list: call('snipeit:list'),
