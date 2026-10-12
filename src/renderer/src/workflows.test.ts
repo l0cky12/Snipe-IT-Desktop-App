@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Asset, CheckinOptions, CheckoutOptions, StatusLabel, UserCard } from '../../main/snipeit'
 import { parseCalendar, type SchoolTimes } from '../../main/calendar'
-import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, createTempCheckout, NOT_ALLOWED } from './workflows'
+import { cleanTag, createBulkCheckout, createBulkReturn, createRunner, createTempCheckout, fieldKey, NOT_ALLOWED } from './workflows'
 
 // A fake Snipe-IT behind the Workflow bridge: fictional Assets, and every call recorded.
 const asset = (tag: string, more: Partial<Asset> = {}): Asset => ({
   id: Number(tag.replace(/\D/g, '')), assetTag: tag, name: `CB-${tag.slice(-3)}`, model: 'HP Chromebook 14 G7', status: 'Deployed', statusId: 2, statusMeta: 'deployed', statusType: 'deployable',
-  assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', locationId: 3, defaultLocation: '', category: 'Chromebook', serial: '', purchaseDate: null,
-  warrantyEnd: null, expectedCheckin: null, lastAudited: null, nextAudit: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
+  assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, checkoutAllowed: false, location: 'Library', defaultLocation: '', locationId: 3, category: 'Chromebook', serial: '', purchaseDate: null,
+  warrantyEnd: null, expectedCheckin: null, lastCheckout: null, lastAudited: null, nextAudit: null, endOfLife: null, purchaseCost: null, overdue: null, warranty: null, can: { checkout: true, checkin: true, update: true, delete: true }, ...more,
 })
 const flush = () => new Promise((r) => setTimeout(r, 0))
 const ITOFFICE: StatusLabel = { id: 8, name: 'IT Office' }
@@ -19,16 +19,37 @@ function fakeBridge(assets: Asset[]) {
   const calls: string[] = []
   const checkins: [number, CheckinOptions][] = []
   const checkouts: [number, CheckoutOptions][] = []
+  // Each Asset's History, newest first: the action and note of each entry.
+  const history: Record<number, { action: string; note: string }[]> = {}
   const bridge = {
     assetByTag: vi.fn(async (tag: string) => (calls.push(`bytag ${tag}`), assets.find((a) => a.assetTag === tag) ?? null)),
-    checkin: vi.fn(async (id: number, o: CheckinOptions) => { calls.push(`checkin ${id}`); checkins.push([id, o]) }),
-    checkout: vi.fn(async (id: number, o: CheckoutOptions) => { calls.push(`checkout ${id}`); checkouts.push([id, o]) }),
+    checkin: vi.fn(async (id: number, o: CheckinOptions) => {
+      calls.push(`checkin ${id}`)
+      // Like Snipe-IT's checkin(): refuses when its own read finds another Assignee or Status Label than expected.
+      const now = assets.find((a) => a.id === id)
+      if (o.fromAssignee && (now?.assignee?.type !== o.fromAssignee.type || now.assignee.id !== o.fromAssignee.id)) throw new Error(`${now?.assetTag} is checked out to ${now?.assignee?.name} now`)
+      if (o.fromStatusId !== undefined && now?.statusId !== o.fromStatusId) throw new Error(`${now?.assetTag} is '${now?.status}' now`)
+      if (o.noDefaultLocation && now?.defaultLocation) throw new Error(`${now.assetTag} has a Default Location now, ${now.defaultLocation}; a Checkin would move it there`)
+      checkins.push([id, o])
+    }),
+    checkout: vi.fn(async (id: number, o: CheckoutOptions) => {
+      calls.push(`checkout ${id}`)
+      // Like Snipe-IT's checkout(): refuses when its own read finds another Status Label than fromStatusId.
+      const now = assets.find((a) => a.id === id)!
+      if (o.fromStatusId !== undefined && now.statusId !== o.fromStatusId) throw new Error(`${now.assetTag} is '${now.status}' now`)
+      if (o.fromLocationId !== undefined && now.locationId !== o.fromLocationId) throw new Error(`${now.assetTag} is at ${now.location || 'no Location'} now`)
+      checkouts.push([id, o])
+    }),
     statusLabels: vi.fn(async () => (calls.push('statusLabels'), LABELS)),
+    getAsset: vi.fn(async (id: number) => {
+      calls.push(`getAsset ${id}`)
+      return { ...assets.find((a) => a.id === id)!, fields: [], history: (history[id] ?? []).map((h) => ({ when: '', operator: '', detail: '', ...h })) }
+    }),
     exactUsers: vi.fn(async (text: string): Promise<UserCard[]> => (calls.push(`exact ${text}`), [])),
     userSelectlist: vi.fn(async (text: string): Promise<StatusLabel[]> => (calls.push(`selectlist ${text}`), [])),
     userCard: vi.fn(async (id: number): Promise<UserCard> => (calls.push(`user ${id}`), { ...AVERY, id })),
   }
-  return { bridge, calls, checkins, checkouts }
+  return { bridge, calls, checkins, checkouts, history }
 }
 
 describe('Workflow runner', () => {
@@ -686,20 +707,42 @@ describe('Bulk return', () => {
       const { flow, checkouts } = await returned(one)
       expect(flow.runner.confirm).toBe(`Undo: NOMMA-1 checked in from ${assignee.type === 'asset' ? 'Asset ' : ''}${assignee.name}? Enter to undo, Esc to cancel.`)
       await flow.runner.undo()
-      expect(checkouts).toEqual([[1, { targetType: assignee.type, targetId: assignee.id, statusId: 2, expectedCheckin: '2026-10-13', note: '[Undo] Bulk return' }]])
+      expect(checkouts).toEqual([[1, { targetType: assignee.type, targetId: assignee.id, statusId: 2, fromStatusId: 1, expectedCheckin: '2026-10-13', note: '[Undo] Bulk return' }]])
       expect(flow.runner.rows[0].result.state).toBe('undone')
     })
 
-    it('carries the Temp checkout tag when the Expected Checkin had a time of day', async () => {
-      const { flow, checkouts } = await returned(asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' }))
+    it.each([
+      ['a Temp checkout', '[Temp checkout | due: 2026-10-13 14:50]'],
+      ['an undo that put one back', '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]'],
+    ])('carries the Temp checkout tag when the Checkout it puts back was %s', async (_, note) => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkin', note: '[Bulk return]' }, { action: 'Checkout', note }, { action: 'Checkout', note: '' }]
+      await fake.flow.runner.undo()
+      expect(fake.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]' })
+    })
+
+    it('puts back an ordinary Checkout with a time of day, or one whose History cannot be read, without the Temp checkout tag', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkin', note: '[Bulk return]' }, { action: 'Checkout', note: '[Bulk checkout]' }, { action: 'Checkout', note: '[Temp checkout | due: 2026-10-01 14:50]' }]
+      await fake.flow.runner.undo()
+      expect(fake.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return' })
+      const unread = await returned(asset('NOMMA-2', { expectedCheckin: '2026-10-13 14:50' }))
+      await unread.flow.runner.undo()
+      expect(unread.checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return' })
+    })
+
+    it('reads no History for a date-only Expected Checkin', async () => {
+      const { flow, calls } = await returned(asset('NOMMA-1', { expectedCheckin: '2026-10-13' }))
       await flow.runner.undo()
-      expect(checkouts[0][1]).toMatchObject({ expectedCheckin: '2026-10-13 14:50', note: '[Undo] Bulk return [Temp checkout | due: 2026-10-13 14:50]' })
+      expect(calls.filter((c) => c.startsWith('getAsset'))).toEqual([])
     })
 
     it('sends no Expected Checkin when it had none', async () => {
       const { flow, checkouts } = await returned(asset('NOMMA-1'))
       await flow.runner.undo()
-      expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk return' })
+      expect(checkouts[0][1]).toEqual({ targetType: 'user', targetId: 7, statusId: 2, fromStatusId: 1, expectedCheckin: undefined, note: '[Undo] Bulk return' })
     })
 
     it("offers no undo for a kept Status Label, which Snipe-IT won't check out, and says why", async () => {
@@ -719,6 +762,31 @@ describe('Bulk return', () => {
       await flow.runner.undo()
       expect(checkouts).toEqual([])
       expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'Deployed' now" })
+    })
+
+    it('refuses when the Status Label changed while History was being read, and writes nothing', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      fake.history[one.id] = [{ action: 'Checkout', note: '[Temp checkout | due: 2026-10-13 14:50]' }]
+      const read = fake.bridge.getAsset.getMockImplementation()!
+      fake.bridge.getAsset.mockImplementationOnce(async (id: number) => (Object.assign(one, { status: 'Deployed', statusId: 2 }), read(id)))
+      await fake.flow.runner.undo()
+      expect(fake.checkouts).toEqual([])
+      expect(fake.flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: "NOMMA-1 is 'Deployed' now" })
+    })
+
+    it('writes nothing when Settings points at another server while History is being read', async () => {
+      const one = asset('NOMMA-1', { expectedCheckin: '2026-10-13 14:50' })
+      const fake = await returned(one)
+      const read = fake.bridge.getAsset.getMockImplementation()!
+      let release = () => {}
+      fake.bridge.getAsset.mockImplementationOnce((id: number) => new Promise((r) => { release = () => r(read(id)) }))
+      const undoing = fake.flow.runner.undo()
+      await vi.waitFor(() => expect(fake.bridge.getAsset).toHaveBeenCalled())
+      fake.flow.reset()
+      release()
+      await undoing
+      expect(fake.checkouts).toEqual([])
     })
 
     it('refuses when the Asset is checked out again, and writes nothing', async () => {
@@ -859,7 +927,7 @@ describe('Bulk checkout', () => {
       expect(checkouts).toEqual([])
       flow.runner.confirmOpen()
       await settled(flow)
-      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
+      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
       expect(calls.slice(-3)).toEqual(['bytag NOMMA-1', 'bytag NOMMA-1', 'checkout 1'])
       expect(flow.runner.rows[0].result).toEqual({ state: 'done', text: 'Checked out' })
       // Without options: no Expected Checkin, just the tag.
@@ -868,7 +936,7 @@ describe('Bulk checkout', () => {
       await opened(flow)
       flow.runner.confirmOpen()
       await settled(flow)
-      expect(checkouts[1]).toEqual([2, { targetType: 'user', targetId: 7, expectedCheckin: undefined, note: '[Bulk checkout]' }])
+      expect(checkouts[1]).toEqual([2, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: undefined, note: '[Bulk checkout]' }])
     })
 
     it("options are checked when set: a note can't hold a link", async () => {
@@ -886,6 +954,58 @@ describe('Bulk checkout', () => {
       await settled(flow)
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
       expect(checkouts).toEqual([])
+    })
+
+    it("Checkout's own last read refuses a Status Label or Location changed since the write's re-read", async () => {
+      const assets = [ready('NOMMA-1'), ready('NOMMA-2')]
+      const { flow, bridge, checkouts } = await scanning(assets)
+      for (const [i, changed, reason] of [[0, { status: 'Loaner Pool', statusId: 3 }, "NOMMA-1 is 'Loaner Pool' now"], [1, { location: 'Room 204', locationId: 4 }, 'NOMMA-2 is at Room 204 now']] as const) {
+        const tag = `NOMMA-${i + 1}`
+        flow.scan(tag)
+        await opened(flow)
+        bridge.assetByTag.mockResolvedValueOnce(ready(tag))
+        assets[i] = ready(tag, changed)
+        flow.runner.confirmOpen()
+        await settled(flow)
+        expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason })
+      }
+      expect(checkouts).toEqual([])
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets } })
+    })
+
+    it('latest wins: a slow lookup never opens its confirm after a newer scan, even one that was refused', async () => {
+      const { flow, bridge, checkouts } = await scanning([ready('NOMMA-1')])
+      let release = () => {}
+      bridge.assetByTag.mockImplementationOnce((tag) => new Promise((r) => { release = () => r(ready(tag)) }))
+      flow.scan('NOMMA-1')
+      await vi.waitFor(() => expect(flow.runner.rows[0].result.state).toBe('working'))
+      flow.scan('NOMMA-9')
+      release()
+      await settled(flow)
+      expect(flow.runner.open).toBeNull()
+      expect(flow.runner.rows.map((r) => [r.tag, r.result])).toEqual([
+        ['NOMMA-9', { state: 'failed', reason: 'No Asset with tag NOMMA-9' }],
+        ['NOMMA-1', { state: 'neutral', text: 'Skipped: not confirmed' }],
+      ])
+      expect(flow.runner.confirmOpen()).toBe('')
+      await settled(flow)
+      expect(checkouts).toEqual([])
+    })
+
+    it('a Checkout still in flight when the server changes never counts toward a same-id User there', async () => {
+      const { flow, bridge } = await scanning([ready('NOMMA-1')])
+      let release = () => {}
+      bridge.checkout.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+      flow.scan('NOMMA-1')
+      await opened(flow)
+      flow.runner.confirmOpen()
+      await vi.waitFor(() => expect(bridge.checkout).toHaveBeenCalled())
+      flow.reset()
+      bridge.exactUsers.mockResolvedValueOnce([AVERY])
+      await flow.find('atestwell')
+      release()
+      await flush()
+      expect(flow.step).toMatchObject({ step: 'scan', user: { assets: AVERY.assets } })
     })
 
     it('a lookup that lands after Done never opens a confirm for the ended round', async () => {
@@ -982,9 +1102,10 @@ describe('Bulk checkout', () => {
       expect(flow.runner.fixOpen()).toBe('')
       await settled(flow)
       expect(calls.slice(-4)).toEqual(['bytag NOMMA-1', 'bytag NOMMA-1', 'checkin 1', 'checkout 1'])
-      expect(checkins).toEqual([[1, { note: '[Bulk checkout | move]' }]])
-      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
+      expect(checkins).toEqual([[1, { note: '[Bulk checkout | move]', fromAssignee: { type: 'user', id: 8 }, fromStatusId: 2 }]])
+      expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 2, expectedCheckin: '2027-06-04', note: '[Bulk checkout] start of year' }]])
       expect(flow.runner.rows[0]).toMatchObject({ what: 'Moved from Blake Sampleton', result: { state: 'done', text: 'Checked out' } })
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets + 1 } })
     })
 
     it('Move refuses when the Assignee changed since the scan, and writes nothing', async () => {
@@ -993,6 +1114,18 @@ describe('Bulk checkout', () => {
       flow.runner.fixOpen()
       await settled(flow)
       expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 changed since it was scanned' })
+      expect(checkins).toEqual([])
+      expect(checkouts).toEqual([])
+    })
+
+    it("Move refuses when the Checkin's own last read finds another Assignee, and writes nothing", async () => {
+      const was = blakes('NOMMA-1')
+      const { flow, bridge, checkins, checkouts } = await choosing([was])
+      bridge.assetByTag.mockResolvedValueOnce(blakes('NOMMA-1'))
+      was.assignee = { type: 'user', id: 9, name: 'Casey Mockford' }
+      flow.runner.fixOpen()
+      await settled(flow)
+      expect(flow.runner.rows[0].result).toEqual({ state: 'failed', reason: 'NOMMA-1 is checked out to Casey Mockford now' })
       expect(checkins).toEqual([])
       expect(checkouts).toEqual([])
     })
@@ -1047,10 +1180,16 @@ describe('Bulk checkout', () => {
     describe('Undo last of a Move', () => {
       // Moved, then re-read for the undo: checked out to Avery now, with the Move's Checkout (no Expected Checkin).
       const moved = (was: Asset) => ({ ...was, assignee: { type: 'user' as const, id: 7, name: 'Avery Testwell' }, expectedCheckin: null })
-      async function undone(was: Asset) {
+      // Moved: what the Checkin's own last read finds is checked out to Avery too.
+      async function moving(was = blakes('NOMMA-1')) {
         const f = await choosing([was])
         f.flow.runner.fixOpen()
         await settled(f.flow)
+        was.assignee = moved(was).assignee
+        return f
+      }
+      async function undone(was: Asset) {
+        const f = await moving(was)
         f.bridge.assetByTag.mockResolvedValueOnce(moved(was))
         expect(f.flow.runner.askUndo()).toBe('')
         await f.flow.runner.undo()
@@ -1059,27 +1198,39 @@ describe('Bulk checkout', () => {
 
       it('checks it in, then back out to the previous User with the old Status Label and Expected Checkin', async () => {
         const { flow, checkins, checkouts } = await undone(blakes('NOMMA-1'))
-        expect(checkins.slice(1)).toEqual([[1, { note: '[Undo] Bulk checkout' }]])
-        expect(checkouts.slice(1)).toEqual([[1, { targetType: 'user', targetId: 8, statusId: 2, expectedCheckin: '2026-12-18', note: '[Undo] Bulk checkout' }]])
+        expect(checkins.slice(1)).toEqual([[1, { note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 2 }]])
+        expect(checkouts.slice(1)).toEqual([[1, { targetType: 'user', targetId: 8, statusId: 2, fromStatusId: 2, expectedCheckin: '2026-12-18', note: '[Undo] Bulk checkout' }]])
         expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
       })
 
       it('puts it back to a Location or an Asset, with no Expected Checkin when it had none', async () => {
         const room = await undone(asset('NOMMA-2', { assignee: { type: 'location', id: 4, name: 'Room 204' } }))
-        expect(room.checkouts[1]).toEqual([2, { targetType: 'location', targetId: 4, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk checkout' }])
+        expect(room.checkouts[1]).toEqual([2, { targetType: 'location', targetId: 4, statusId: 2, fromStatusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk checkout' }])
         const cart = await undone(asset('NOMMA-3', { assignee: { type: 'asset', id: 40, name: 'Cart 2' } }))
-        expect(cart.checkouts[1]).toEqual([3, { targetType: 'asset', targetId: 40, statusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk checkout' }])
+        expect(cart.checkouts[1]).toEqual([3, { targetType: 'asset', targetId: 40, statusId: 2, fromStatusId: 2, expectedCheckin: undefined, note: '[Undo] Bulk checkout' }])
       })
 
-      it('carries the Temp checkout tag when the old Expected Checkin had a time of day', async () => {
-        const { checkouts } = await undone(blakes('NOMMA-1', { expectedCheckin: '2026-10-12 14:50' }))
-        expect(checkouts[1][1]).toMatchObject({ expectedCheckin: '2026-10-12 14:50', note: '[Undo] Bulk checkout [Temp checkout | due: 2026-10-12 14:50]' })
+      it('carries the Temp checkout tag when History says the Checkout it moved was a Temp checkout', async () => {
+        const was = blakes('NOMMA-1', { expectedCheckin: '2026-10-12 14:50' })
+        const f = await choosing([was])
+        f.history[was.id] = [{ action: 'Checkout', note: '[Temp checkout | due: 2026-10-12 14:50]' }]
+        f.flow.runner.fixOpen()
+        await settled(f.flow)
+        was.assignee = moved(was).assignee
+        f.bridge.assetByTag.mockResolvedValueOnce(moved(was))
+        f.flow.runner.askUndo()
+        await f.flow.runner.undo()
+        expect(f.checkouts[1][1]).toMatchObject({ expectedCheckin: '2026-10-12 14:50', note: '[Undo] Bulk checkout [Temp checkout | due: 2026-10-12 14:50]' })
+      })
+
+      it('puts back an ordinary Checkout with a time of day without the Temp checkout tag', async () => {
+        const { checkouts, calls } = await undone(blakes('NOMMA-1', { expectedCheckin: '2026-10-12 14:50' }))
+        expect(calls).toContain('getAsset 1')
+        expect(checkouts[1][1]).toMatchObject({ expectedCheckin: '2026-10-12 14:50', note: '[Undo] Bulk checkout' })
       })
 
       it('a failed re-checkout says so in red and leaves it checked in', async () => {
-        const f = await choosing([blakes('NOMMA-1')])
-        f.flow.runner.fixOpen()
-        await settled(f.flow)
+        const f = await moving()
         f.bridge.assetByTag.mockResolvedValueOnce(moved(blakes('NOMMA-1')))
         f.bridge.checkout.mockRejectedValueOnce(new Error('User does not exist.'))
         f.flow.runner.askUndo()
@@ -1090,9 +1241,7 @@ describe('Bulk checkout', () => {
       })
 
       it('stops between its Checkin and Checkout when Settings point at another server meanwhile', async () => {
-        const f = await choosing([blakes('NOMMA-1')])
-        f.flow.runner.fixOpen()
-        await settled(f.flow)
+        const f = await moving()
         f.bridge.assetByTag.mockResolvedValueOnce(moved(blakes('NOMMA-1')))
         let release = () => {}
         f.bridge.checkin.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
@@ -1106,9 +1255,7 @@ describe('Bulk checkout', () => {
       })
 
       it("refuses when the key may no longer check it in or out, or its label can't be checked out now, and writes nothing", async () => {
-        const f = await choosing([blakes('NOMMA-1')])
-        f.flow.runner.fixOpen()
-        await settled(f.flow)
+        const f = await moving()
         f.bridge.assetByTag.mockResolvedValueOnce({ ...moved(blakes('NOMMA-1')), can: { checkout: false, checkin: true, update: true, delete: true } })
         f.flow.runner.askUndo()
         await f.flow.runner.undo()
@@ -1134,15 +1281,18 @@ describe('Bulk checkout', () => {
   })
 
   describe('Undo last', () => {
-    async function checkedOut() {
-      const f = await scanning([ready('NOMMA-1')])
+    const now = (more: Partial<Asset> = {}) => ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, statusMeta: 'deployed', location: 'Room 204', locationId: 4, ...more })
+    async function checkedOut(more: Partial<Asset> = {}) {
+      const assets = [ready('NOMMA-1', more)]
+      const f = await scanning(assets)
       f.flow.scan('NOMMA-1')
       await opened(f.flow)
       f.flow.runner.confirmOpen()
       await settled(f.flow)
-      return f
+      // What Checkin's own last read finds: checked out to Avery.
+      assets[0] = now()
+      return { ...f, assets }
     }
-    const now = (more: Partial<Asset> = {}) => ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, statusMeta: 'deployed', location: 'Room 204', locationId: 4, ...more })
 
     it('checks it in, putting back the Status Label and Location it had, with the [Undo] note', async () => {
       const { flow, bridge, checkins } = await checkedOut()
@@ -1150,8 +1300,28 @@ describe('Bulk checkout', () => {
       expect(flow.runner.askUndo()).toBe('')
       expect(flow.runner.confirm).toBe('Undo: NOMMA-1 → Avery Testwell? Enter to undo, Esc to cancel.')
       await flow.runner.undo()
-      expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Bulk checkout' }]])
+      expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: false }]])
       expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
+    })
+
+    it("the User's Asset count goes up with the Checkout and back down with its Undo", async () => {
+      const { flow, bridge } = await checkedOut()
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets + 1 } })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets } })
+    })
+
+    it("keeps the field's key through the count changing, so a tag being typed isn't cleared, and changes it on Done", async () => {
+      const { flow, bridge } = await checkedOut()
+      const key = fieldKey(flow.step)
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(fieldKey(flow.step)).toBe(key)
+      flow.done()
+      expect(fieldKey(flow.step)).not.toBe(key)
     })
 
     it('refuses when it is no longer checked out to this User, or its Status Label changed, and writes nothing', async () => {
@@ -1170,6 +1340,51 @@ describe('Bulk checkout', () => {
       expect(flow.runner.rows[0].undoFailed).toBe("NOMMA-1 is 'Deployed' now")
       expect(checkins).toEqual([])
       expect(flow.runner.rows[0].result.state).toBe('done')
+    })
+
+    it("Checkin's own last read refuses an Asset reassigned or relabelled since Undo's read, and writes nothing", async () => {
+      const { flow, bridge, checkins, assets } = await checkedOut()
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      assets[0] = now({ assignee: { type: 'user', id: 8, name: 'Blake Sampleton' } })
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 is checked out to Blake Sampleton now')
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      assets[0] = now({ status: 'Deployed', statusId: 2 })
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe("NOMMA-1 is 'Deployed' now")
+      expect(checkins).toEqual([])
+      expect(flow.step).toMatchObject({ user: { assets: AVERY.assets + 1 } })
+    })
+
+    // Snipe-IT's Checkin moves an Asset sent with no Location to its Default Location (#72), so "no Location" only comes back when it has none.
+    it('refuses for an Asset that had no Location but has a Default Location, since a Checkin would move it there', async () => {
+      const { flow, bridge, checkins } = await checkedOut({ location: '', locationId: null, defaultLocation: 'IT Office' })
+      bridge.assetByTag.mockResolvedValueOnce(now({ defaultLocation: 'IT Office' }))
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; a Checkin would move it to its Default Location, IT Office')
+      expect(checkins).toEqual([])
+    })
+
+    it("Checkin's own last read refuses an Asset that had no Location and has been given a Default Location since Undo's read", async () => {
+      const { flow, bridge, checkins, assets } = await checkedOut({ location: '', locationId: null, defaultLocation: '' })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      assets[0] = now({ defaultLocation: 'IT Office' })
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 has a Default Location now, IT Office; a Checkin would move it there')
+      expect(checkins).toEqual([])
+    })
+
+    it('checks in with no Location an Asset that had none and has no Default Location', async () => {
+      const { flow, bridge, checkins } = await checkedOut({ location: '', locationId: null, defaultLocation: '' })
+      bridge.assetByTag.mockResolvedValueOnce(now())
+      flow.runner.askUndo()
+      await flow.runner.undo()
+      expect(checkins).toEqual([[1, { statusId: 1, locationId: undefined, note: '[Undo] Bulk checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: true }]])
+      expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
     })
   })
 
@@ -1210,7 +1425,7 @@ describe('Temp checkout', () => {
     expect(flow.workflow).toBe('Temp checkout')
     expect(flow.due).toBe('2026-10-12 14:50')
     await confirmed(flow, 'NOMMA-1')
-    expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
+    expect(checkouts).toEqual([[1, { targetType: 'user', targetId: 7, fromStatusId: 1, fromLocationId: 3, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
     expect(flow.runner.rows[0]).toMatchObject({ what: 'Temp, due 2:50 pm', result: { state: 'done', text: 'Checked out' } })
     flow.done()
     expect(flow.setOptions({ expectedCheckin: '', note: 'charger too' })).toBe('')
@@ -1293,14 +1508,17 @@ describe('Temp checkout', () => {
     await vi.waitFor(() => expect(flow.runner.open?.choice).toBeTruthy())
     flow.runner.fixOpen()
     await settled(flow)
-    expect(checkins).toEqual([[4, { note: '[Temp checkout | move]' }]])
-    expect(checkouts).toEqual([[4, { targetType: 'user', targetId: 7, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
+    expect(checkins).toEqual([[4, { note: '[Temp checkout | move]', fromAssignee: { type: 'user', id: 8 }, fromStatusId: 2 }]])
+    expect(checkouts).toEqual([[4, { targetType: 'user', targetId: 7, fromStatusId: 2, expectedCheckin: '2026-10-12 14:50', note: '[Temp checkout | due: 2026-10-12 14:50]' }]])
     expect(flow.runner.rows[0].what).toBe('Temp, due 2:50 pm, moved from Blake Sampleton')
   })
 
   it('Undo last checks it in with [Undo] Temp checkout, putting back the Status Label and Location', async () => {
-    const { flow, bridge, checkins } = await scanning([ready('NOMMA-1')])
+    const a = ready('NOMMA-1')
+    const { flow, bridge, checkins } = await scanning([a])
     await confirmed(flow, 'NOMMA-1')
+    // What Checkin's own last read finds: checked out to Avery.
+    a.assignee = { type: 'user', id: 7, name: 'Avery Testwell' }
     const now = (expectedCheckin: string) => ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, statusMeta: 'deployed', location: 'Room 204', locationId: 4, expectedCheckin })
     // Checked in and out to them again since (a later due time): not this row's Checkout, so nothing is undone.
     bridge.assetByTag.mockResolvedValueOnce(now('2026-10-13 14:50'))
@@ -1311,7 +1529,7 @@ describe('Temp checkout', () => {
     bridge.assetByTag.mockResolvedValueOnce(now('2026-10-12 14:50'))
     expect(flow.runner.askUndo()).toBe('')
     await flow.runner.undo()
-    expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Temp checkout' }]])
+    expect(checkins).toEqual([[1, { statusId: 1, locationId: 3, note: '[Undo] Temp checkout', fromAssignee: { type: 'user', id: 7 }, fromStatusId: 1, noDefaultLocation: false }]])
     expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
   })
 
@@ -1338,7 +1556,7 @@ describe('Temp checkout', () => {
     bridge.assetByTag.mockResolvedValueOnce(ready('NOMMA-1', { assignee: { type: 'user', id: 7, name: 'Avery Testwell' }, location: 'Room 204', locationId: 4, defaultLocation: 'IT Office', expectedCheckin: '2026-10-12 14:50' }))
     flow.runner.askUndo()
     await flow.runner.undo()
-    expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; checking it in would move it to IT Office')
+    expect(flow.runner.rows[0].undoFailed).toBe('NOMMA-1 had no Location; a Checkin would move it to its Default Location, IT Office')
     expect(checkins).toEqual([])
   })
 

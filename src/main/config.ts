@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
+import type { ReleaseCache } from './release'
 import { END_OF_DAY, parseCalendar, realTime, type CalendarEntry } from './calendar'
 import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
@@ -66,6 +67,7 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
+  release?: ReleaseCache
   tempCheckout?: TempCheckout; schoolCalendar?: CalendarEntry[] }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
@@ -227,6 +229,11 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
       return get()
+    },
+    /** The newer Snipe-IT release check's cache and hidden tag, on this PC (see createReleaseCheck). */
+    release: (): ReleaseCache => read().release ?? {},
+    saveRelease(release: ReleaseCache) {
+      write({ ...read(), release })
     },
     saveTempCheckout({ endOfDay }: TempCheckout) {
       if (typeof endOfDay !== 'string' || !realTime(endOfDay)) throw new Error('Enter the end-of-day time as HH:MM, like 14:50.')

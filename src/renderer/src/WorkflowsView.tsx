@@ -4,7 +4,7 @@ import { WORKFLOWS, workflowNote, type Workflow } from '../../main/notes'
 import { dueLabel } from '../../main/calendar'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './BatchView'
-import { assigneeName, cleanTag, type BulkCheckout, type BulkReturn, type Row } from './workflows'
+import { assigneeName, cleanTag, fieldKey, type BulkCheckout, type BulkReturn, type Row } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Temp checkout']
@@ -275,9 +275,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset }: {
   typed.current = q
   const shown = !user && list?.q === q ? list.users : []
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
+  // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
   useEffect(() => {
     setText(''); setList(null); setMoved(null); setEditing(null); field.current?.focus()
-  }, [step])
+  }, [fieldKey(step)])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
     flow.runner.enter()
