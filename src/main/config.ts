@@ -6,7 +6,9 @@ import { LIST_SORTS, REPORT_NAMES, takesRange, type Config, type ListKind, type 
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance }
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance
+  /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
+  repairTypeId: number | null }
 /** So schedules send with the window closed. tray: closing the window hides it to the tray. startAtLogin: hidden in the tray too when tray is on. */
 export type Background = { tray: boolean; startAtLogin: boolean }
 export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
@@ -27,6 +29,8 @@ export type SettingsApi = {
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
   saveAppearance(input: Appearance): Promise<Settings>
+  /** The Maintenance type for repairs as typed: a whole number above 0, or blank for none. */
+  saveRepairs(maintenanceTypeId: string): Promise<Settings>
   /** Sends a test email with what's typed to the Operator's Snipe-IT email; resolves to that address. */
   testMail(input: MailInput): Promise<string>
   savedReports(): Promise<SavedReport[]>
@@ -59,7 +63,7 @@ export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
   builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
-  release?: ReleaseCache }
+  release?: ReleaseCache; repairTypeId?: number | null }
 
 const isStrings = (v: unknown, of: 'array' | 'record') =>
   (of === 'array' ? Array.isArray(v) : !!v && typeof v === 'object' && !Array.isArray(v)) && Object.values(v as object).every((x) => typeof x === 'string')
@@ -145,7 +149,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system' }
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -224,6 +228,13 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     release: (): ReleaseCache => read().release ?? {},
     saveRelease(release: ReleaseCache) {
       write({ ...read(), release })
+    },
+    // Not checked against Snipe-IT: Operator keys can't read Maintenance types. A wrong id shows on Repair intake's rows.
+    saveRepairs(maintenanceTypeId: string) {
+      const v = typeof maintenanceTypeId === 'string' ? maintenanceTypeId.trim() : null
+      if (v === null || (v && !(/^\d+$/.test(v) && Number.isSafeInteger(+v) && +v > 0))) throw new Error('Maintenance type for repairs must be a whole number above 0, or blank.')
+      write({ ...read(), repairTypeId: v ? +v : null })
+      return get()
     },
     savedReports,
     saveReport(input: SavedReportInput): SavedReport {
