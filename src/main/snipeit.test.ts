@@ -958,7 +958,7 @@ describe('dashboard (today is 2026-09-24)', () => {
     if (!overdue || !('rows' in overdue)) throw new Error('expected rows')
     expect(overdueList(overdue.rows, true).map((a) => a.assetTag)).toEqual(['NOMMA-1', 'NOMMA-4'])
     expect(overdueList(overdue.rows, false)).toBe(overdue.rows)
-    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, overdue)).toEqual([{ warning: 'temp', count: 2 }])
+    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, null, overdue)).toEqual([{ warning: 'temp', count: 2 }])
   })
 
   it('lists Expiring Warranties in the next 90 days, soonest first, leaving out expired ones', async () => {
@@ -1147,18 +1147,36 @@ describe('Health warnings', () => {
   it('lines: Temp checkouts Overdue counts the marked rows, says why it could not check, and is hidden at 0', () => {
     const fine = { probe: { version: 'v8.8.0' }, auditLate: 4, auditDue: 2 } as const
     const row = (temp: boolean) => ({ temp }) as NonNullable<Exclude<Dashboard['overdue'], { error: string }>>['rows'][number]
-    expect(healthLines(fine, { rows: [row(true), row(false), row(true)] })).toEqual([{ warning: 'auditLate', count: 4 }, { warning: 'temp', count: 2 }, { warning: 'auditDue', count: 2 }])
-    expect(healthLines(fine, { rows: [row(false)] })).toHaveLength(2)
-    expect(healthLines(fine, { rows: [], tempError: 'No Activity Report for you.' })).toContainEqual({ warning: 'temp', error: 'No Activity Report for you.' })
-    expect(healthLines(fine, { error: 'No Assets for you.' })).toContainEqual({ warning: 'temp', error: 'No Assets for you.' })
+    expect(healthLines(fine, null, { rows: [row(true), row(false), row(true)] })).toEqual([{ warning: 'auditLate', count: 4 }, { warning: 'temp', count: 2 }, { warning: 'auditDue', count: 2 }])
+    expect(healthLines(fine, null, { rows: [row(false)] })).toHaveLength(2)
+    expect(healthLines(fine, null, { rows: [], tempError: 'No Activity Report for you.' })).toContainEqual({ warning: 'temp', error: 'No Activity Report for you.' })
+    expect(healthLines(fine, null, { error: 'No Assets for you.' })).toContainEqual({ warning: 'temp', error: 'No Assets for you.' })
     expect(healthLines(fine)).toHaveLength(2) // the Overdue list hasn't loaded yet
+    // Temp checkouts Overdue is red, so it comes before the amber Newer Snipe-IT available.
+    expect(healthLines(fine, { tag: 'v9.0.0', url: '' }, { rows: [row(true)] }).map((l) => l.warning)).toEqual(['auditLate', 'temp', 'newer', 'auditDue'])
+  })
+
+  it('lines: Newer Snipe-IT available for any newer release, patches included, after Audit late', () => {
+    const release = (tag: string) => ({ tag, url: `https://github.com/grokability/snipe-it/releases/tag/${tag}` })
+    const newer = (running: string, tag: string) => healthLines({ probe: { version: running }, auditLate: 0, auditDue: 0 }, release(tag))
+    expect(newer('v8.8.0', 'v8.8.1')).toEqual([{ warning: 'newer', release: release('v8.8.1'), running: 'v8.8.0' }])
+    expect(newer('v8.9.1', 'v8.10.0')).toEqual([{ warning: 'newer', release: release('v8.10.0'), running: 'v8.9.1' }])
+    expect(newer('v8.8', 'v8.8.1')).toEqual([{ warning: 'newer', release: release('v8.8.1'), running: 'v8.8' }])
+    expect(newer('v8.7.4', 'v9.0.0')).toEqual([{ warning: 'newer', release: release('v9.0.0'), running: 'v8.7.4' }])
+    for (const [running, tag] of [['v8.8.0', 'v8.8.0'], ['v8.10.0', 'v8.9.1'], ['v8.8.0 build 120 (g1a2b3c)', 'v8.8.0'], ['v9.0.0', 'v8.9.1'], ['v8.8.0', 'latest'], ['nightly', 'v8.9.1']])
+      expect(newer(running, tag).filter((l) => l.warning === 'newer'), `${running} → ${tag}`).toEqual([])
+    expect(healthLines({ probe: { version: 'v8.8.0' }, auditLate: 0, auditDue: 0 }, null)).toEqual([])
+    expect(healthLines({ probe: { error: 'Not found' }, auditLate: 0, auditDue: 0 }, release('v8.9.1'))).toEqual([{ warning: 'tooOld', error: 'Not found' }])
+    expect(healthLines({ probe: { version: 'v8.6.0' }, auditLate: 2, auditDue: 3 }, release('v8.6.1')).map((l) => l.warning)).toEqual(['tooOld', 'auditLate', 'newer', 'auditDue'])
+    const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
+    expect(healthLines({ probe: down, auditLate: 0, auditDue: 0 }, release('v8.9.1'))).toEqual([down])
   })
 
   it('lines: Snipe-IT unreachable or the key failing shows only that line', () => {
     const down = { warning: 'unreachable', message: "Can't reach Snipe-IT." } as const
     expect(healthLines({ probe: down, auditLate: { error: "Can't reach Snipe-IT." }, auditDue: 4 })).toEqual([down])
     const key = { warning: 'key', message: 'Snipe-IT rejected your API key.' } as const
-    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 }, { error: 'Snipe-IT rejected your API key.' })).toEqual([key])
+    expect(healthLines({ probe: key, auditLate: 9, auditDue: 4 }, null, { error: 'Snipe-IT rejected your API key.' })).toEqual([key])
   })
 })
 

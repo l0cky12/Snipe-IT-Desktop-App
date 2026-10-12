@@ -4,6 +4,7 @@ import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, Fi
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { WORKFLOWS, type Workflow } from '../../main/notes'
+import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -857,18 +858,24 @@ function BarRow({ name, entry }: { name: string; entry: Segment[] | Failed }) {
 const healthName: Record<HealthLine['warning'], string> = {
   unreachable: 'Snipe-IT unreachable', key: 'API key problem', tooOld: 'Snipe-IT too old', auditLate: ASSET_VIEWS.auditLate.name, auditDue: ASSET_VIEWS.auditDue.name,
   temp: 'Temp checkouts Overdue',
+  newer: 'Newer Snipe-IT available',
 }
 // red: fix it now; amber: keep an eye on it.
-const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', temp: 'red' }
+const healthTone: Record<HealthLine['warning'], 'red' | 'amber'> = { unreachable: 'red', key: 'red', tooOld: 'red', auditLate: 'red', auditDue: 'amber', temp: 'red', newer: 'amber' }
 
 // The Health warnings: pinned above the dashboard, outside Customize. One line each, the most urgent first; "All clear" when none.
-function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly }: {
+function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly, onHideRelease }: {
   health: { lines: HealthLine[]; at: string } | Failed | null
   onRetry: () => void
   onSettings: () => void
   onAssetView: (v: AssetView) => void
   onTempOnly: () => void
+  onHideRelease: (tag: string) => Promise<void>
 }) {
+  // Why the release notes didn't open, or the release couldn't be hidden.
+  const [releaseFailed, setReleaseFailed] = useState('')
+  const failed = (e: Error) => setReleaseFailed(e.message)
+  const tryRelease = (action: () => Promise<void>) => (setReleaseFailed(''), action().catch(failed))
   if (!health) return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line checking">Checking…</p></section>
   if ('error' in health)
     return <section className="health" aria-label="Health warnings" aria-live="polite"><p className="health-line c-red">Couldn't check: {health.error}</p></section>
@@ -881,6 +888,14 @@ function HealthStrip({ health, onRetry, onSettings, onAssetView, onTempOnly }: {
           {l.warning === 'unreachable' && <button onClick={onRetry}>Retry</button>}
           <button onClick={onSettings}>Settings</button>
         </span>
+      </>
+    if ('release' in l)
+      return <>
+        <button className="link" onClick={() => tryRelease(() => window.releases.open(l.release.url))} title="Opens the release notes in your browser">
+          <b>{healthName.newer}</b> {l.release.tag} is out; your Snipe-IT runs {l.running}.
+        </button>
+        {releaseFailed && <span>{releaseFailed}</span>}
+        <span className="health-actions"><button onClick={() => tryRelease(() => onHideRelease(l.release.tag))}>Hide until the next release</button></span>
       </>
     if ('version' in l) return <><b>{healthName.tooOld}</b> <span>It runs {l.version}; this app needs v{MIN_SNIPEIT.join('.')} or later.</span></>
     if (l.warning === 'temp')
@@ -915,6 +930,8 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
   const latest = useRef(0)
   // The last Health check, kept whole: the Upcoming audits timeline (#112) shows its audit totals rather than fetching its own.
   const [health, setHealth] = useState<(Health & { at: string }) | Failed | null>(null)
+  // GitHub's latest Snipe-IT release, asked for beside the Health check so neither waits on the other.
+  const [release, setRelease] = useState<Release | null>(null)
   const latestHealth = useRef(0)
   // The Overdue list: only Temp checkouts, the row whose Checkin form is open, and what the last Checkin said.
   const [tempOnly, setTempOnly] = useState(false)
@@ -929,8 +946,11 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
     window.snipeIt.health().then(
       (h) => mine === latestHealth.current && setHealth({ ...h, at: new Date().toLocaleTimeString() }),
       (e: Error) => mine === latestHealth.current && setHealth({ error: e.message }))
+    window.releases.latest().then((r) => mine === latestHealth.current && setRelease(r), () => {})
   }
   useEffect(check, [])
+  // Kept on this PC until a newer release; the line goes now, without checking again.
+  const hideRelease = (tag: string) => window.releases.hide(tag).then(() => setRelease(null))
 
   function load() {
     const mine = ++latest.current
@@ -1080,7 +1100,7 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
   }
 
   // Lines show as they're known; "All clear" waits for the Overdue list too, so it never shows before the Temp checkouts line can.
-  const lines = health && !('error' in health) ? healthLines(health, data.overdue) : []
+  const lines = health && !('error' in health) ? healthLines(health, release, data.overdue) : []
   const strip = !health || 'error' in health ? health : lines.length || data.overdue ? { lines, at: health.at } : null
   const showing = (group: Group) => layout.filter((p) => p.show && pieceGroup[p.piece] === group).map((p) => p.piece)
   const bars = showing('Inventory Chart').flatMap((piece) => {
@@ -1099,7 +1119,7 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
       </header>
       <HealthStrip
         health={strip}
-        onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onTempOnly={openTempOnly}
+        onRetry={() => (load(), check())} onSettings={onSettings} onAssetView={onAssetView} onTempOnly={openTempOnly} onHideRelease={hideRelease}
       />
       {customizing && (
         <div className="customize">
