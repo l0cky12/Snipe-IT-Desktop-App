@@ -103,6 +103,9 @@ export function listKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | '
     default: return null
   }
 }
+/** Whether ↑/↓ take the Asset panel along: while it shows, or while an open is still loading (the first, before any panel shows),
+ * so that open can't land after and pull the focused row back. */
+export const cursorOpens = (shown: boolean, opening: boolean) => shown || opening
 /** The row focused after ↑ (-1) or ↓ (1): the next one on the page, stopping at either end; from none, the first or the last. */
 export function moveCursor(ids: number[], at: number | null, by: -1 | 1): number | null {
   if (!ids.length) return null
@@ -175,11 +178,13 @@ export const mayEdit = (kind: ListKind, rows: { can: Can }[]) => bulkEditable(ki
 // Loads when opened and whenever the search, a filter, the sort, or the page changes; no background polling.
 // Opening a row: an Asset opens its sheet, any other record its page of fields.
 // report: the Saved Report it was opened from; its search, sort and Columns start the List (App passes its filters as drill).
-export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, onRefreshPanel, onDropPanel }: {
+export function ListView({ kind, drill, report, baseUrl, statusLabels, locations, onOpenAsset, onOpenRecord, batch, onBatch, onNew, bulk, onBulk, onStopBulk, onCloseBulk, panel, onClosePanel, panelLoading, onRefreshPanel, onDropPanel }: {
   onNew: (kind: EditKind) => void
   // The Asset panel (Assets only): what it shows, and closing it.
   panel: ListPanel | null
   onClosePanel: () => void
+  // A lookup or open still loading, which ↑/↓ supersede.
+  panelLoading: boolean
   // When a Bulk Action ends: reload the panel's Asset, or close the panel after a delete; neither cancels an open still loading.
   onRefreshPanel: (id: number) => void
   onDropPanel: (id: number) => void
@@ -423,7 +428,7 @@ export function ListView({ kind, drill, report, baseUrl, statusLabels, locations
       if (next === null) return
       setCursor(next)
       // Even back onto the Asset shown, so an open still loading for the row passed over can't land after it.
-      if (panel) onOpenAsset(next)
+      if (cursorOpens(!!panel, panelLoading)) onOpenAsset(next)
     } else if (k === 'open') {
       if (cursor === null || !ids.includes(cursor)) return
       onOpenAsset(cursor)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allMatching, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
+import { allMatching, cursorOpens, listKey, moveCursor, choices, listQuery, opening, picking, storedColumns, confirmSelectAll, deleteQuestion, filterPick, holdsStudentInfo, mayDelete, numericColumns, mayEdit, pageTicks, progress, refreshed, retrying, tick, type BulkRun } from './ListView'
 
 describe('filter boxes', () => {
   const location = { label: 'Any Location', options: [{ value: '4', label: 'Room 1201' }, { value: '9', label: 'Room 12' }] }
@@ -205,6 +205,12 @@ describe('Assets Views', () => {
 })
 
 describe('keys on the Assets List', () => {
+  it('↑/↓ take the Asset panel along while it shows, or while the first open is still loading, so it cannot land on the row left', () => {
+    expect(cursorOpens(true, false)).toBe(true)
+    expect(cursorOpens(false, true)).toBe(true)
+    expect(cursorOpens(false, false)).toBe(false)
+  })
+
   const key = (name: string, mods: Partial<Pick<KeyboardEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {}) =>
     ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
 

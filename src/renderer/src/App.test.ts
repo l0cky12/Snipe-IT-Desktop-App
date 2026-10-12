@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
-import { defaultLocationChoice, ifShowing, opensAt, panelTakesFocus, routeKey, startsOver } from './App'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, opensAt, panelTakesFocus, routeKey, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -118,5 +120,28 @@ describe('the Asset panel when a Bulk Action ends', () => {
     expect(ifShowing(newer, 7, reload)).toBe(newer)
     expect(ifShowing(newer, 7, () => null)).toBe(newer)
     expect(ifShowing(null, 7, reload)).toBeNull()
+  })
+  it('keeps a newer open of the same Asset (a Quick Action form), so its typed inputs are not wiped', () => {
+    const newer = on(7, 5)
+    expect(ifShowing(newer, 7, reload, 4)).toBe(newer)
+    expect(ifShowing(newer, 7, reload, 5)).toEqual(on(7, 6))
+  })
+})
+
+describe('a Quick Action form opening in the Asset panel', () => {
+  const asset = { id: 1, assetTag: 'T1', statusId: 1, assignee: { id: 2, name: 'Fake', type: 'user' }, can: { checkin: true }, defaultLocation: '' } as unknown as Parameters<typeof StatusForm>[0]['asset']
+  const forms = (autoFocus?: boolean) => [
+    createElement(CheckinForm, { defaultLocation: null, locations: [], asset, statusLabels: [], onCheckin: async () => {}, autoFocus }),
+    createElement(CheckoutForm, { defaultLocation: null, onCheckout: async () => {}, autoFocus }),
+    createElement(StatusForm, { asset, statusLabels: [], onSave: async () => {}, autoFocus }),
+  ].map((f) => renderToStaticMarkup(f))
+
+  it('leaves focus in a Scan box holding text, so the rest of the scan is not typed into the form', () => {
+    for (const html of forms(false)) expect(html).not.toContain('autofocus')
+  })
+
+  it('takes focus otherwise, as it always has', () => {
+    for (const html of forms(true)) expect(html).toContain('autofocus')
+    for (const html of forms()) expect(html).toContain('autofocus')
   })
 })

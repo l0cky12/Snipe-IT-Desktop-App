@@ -65,8 +65,10 @@ export const opensAt = <V extends { page: string }>(view: V | null, showSettings
   !showSettings && view?.page === 'assets' ? { docked: true, view } : { docked: false, view: null }
 
 /** The Asset panel once something done to Asset id ends (a Bulk Action, a delete): changed only while it still shows that Asset,
- * so an open that landed meanwhile stays. It never touches `latest`, so an open still loading isn't cancelled either. */
-export const ifShowing = <P extends { asset: { id: number } }>(p: P | null, id: number, next: (p: P) => P | null): P | null => (p?.asset.id === id ? next(p) : p)
+ * so an open that landed meanwhile stays; given n (the panel's when the work began), only while it's still that open, so a newer
+ * open of the same Asset (a Quick Action's form) stays too. It never touches `latest`, so an open still loading isn't cancelled either. */
+export const ifShowing = <P extends { asset: { id: number }; n: number }>(p: P | null, id: number, next: (p: P) => P | null, n?: number): P | null =>
+  p?.asset.id === id && (n === undefined || p.n === n) ? next(p) : p
 
 /** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
 export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
@@ -343,7 +345,7 @@ export function App() {
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
-  const refreshPanel = (id: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }))), (e: Error) => setMessage({ text: e.message, error: true }))
+  const refreshPanel = (id: number, n = panel?.n) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }), n)), (e: Error) => setMessage({ text: e.message, error: true }))
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
@@ -448,7 +450,7 @@ export function App() {
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} onOpenAsset={pick} onOpenRecord={openRecord} batch={batch} onBatch={(assets) => addToBatch(...assets)} onNew={(k) => editRecord(k, null)}
-          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
+          panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
         : asset ? <AssetSheet key={opened} {...sheetProps(asset, () => deleted('assets', asset.id, asset.assetTag))} /> : <p className="empty">Scan an Asset Tag</p>}</main>
     </div>
@@ -495,7 +497,8 @@ const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Locati
 // A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
 export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
 
-export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
+// autoFocus: false keeps focus where it is (a half-typed scan in the Scan box) as the form opens.
+export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void>; autoFocus?: boolean }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
   const [statusId, setStatusId] = useState(a.statusId)
@@ -514,7 +517,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   return (
     <form className="actions" onSubmit={onSubmit}>
       <select
-        autoFocus
+        autoFocus={props.autoFocus ?? true}
         value={statusId ?? ''}
         onChange={(e) => setStatusId(Number(e.target.value))}
         disabled={off}
@@ -538,7 +541,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   )
 }
 
-export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void> }) {
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; autoFocus?: boolean }) {
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
@@ -585,7 +588,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
           <option value="location">Location</option>
         </select>
         <input
-          autoFocus
+          autoFocus={props.autoFocus ?? true}
           value={text}
           onChange={(e) => (setText(e.target.value), setTarget(null))}
           placeholder={`Search ${kind[targetType]}s by name…`}
@@ -613,7 +616,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   )
 }
 
-export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void> }) {
+export function StatusForm({ asset: a, statusLabels, onSave, autoFocus = true }: { asset: Asset; statusLabels: StatusLabel[]; onSave: (statusId: number) => Promise<void>; autoFocus?: boolean }) {
   const [statusId, setStatusId] = useState(a.statusId)
   const [busy, setBusy] = useState(false)
   const labels = statusChoices(statusLabels, a)
@@ -626,7 +629,7 @@ export function StatusForm({ asset: a, statusLabels, onSave }: { asset: Asset; s
   }
   return (
     <form className="actions" onSubmit={onSubmit}>
-      <select autoFocus value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
+      <select autoFocus={autoFocus} value={statusId ?? ''} onChange={(e) => setStatusId(Number(e.target.value))} aria-label={`New status for ${a.assetTag}`}>
         {statusId === null && <option value="" disabled>Choose a status</option>}
         {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -660,10 +663,12 @@ export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void;
 export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
+  // Read as it renders, before a form's autoFocus moves it: a field holding text (a half-typed scan) keeps focus.
+  const active = document.activeElement
+  const takesFocus = panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')
   // Docked without a form, the panel takes focus, so ↑/↓, Space and Esc work at once and the next scan still reaches the Scan box.
   useEffect(() => {
-    const active = document.activeElement
-    if (docked && !initialForm && panelTakesFocus(keyPlace(active), (active as HTMLInputElement | null)?.value ?? '')) root.current?.focus()
+    if (docked && !initialForm && takesFocus) root.current?.focus()
   }, [])
   const toggle = (f: SheetForm) => setForm((open) => (open === f ? null : f))
   // Esc cancels the open form and stops there; with no form open it goes on to close the Asset panel.
@@ -718,9 +723,9 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
       {docked?.notInView && <p className="notice">Not in this View</p>}
       {form && (
         <div className="sheet-form">
-          {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} />}
-          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} />}
-          {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} />}
+          {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} autoFocus={takesFocus} />}
+          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} autoFocus={takesFocus} />}
+          {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} autoFocus={takesFocus} />}
         </div>
       )}
       <div className="grid">
