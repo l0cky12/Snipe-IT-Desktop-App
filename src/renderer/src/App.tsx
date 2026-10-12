@@ -997,11 +997,12 @@ function DashboardView({ onPick, onDrill, onAssetView, onSettings, statusLabels,
     )
   }
 
-  // A rejected Checkin keeps its form open with what was typed; a done one reloads the dashboard and the Health check.
+  // A rejected Checkin keeps its form open with what was typed; a done one closes only its own form (another row's opened
+  // meanwhile keeps its inputs) and reloads the dashboard and the Health check.
   const checkin = (assetTag: string) => async (id: number, o: CheckinOptions) => {
     try {
       await window.snipeIt.checkin(id, o)
-      setCheckingIn(null)
+      setCheckingIn((open) => (open === id ? null : open))
       setOverdueMessage({ text: `Checked in ${assetTag}` })
       load(), check()
     } catch (e) {
