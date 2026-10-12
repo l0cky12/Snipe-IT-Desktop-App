@@ -1187,6 +1187,33 @@ describe('dashboard (today is 2026-09-24)', () => {
     expect(offsets('hardware')).toEqual([0, 0])
   })
 
+  it('Upcoming audits: next audit dates grouped by day, today to 12 months ahead inclusive, soonest first', async () => {
+    const next = (date: string | null) => ({ next_audit_date: date && { date, formatted: date } })
+    const { snipeIt } = fleet({ hardware: [
+      asset(1, next('2026-12-01')), asset(2, next('2026-09-24')), asset(3, next('2026-12-01')), asset(4, next('2026-09-23')),
+      asset(5, next('2027-09-24')), asset(6, next('2027-09-25')), asset(7, next(null)),
+    ] })
+    const { audits } = await snipeIt.dashboard(['audits'])
+    expect(audits).toMatchObject([
+      { day: '2026-09-24', assets: [{ id: 2, assetTag: 'NOMMA-2' }] },
+      { day: '2026-12-01', assets: [{ id: 1 }, { id: 3 }] },
+      { day: '2027-09-24', assets: [{ id: 5 }] },
+    ])
+  })
+
+  it('Upcoming audits leaves out Archived Assets, which "show archived in list" puts in the Asset list', async () => {
+    const next = (date: string) => ({ next_audit_date: { date, formatted: date } })
+    const archived = { status_label: { id: 4, name: 'Archived', status_meta: 'archived' }, assigned_to: null }
+    const { snipeIt } = fleet({ hardware: [asset(1, next('2026-12-01')), asset(2, { ...next('2026-12-01'), ...archived }), asset(3, { ...next('2027-01-12'), ...archived })] })
+    expect((await snipeIt.dashboard(['audits'])).audits).toMatchObject([{ day: '2026-12-01', assets: [{ id: 1 }] }])
+  })
+
+  it("Upcoming audits reads the Asset list only; the Audit late and Audit due totals come from the Health check", async () => {
+    const { snipeIt, listsAsked } = fleet({ hardware: [asset(1)] })
+    await snipeIt.dashboard(['audits', 'categories'])
+    expect(listsAsked()).toEqual(['hardware'])
+  })
+
   it('a connection failure keeps its clear message, on every piece', async () => {
     const offline = (async () => {
       throw new TypeError('fetch failed')
@@ -1270,11 +1297,17 @@ describe('Health warnings', () => {
 
   const noneDeactivated = { '/users': { body: { total: 0, rows: [] } } }
 
-  it('probes /version for the version, and reads both audit totals with limit=1', async () => {
+  it('probes /version for the version, and reads both audit totals with limit=1 (Audit due latest first)', async () => {
     const { fetch, calls, queries } = fakeFetch({ '/version': { body: { version: 'v8.8.0', build_version: 'v8.8.0-12' } }, ...audits, ...noneDeactivated })
-    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, deactivated: { assets: 0, users: 0 } })
+    expect(await createSnipeIt(config, fetch).health()).toEqual({ probe: { version: 'v8.8.0' }, auditLate: 12, auditDue: 3, dueThrough: null, deactivated: { assets: 0, users: 0 } })
     expect(calls.sort()).toEqual(['/hardware/audit/due', '/hardware/audit/overdue', '/users', '/version'])
-    expect(queries.filter((q) => q.limit === '1')).toHaveLength(2)
+    expect(queries.filter((q) => q.limit === '1')).toEqual(expect.arrayContaining([{ limit: '1' }, { limit: '1', sort: 'next_audit_date', order: 'desc' }]))
+  })
+
+  it("the Audit due check's one row is the latest Audit due date, where the timeline's Audit due shading ends", async () => {
+    const latest = { '/hardware/audit/due': { body: { total: 3, rows: [{ ...chromebook, next_audit_date: { date: '2026-10-19', formatted: '2026-10-19' } }] } } }
+    const { fetch } = fakeFetch({ '/version': { body: { version: 'v8.8.0' } }, ...audits, ...latest, ...noneDeactivated })
+    expect(await createSnipeIt(config, fetch).health()).toMatchObject({ auditDue: 3, dueThrough: '2026-10-19' })
   })
 
   // Shaped like Snipe-IT's /users rows (trimmed).
@@ -1317,7 +1350,7 @@ describe('Health warnings', () => {
   it('a check that fails says why on its own, leaving the others', async () => {
     const { fetch } = fakeFetch({ '/version': { body: {} }, '/hardware/audit/overdue': { status: 403, body: { status: 'error', messages: 'No audits for you.' } }, '/hardware/audit/due': audits['/hardware/audit/due'], ...noneDeactivated })
     expect(await createSnipeIt(config, fetch).health()).toEqual({
-      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, deactivated: { assets: 0, users: 0 },
+      probe: { error: "Snipe-IT didn't say which version it runs." }, auditLate: { error: 'Snipe-IT returned HTTP 403: No audits for you.' }, auditDue: 3, dueThrough: null, deactivated: { assets: 0, users: 0 },
     })
   })
 

@@ -61,7 +61,10 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
   // A few with no Serial (none or blank), no Asset Model (deleted), or no Location (some of those checked out, which don't count as missing it).
   const noLocation = holder?.type !== 'location' && i % 29 === 11
   // Next audit from 40 days late to about a year ahead, a year after the last; some never audited, a few with no audit date at all.
-  const nextAudit = i % 19 === 0 ? null : ((i * 37) % 420) - 40 + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
+  // Rooms are audited together, so past the next two months some Assets share one of two busy days (the Next major audit).
+  const spread = ((i * 37) % 420) - 40
+  const planned = spread <= 60 ? spread : i % 4 === 1 ? 226 : i % 6 === 2 ? 135 : spread
+  const nextAudit = i % 19 === 0 ? null : planned + (process.env.MOCK_ALL_AUDITED ? 80 : 0)
   return {
     id: i + 1, asset_tag: `NOMMA-${String(1000 + i).padStart(6, '0')}`, name: `${model.category.name.slice(0, 2).toUpperCase()}-${String(i + 1).padStart(3, '0')}`,
     // Shaped like Snipe-IT's hardware rows: the manufacturer and model number sit beside the Asset Model, not in it.
