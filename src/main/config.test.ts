@@ -107,6 +107,16 @@ it('refuses a Saved Report it could not open again', () => {
   expect(store.savedReports()).toEqual([])
 })
 
+it("keeps an Assets Saved Report's View; re-saving without one drops it, and a View it doesn't know is refused", () => {
+  const { store } = setup()
+  const late = store.saveReport({ ...report, view: 'auditLate' })
+  expect(store.savedReports()).toEqual([{ ...late, view: 'auditLate' }])
+  expect(store.saveReport({ ...report, id: late.id })).not.toHaveProperty('view')
+  expect(() => store.saveReport({ ...report, view: 'nope' as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, view: ['auditLate'] as unknown as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, kind: 'users', sort: null, view: 'overdue' })).toThrow('Invalid report')
+})
+
 const mail = { host: 'smtp.gmail.com', port: 465, security: 'ssl' as const, username: 'operator@nomma.net', sender: 'operator@nomma.net', password: 'app-password' }
 
 it("fills in Gmail's mail server, keeps the email password encrypted across a restart, and keeps it when left blank", () => {

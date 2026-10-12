@@ -344,6 +344,8 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .view-tabs button:hover { color: var(--text); }
 .view-tabs button.on { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--mark); }
 .view-tabs .count { color: var(--dim); font-weight: 500; font-size: 12px; }
+/* Between the built-in Views and the Operator's Saved Reports. */
+.view-tabs .tab-sep { align-self: center; flex: none; width: 1px; height: 16px; margin: 0 8px; background: var(--line); }
 .toolbar > input:not(.filter) { flex: 1 1 160px; min-width: 160px; max-width: 360px; }
 .toolbar .filter { flex: 0 1 150px; min-width: 120px; }
 /* The Selection bar: the count, select-all, its Bulk Actions and Clear, at the toolbar's right end; it takes its own row

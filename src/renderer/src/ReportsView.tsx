@@ -3,7 +3,7 @@ import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Schedu
 import type { ReportRef } from '../../main/scheduler'
 import { choices as filterChoices, listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, ASSET_VIEWS, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report; a snapshot Report has none.
 const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started', tempHistory: 'Checked out' }
@@ -322,7 +322,7 @@ function SavedReports({ onOpen, onEmailed, scheduleOf, onScheduled }: { onOpen: 
                     </form>
                   ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
                 </td>
-                <td className="dim">{listName[r.kind]}</td>
+                <td className="dim">{listName[r.kind]}{r.view && `, ${ASSET_VIEWS[r.view].name}`}</td>
                 <td><ScheduleCell report={{ saved: r.id }} schedule={scheduleOf({ saved: r.id })} name={r.name} onChange={onScheduled} /></td>
                 <td><div className="actions">
                   {deleting === r.id ? (
