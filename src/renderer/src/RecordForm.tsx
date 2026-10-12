@@ -146,7 +146,7 @@ export function BulkEditForm({ kind, count, busy, onApply, onCancel }: { kind: B
   const shared = filled(values)
   const anyFilled = Object.keys(shared).length > 0
   return (
-    <form className="selection" aria-label="Edit shared fields" noValidate onSubmit={(e) => (e.preventDefault(), anyFilled && !busy && onApply(shared))}>
+    <form className="list-panel" aria-label="Edit shared fields" noValidate onSubmit={(e) => (e.preventDefault(), anyFilled && !busy && onApply(shared))}>
       <div className="actions">
         <b>Edit shared fields</b>
         <span className="dim">A field left blank stays as each {singular(kind)} has it.</span>
