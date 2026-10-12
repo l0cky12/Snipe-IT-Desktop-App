@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, X, type LucideIcon } from 'lucide-react'
-import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
+import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { ASSET_PIECES, DASHBOARD_PIECES, lateness, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { WORKFLOWS, type Workflow } from '../../main/notes'
 import { SettingsPage } from './SettingsPage'
 import { ListView, drillTo, listName, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { BatchView, eachInTurn, type BatchAction, type BatchItem, type Outcome } from './BatchView'
@@ -12,6 +13,8 @@ import { FieldGrid, RecordView } from './RecordView'
 import { DeleteButton, RecordForm } from './RecordForm'
 import { GroupsView, type CanManage } from './AccessView'
 import { AssetCodes, PrintLabel } from './AssetCodes'
+import { createBulkReturn, NOT_ALLOWED } from './workflows'
+import { BUILT, BulkReturnView, errorSound, shortcut, workflowIcon, WorkflowsPage } from './WorkflowsView'
 
 const statusColor: Record<string, string> = {
   deployed: 'blue',
@@ -29,17 +32,26 @@ export const StatusChip = ({ asset }: { asset: AssetSummary }) => (
 export const statusChoices = (labels: StatusLabel[], a: Asset) =>
   labels.some((l) => l.id === a.statusId) || a.statusId === null ? labels : [{ id: a.statusId, name: a.status }, ...labels]
 
-// Why an action is off when Snipe-IT says the Operator's key may not do it.
-export const NOT_ALLOWED = "Your Snipe-IT account isn't allowed to do this"
+export { NOT_ALLOWED }
 // Why an Asset's Checkin / Checkout button is disabled (its title), or undefined when it may go ahead.
 export const checkinReason = (a: Pick<Asset, 'can' | 'assignee'>) => (!a.can.checkin ? NOT_ALLOWED : a.assignee ? undefined : 'Not checked out')
 export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllowed' | 'status'>) =>
   !a.can.checkout ? NOT_ALLOWED : a.checkoutAllowed ? undefined : a.assignee ? 'Already checked out' : `"${a.status}" can't be checked out`
 
-// Whether a keydown opens the Scan/Search panel and moves to its box: Ctrl+K from anywhere, or a typed character
+// Where a keydown goes. 'panel': the Scan/Search panel opens and takes it, for Ctrl+K from anywhere or a typed character
 // outside a field (a barcode scanner types like a keyboard), so a scan made while the panel is closed is not lost.
-export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
-  !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
+// On a Workflow page that character goes to the Workflow's field instead. A Workflow: Ctrl+1–5 from anywhere, in
+// glossary order. null: the key keeps its usual job.
+export function routeKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean, onWorkflow = false): 'panel' | 'workflow field' | Workflow | null {
+  if (e.altKey || e.metaKey) return null
+  if (e.ctrlKey) return e.key.toLowerCase() === 'k' ? 'panel' : /^[1-5]$/.test(e.key) ? WORKFLOWS[Number(e.key) - 1] : null
+  return inField || e.key.length !== 1 || e.key === ' ' ? null : onWorkflow ? 'workflow field' : 'panel'
+}
+
+// Only another server (or logging out) starts the session over; saving Email, Background or a new key for the same
+// server keeps the Workflows, Bulk Action results and the open List.
+export const startsOver = (before: Settings | null, after: Settings) => !before || before.baseUrl !== after.baseUrl || !after.hasToken
+
 /** Where a key was pressed: in a field (it takes typing), on a control (a button, link or checkbox has its own Enter and Space), or neither. */
 export type KeyPlace = 'field' | 'control' | 'none'
 export const keyPlace = (target: EventTarget | null): KeyPlace =>
@@ -76,7 +88,7 @@ const opens = (kind: SearchKind): kind is OtherKind => kind === 'users' || kind 
 
 // What the main area shows besides an Asset: the dashboard, the batch, a report, Import, the All records page, a List, or one record's fields.
 // n is bumped on every visit so a List or record starts fresh.
-type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
+type View = { page: 'dashboard' } | { page: 'batch' } | { page: 'workflows' } | { page: 'workflow'; workflow: Workflow } | { page: 'reports' } | { page: 'import' } | { page: 'records' } | { page: 'groups' } | { page: ListKind; drill?: Drill; report?: SavedReport; n: number } | { page: 'record'; kind: RecordKind; id: number; n: number }
   | { page: 'edit'; kind: EditKind; id: number | null; n: number }
 type Panel = { asset: AssetWithHistory; form?: SheetForm; n: number }
 
@@ -105,6 +117,10 @@ export function App() {
   const bulkBusy = useRef(false)
   const bulkStop = useRef(false)
   const [statusLabels, setStatusLabels] = useState<StatusLabel[]>([])
+  // Each Workflow's step, queue and Running list, kept for the session (in memory only) so leaving one loses nothing.
+  const [, changed] = useReducer((n: number) => n + 1, 0)
+  const [bulkReturn] = useState(() => createBulkReturn(window.snipeIt, { changed, failed: errorSound }))
+  const workflowField = useRef<HTMLInputElement>(null)
   // Whether the Operator's own account may manage permissions: null until Snipe-IT says, or why it couldn't be asked.
   const [canManage, setCanManage] = useState<CanManage>(null)
   // Whether the Operator's account has Snipe-IT's import permission; Import shows only once Snipe-IT says yes.
@@ -133,17 +149,29 @@ export function App() {
   // Discards any lookup or open still loading, so it can't pull the Operator off the page they chose.
   const cancel = () => (setBusy(0), ++latest.current)
 
+  const page = !showSettings && view?.page
+  const onWorkflow = page === 'workflow'
+  // Read by run(), whose closure may predate the page it finishes on.
+  const workflowShowing = useRef(onWorkflow)
+  workflowShowing.current = onWorkflow
+  // Straight in, skipping the Workflows page; from Settings too, like the sidebar.
+  const openWorkflow = (workflow: Workflow) => (cancel(), setShowSettings(false), setView({ page: 'workflow', workflow }))
+
   useEffect(() => search.current?.focus(), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!opensPanel(e, keyPlace(e.target) === 'field')) return
-      // Ctrl+K is the app's; a scanned character goes on to the box once it has focus.
+      const to = routeKey(e, keyPlace(e.target) === 'field', onWorkflow)
+      if (!to) return
+      // Ctrl+K and Ctrl+1–5 are the app's; a typed character goes on to the box or field once it has focus.
       if (e.ctrlKey) e.preventDefault()
-      openPanel()
+      if (to === 'panel') openPanel()
+      else if (to === 'workflow field') workflowField.current?.focus()
+      // Unbuilt Workflows do nothing; nothing does until an API key is saved.
+      else if (settings?.hasToken && BUILT.includes(to)) openWorkflow(to)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [onWorkflow, settings?.hasToken])
   useEffect(() => {
     window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
@@ -161,7 +189,11 @@ export function App() {
   }, [settings])
 
   function saved(value: Settings) {
-    cancel(); setSettings(value); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
+    const over = startsOver(settings, value)
+    setSettings(value)
+    if (!over) return
+    bulkReturn.reset()
+    cancel(); setAsset(null); setPanel(null); setRecent([]); batchEpoch.current++; batchBusy.current = false; setBatch([]); bulkBusy.current = false; setBulk(null); setBatchRun({ busy: false, last: null }); setMatches({ label: '', assets: [] }); setOthers([]); setView(null); setQuery(''); setMessage({ text: '' }); setStatusLabels([]); setLocations([]); setCanManage(null); setCanImport(false)
   }
 
   // Runs one lookup/open; `work` gets an isStale() check to call after each await.
@@ -178,7 +210,8 @@ export function App() {
     } finally {
       setBusy((b) => (b === mine ? 0 : b))
       // Only the newest run moves focus: one superseded by ↑/↓ mustn't pull it into the Scan box after the panel took it.
-      if (!isStale() && !docking.current) search.current?.focus()
+      // Not while a Workflow shows either: its field keeps focus, so the next scan lands there.
+      if (!isStale() && !docking.current && !workflowShowing.current) search.current?.focus()
     }
   }
 
@@ -312,9 +345,11 @@ export function App() {
   // After a Bulk Action: reload the panel's Asset, or close it after a delete, without cancelling an open still loading (a click on another row).
   const refreshPanel = (id: number) => window.snipeIt.getAsset(id).then((full) => setPanel((p) => ifShowing(p, id, (p) => ({ asset: full, n: p.n + 1 }))), (e: Error) => setMessage({ text: e.message, error: true }))
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
-  const page = !showSettings && view?.page
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+
+  // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
+  const workflowsBusy = bulkReturn.runner.pending
 
   // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
   const railMessage = <>
@@ -356,6 +391,14 @@ export function App() {
             <ListChecks size={18} />Batch
             {batch.length > 0 && <span className="badge">{batch.length}</span>}
           </button>
+          <button aria-label={`Workflows${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
+            <WorkflowsIcon size={18} />Workflows
+            {workflowsBusy > 0 && <span className="badge">{workflowsBusy}</span>}
+          </button>
+          {BUILT.map((w) => {
+            const Icon = workflowIcon[w]!
+            return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
+          })}
           <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
         </nav>
         {panelOpen && <div className="panel" id="scan-panel">
@@ -397,7 +440,9 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView />
+        : view?.page === 'workflows' ? <WorkflowsPage doneCount={() => bulkReturn.runner.rows.filter((r) => r.result.state === 'done').length} onOpen={openWorkflow} />
+        : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -447,6 +492,9 @@ function AssetList(props: { label: string; assets: (AssetSummary | AssetMatch)[]
 
 const kind: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+// A Checkin with no Location moves the Asset to its Default Location, or to none; the empty choice says which.
+export const defaultLocationChoice = (name: string) => (name ? `Default Location (${name})` : 'No Location')
+
 export function CheckinForm(props: { defaultLocation: StatusLabel | null; locations: StatusLabel[]; asset: Asset; statusLabels: StatusLabel[]; onCheckin: (id: number, o: CheckinOptions) => Promise<void> }) {
   const [locationId, setLocationId] = useState(props.defaultLocation?.id)
   const a = props.asset
@@ -478,7 +526,7 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
         ))}
       </select>
       <select aria-label="Checkin Location" disabled={off} value={locationId ?? ''} onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : undefined)}>
-        <option value="">Keep current Location</option>
+        <option value="">{defaultLocationChoice(a.defaultLocation)}</option>
         {props.defaultLocation && !props.locations.some((l) => l.id === props.defaultLocation?.id) && <option value={props.defaultLocation.id}>{props.defaultLocation.name}</option>}
         {props.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -649,7 +697,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
         {docked && <button className="panel-close" aria-label="Close the Asset panel" title="Close (Esc)" onClick={docked.onClose}><X size={16} /></button>}
         <div className="sheet-status-line">
           <StatusChip asset={a} />
-          {a.overdueDays !== null && <span className="flag c-red">Overdue {a.overdueDays}d</span>}
+          {a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}
           {a.warranty &&
             (a.warranty.expired ? (
               <span className="flag c-grey">Warranty expired</span>
@@ -856,7 +904,7 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
           <div className="section">Overdue ({rows.length})</div>
           <table className="history">
             <thead>
-              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th className="num">Days late</th></tr>
+              <tr><th>Asset Tag</th><th>Name</th><th>Assignee</th><th>Expected Checkin</th><th className="num">How late</th></tr>
             </thead>
             <tbody>
               {rows.map((a) => (
@@ -864,7 +912,8 @@ function DashboardView({ onPick, onSegment }: { onPick: (id: number) => void; on
                   {tag(a)}
                   <td>{a.name || '—'}</td>
                   <td>{a.assignee?.name}</td>
-                  <td className="late num">{a.overdueDays}d</td>
+                  <td>{a.expectedCheckin}</td>
+                  <td className="late num">{lateness(a.overdue)}</td>
                 </tr>
               ))}
             </tbody>
