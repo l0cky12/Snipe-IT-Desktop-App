@@ -190,6 +190,18 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 /* Same height as a bar plus its key, so the ledger keeps its rhythm. */
 .bar-error { border-left: 3px solid var(--red); padding-left: 8px; line-height: 20px; margin-bottom: 22px; font-weight: 500; }
 
+/* Health warnings: one line each with the tone as its edge and dot (red: fix now, amber: keep an eye on it), words in text colours. */
+.health { display: grid; gap: 6px; padding: 14px 28px 0; }
+.health-line { --dot: var(--grey); display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0; min-height: 28px; padding: 4px 10px 4px 12px;
+               border: 1px solid var(--line); border-left: 3px solid var(--dot); border-radius: var(--r-ctl); color: var(--text); font-size: 13.5px; }
+.health-line::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot); }
+.health-line.checking { color: var(--dim); }
+.health-line .link { font-weight: 400; }
+.health-line b { font-weight: 600; }
+.health-actions { margin-left: auto; display: flex; gap: 6px; }
+.health-actions button { min-height: 24px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--text); font: 500 12.5px var(--sans); padding: 0 10px; cursor: pointer; }
+.health-actions button:hover { background: var(--hover); }
+
 /* Customize (dashboard pieces, List columns): a soft tray under the header. */
 .customize { display: flex; gap: 40px; padding: 14px 28px; border-bottom: 1px solid var(--line); background: var(--side); font-size: 13.5px; }
 .customize ol { list-style: none; margin: 0; padding: 0; min-width: 220px; }
