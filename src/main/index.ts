@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, Tray } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
 import { sendMail } from './mail'
+import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
 import { createSnipeIt, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
@@ -152,7 +153,14 @@ app.whenReady().then(() => {
   handle('settings:saveRepairs', (_e, input: string) => store.saveRepairs(input))
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
   handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+  // The Newer Snipe-IT available Health warning; its check failing shows nothing. From source it asks only
+  // SNIPEIT_RELEASES_URL (the mock, scripts/mock-snipeit.mjs), so development and screenshots never ask GitHub.
+  const releasesUrl = app.isPackaged ? RELEASES_URL : process.env.SNIPEIT_RELEASES_URL
+  const releases = releasesUrl ? createReleaseCheck({ store, fetch, now: () => new Date(), url: releasesUrl }) : null
+  handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
+  handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
+  handle('release:hide', (_e, tag: string) => releases?.hide(tag))
+  for (const name of ['testConnection', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'searchLocations', 'checkout', 'checkin', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {

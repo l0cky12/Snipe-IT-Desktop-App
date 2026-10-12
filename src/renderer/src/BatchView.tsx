@@ -6,15 +6,15 @@ import { CheckoutForm, NOT_ALLOWED, StatusChip } from './App'
 export type Outcome = { state: 'working' } | { state: 'done'; text: string } | { state: 'failed'; reason: string }
 
 // Runs the action on each Asset in turn and reports each outcome as it lands; one failing doesn't stop the rest, stop() does.
-// Each is the usual single Checkout or Checkin, so History credits the Operator for every one.
-// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout is two requests); a cart of 30 takes ~20s on a busy server.
-export async function eachInTurn(ids: number[], work: (id: number) => Promise<void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
+// Each is the usual single Checkout or Checkin, so History credits the Operator for every one. Work that answers with text
+// (an Audit's dates) is reported with it instead of `done`.
+// ponytail: one at a time, gentle on Snipe-IT's rate limit (a Checkout or an Audit is two requests); a cart of 30 takes ~20s on a busy server.
+export async function eachInTurn(ids: number[], work: (id: number) => Promise<string | void>, done: string, report: (id: number, outcome: Outcome) => void, stop = () => false) {
   for (const id of ids) {
     if (stop()) return
     report(id, { state: 'working' })
     try {
-      await work(id)
-      report(id, { state: 'done', text: done })
+      report(id, { state: 'done', text: (await work(id)) || done })
     } catch (e) {
       report(id, { state: 'failed', reason: (e as Error).message })
     }
@@ -28,7 +28,7 @@ export function OutcomeText({ outcome: o }: { outcome: Outcome }) {
 
 /** An Asset in the batch, with how it fared in the last run (none until then, or after it's added again). */
 export type BatchItem = AssetSummary & { outcome?: Outcome }
-export type BatchAction = { done: string; work: (id: number) => Promise<void> }
+export type BatchAction = { done: string; work: (id: number) => Promise<string | void> }
 
 // App holds the batch and its run (session only, like recent scans), so leaving this page mid-run loses nothing.
 // Scanning while this page is open adds to it.

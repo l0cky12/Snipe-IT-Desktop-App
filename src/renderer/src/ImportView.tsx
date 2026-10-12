@@ -41,7 +41,8 @@ export function ImportView() {
   return (
     <>
       <header className="head">
-        <h1>Import<span className="sub">Create or update Records from a CSV, through Snipe-IT's importer</span></h1>
+        <h1>Import</h1>
+        <span className="dim">Create or update Records from a CSV, through Snipe-IT's importer</span>
         <div className="actions">
           <input ref={picker} type="file" accept=".csv,text/csv" hidden onChange={(e) => upload(e.target.files?.[0])} />
           <button disabled={uploading} onClick={() => picker.current?.click()}>{uploading ? 'Uploading…' : 'Upload CSV…'}</button>
@@ -65,7 +66,7 @@ export function ImportView() {
         </table>
       )}
       {files?.length === 0 && <p className="empty">No CSVs uploaded yet</p>}
-      {!files && !error && <p className="message list-message" role="status">Loading…</p>}
+      {!files && !error && <p className="empty" role="status">Loading…</p>}
     </>
   )
 }
