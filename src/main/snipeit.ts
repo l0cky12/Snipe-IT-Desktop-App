@@ -3,7 +3,8 @@ import type { Release } from './release'
 
 export type Config = { baseUrl: string; apiKey: string }
 
-export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string }
+/** username, employeeNum: a User Assignee's, when Snipe-IT sends them (only to a key that may view Users). */
+export type Assignee = { type: 'user' | 'location' | 'asset'; id: number; name: string; username?: string; employeeNum?: string }
 
 export type Asset = {
   id: number
@@ -432,7 +433,7 @@ type RawAsset = {
   location: Named
   rtd_location: Named
   // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
-  assigned_to: { id: number; name: string; type: Assignee['type']; employee_number?: string | null } | null
+  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
   last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
@@ -622,7 +623,10 @@ function toAsset(raw: RawAsset, today: Date): Asset {
     statusId: raw.status_label?.id ?? null,
     statusMeta: raw.status_label?.status_meta ?? '',
     statusType: raw.status_label?.status_type ?? '',
-    assignee: raw.assigned_to && { type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name },
+    assignee: raw.assigned_to && {
+      type: raw.assigned_to.type, id: raw.assigned_to.id, name: raw.assigned_to.name,
+      username: raw.assigned_to.username || undefined, employeeNum: raw.assigned_to.employee_number || undefined,
+    },
     checkoutAllowed: !raw.assigned_to && raw.status_label?.status_meta === 'deployable',
     location: raw.location?.name ?? '',
     defaultLocation: raw.rtd_location?.name ?? '',
