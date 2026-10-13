@@ -22,6 +22,12 @@ export function RecordForm({ kind, id, prefill, onSaved, onCancel }: {
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Closed (Cancel, or the screen behind it moved on) while a save was out: the save still lands, but nothing acts on it.
+  const closed = useRef(false)
+  useEffect(() => {
+    closed.current = false
+    return () => { closed.current = true }
+  }, [])
 
   useEffect(() => {
     let stale = false
@@ -63,7 +69,7 @@ export function RecordForm({ kind, id, prefill, onSaved, onCancel }: {
       // Only what the form shows now goes to Snipe-IT (not a previous Asset Model's custom fields), and editing, only what changed.
       const shown = fields.map((f): [string, string] => [f.key, values[f.key] ?? ''])
       const result = await window.snipeIt.save(kind, id, Object.fromEntries(id === null ? shown : shown.filter(([k, v]) => v !== (initial[k] ?? ''))))
-      if (result.ok) return onSaved(result.id, values)
+      if (result.ok) return closed.current || onSaved(result.id, values)
       setErrors(result.errors)
       setMessage(result.message)
     } catch (err) {
