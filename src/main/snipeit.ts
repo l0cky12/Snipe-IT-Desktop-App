@@ -1584,9 +1584,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
             if (key) groups.set(key, [...groups.get(key) ?? [], a])
           }
           for (const [, group] of [...groups].filter(([, g]) => g.length > 1).sort(([x], [y]) => x.localeCompare(y)))
-            for (const a of group) rows.push([field, of(a), a.assetTag, a.name, a.serial, a.model, a.status, a.assignee?.name ?? ''])
+            for (const a of group) rows.push([field, of(a), a.assetTag, a.name, a.serial, a.model, a.status])
         }
-        return { columns: ['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status', 'Assignee'], rows, capped: false }
+        return { columns: ['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status'], rows, capped: false }
       }
       if (kind === 'overdue')
         return {

@@ -1877,7 +1877,7 @@ describe('report', () => {
     ]
     const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
     const report = await createSnipeIt(config, fetch, today).report('duplicates')
-    expect(report.columns).toEqual(['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status', 'Assignee'])
+    expect(report.columns).toEqual(['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status'])
     expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
   })
 
