@@ -331,13 +331,14 @@ const olderThan = (a: readonly number[], b: readonly number[]) => {
   return i >= 0 && a[i] < (b[i] ?? 0)
 }
 
-/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history and Damaged. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged'] as const
+/** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history, Damaged,
+ * and Duplicates: every Asset whose Serial or Asset Tag another Asset shares. */
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged', 'duplicates'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
   statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', maintenances: 'Maintenances',
-  tempHistory: 'Temp checkout history', damaged: 'Damaged',
+  tempHistory: 'Temp checkout history', damaged: 'Damaged', duplicates: 'Duplicate Serials and Asset Tags',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory']
@@ -1420,6 +1421,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A report's rows. Snipe-IT can't filter its log by date, or by kind without one item, so the Activity Report pages
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
     // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited and End of life read every Asset.
+    // Duplicates groups every Asset by Serial, then by Asset Tag, ignoring case and outer spaces; a blank Serial matches nothing.
     async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
@@ -1573,6 +1575,19 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       }
       if (kind === 'damaged') return damaged(now)
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
+      if (kind === 'duplicates') {
+        const rows: string[][] = []
+        for (const [field, of] of [['Serial', (a: Asset) => a.serial], ['Asset Tag', (a: Asset) => a.assetTag]] as const) {
+          const groups = new Map<string, Asset[]>()
+          for (const a of assets) {
+            const key = of(a).trim().toUpperCase()
+            if (key) groups.set(key, [...groups.get(key) ?? [], a])
+          }
+          for (const [, group] of [...groups].filter(([, g]) => g.length > 1).sort(([x], [y]) => x.localeCompare(y)))
+            for (const a of group) rows.push([field, of(a), a.assetTag, a.name, a.serial, a.model, a.status, a.assignee?.name ?? ''])
+        }
+        return { columns: ['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status', 'Assignee'], rows, capped: false }
+      }
       if (kind === 'overdue')
         return {
           columns: ['Asset Tag', 'Name', 'Assignee', 'Expected Checkin', 'How late'],

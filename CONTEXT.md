@@ -85,8 +85,11 @@ The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, a
 _Avoid_: audit log
 
 **Report**:
-A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
+A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances, Duplicates) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
 _Avoid_: export (the export is the file a Report is saved to)
+
+**Duplicates**:
+The Report of every Asset whose Serial or Asset Tag another Asset shares, ignoring case and outer spaces. A blank Serial is never a duplicate.
 
 **Record type**:
 The kind of thing an Activity Report entry is about: an Asset, License, Accessory, Consumable, Component, or User.

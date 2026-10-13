@@ -1869,6 +1869,18 @@ describe('report', () => {
     expect((await snipeIt.report('expiring', { to: '2026-11-01' })).rows.map((r) => r[0])).toEqual(['NOMMA-4'])
   })
 
+  it('Duplicates lists every Asset sharing a Serial or Asset Tag, ignoring case and outer spaces, never a blank Serial', async () => {
+    const asset = (id: number, asset_tag: string, serial: string | null) => ({ ...chromebook, id, asset_tag, name: `CB-${id}`, serial })
+    const hardware = [
+      asset(1, 'NOMMA-1', 'ABC'), asset(2, 'NOMMA-2', 'abc '), asset(3, 'NOMMA-3', 'XYZ'),
+      asset(4, 'nomma-3', ''), asset(5, 'NOMMA-5', null), asset(6, 'NOMMA-6', ''),
+    ]
+    const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    const report = await createSnipeIt(config, fetch, today).report('duplicates')
+    expect(report.columns).toEqual(['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status', 'Assignee'])
+    expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
+  })
+
   it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
     const asset = (id: number, datetime: string) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: { datetime } })
     const hardware = [asset(1, '2026-09-24 15:30:00'), asset(2, '2026-09-24 14:50:00'), asset(3, '2026-09-23 00:00:00'), asset(4, '2026-09-24 16:30:00')]
