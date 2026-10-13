@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { FORMS, type Asset } from '../../main/snipeit'
-import { checkOutTo, isOff, withValue } from './RecordForm'
+import { checkOutTo, isOff, scanAsset, withValue } from './RecordForm'
 
 describe('New User: Enable login', () => {
   const field = (key: string) => FORMS.users.find((f) => f.key === key)!
@@ -37,5 +37,52 @@ describe('New User: Assets to check out', () => {
     const checkout = vi.fn(async () => {})
     expect(await checkOutTo(900, [], checkout)).toEqual([])
     expect(checkout).not.toHaveBeenCalled()
+  })
+
+  const can = { checkout: true, checkin: true, update: true, delete: true, audit: true }
+  const free = (id: number) => ({ id, assetTag: `TEST-${id}`, can, assignee: null, checkoutAllowed: true, status: 'Ready to Deploy' }) as unknown as Asset
+  // A fake form: what was added, refused, and how many lookups are still out.
+  function form(lookup: (tag: string) => Promise<Asset | null>) {
+    const added: string[] = []
+    const refused: Record<string, string> = {}
+    let pending = 0
+    const deps = {
+      lookup, listed: () => added.map((t) => ({ asset: { assetTag: t, id: Number(t.slice(5)) } as Asset })), pending: (by: 1 | -1) => { pending += by },
+      add: (_tag: string, a: Asset) => { added.push(a.assetTag) }, refuse: (tag: string, why: string) => { refused[tag] = why },
+    }
+    return { scan: (raw: string) => scanAsset(raw, deps), added, refused, pending: () => pending }
+  }
+
+  it('a burst of scans: each is looked up on its own, none merged or dropped, and Save waits until all are back', async () => {
+    const answers: Record<string, (a: Asset) => void> = {}
+    const lookup = vi.fn((tag: string) => new Promise<Asset | null>((resolve) => { answers[tag] = resolve }))
+    const f = form(lookup)
+    const first = f.scan('TEST-1')
+    const second = f.scan('\u0002TEST-2\r')
+    expect(lookup.mock.calls).toEqual([['TEST-1'], ['TEST-2']])
+    expect(f.pending()).toBe(2)
+    answers['TEST-2'](free(2))
+    await second
+    expect(f.pending()).toBe(1)
+    answers['TEST-1'](free(1))
+    await first
+    expect(f.added).toEqual(['TEST-2', 'TEST-1'])
+    expect(f.pending()).toBe(0)
+  })
+
+  it('refuses an unknown tag, one already listed, one that cannot be checked out now, and a failed lookup, each saying why', async () => {
+    const out = { ...free(3), assignee: { type: 'user', id: 7, name: 'Test User' }, checkoutAllowed: false } as unknown as Asset
+    const assets: Record<string, Asset | null> = { 'TEST-1': free(1), 'TEST-3': out, 'TEST-9': null }
+    const f = form(async (tag) => {
+      if (tag === 'TEST-5') throw new Error('Snipe-IT took too long to answer')
+      return assets[tag]
+    })
+    for (const tag of ['TEST-1', 'TEST-1', 'TEST-3', 'TEST-9', 'TEST-5', '  ']) await f.scan(tag)
+    expect(f.added).toEqual(['TEST-1'])
+    expect(f.refused).toEqual({
+      'TEST-1': 'TEST-1 is already listed.', 'TEST-3': 'TEST-3: Already checked out.', 'TEST-9': 'No Asset has the Asset Tag TEST-9.',
+      'TEST-5': 'TEST-5: Snipe-IT took too long to answer',
+    })
+    expect(f.pending()).toBe(0)
   })
 })

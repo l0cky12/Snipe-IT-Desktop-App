@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BULK_FORMS, filled, type Asset, type BulkKind, type EditKind, type FormField, type NamesKind, type SnipeItBridge, type StatusLabel } from '../../main/snipeit'
 import { listName, singular } from './ListView'
 import { NOT_ALLOWED, checkoutReason } from './App'
+import { cleanTag } from './workflows'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
 // An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
@@ -24,6 +25,8 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   // weren't checked out; Save then retries just those, so the User is never created twice.
   const [toCheckOut, setToCheckOut] = useState<Pending[]>([])
   const [created, setCreated] = useState<number | null>(null)
+  // Asset lookups not back yet: Save waits, so a scanned Asset isn't left out of the Checkout.
+  const [lookups, setLookups] = useState(0)
 
   useEffect(() => {
     let stale = false
@@ -58,8 +61,8 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    // Enter in a field submits too; not while the Asset Model's custom fields are missing.
-    if (fieldsLoading || fieldsFailed) return
+    // Enter in a field submits too; not while the Asset Model's custom fields are missing, or Assets are still being looked up.
+    if (fieldsLoading || fieldsFailed || lookups) return
     setBusy(true)
     setMessage('')
     try {
@@ -93,8 +96,8 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
             : <button type="button" className="quiet" onClick={onCancel}>Cancel</button>}
           {fieldsFailed
             ? <button type="button" onClick={() => set('model_id', values.model_id ?? '')}>Retry custom fields</button>
-            : <button disabled={busy || !loaded || fieldsLoading || (created !== null && !toCheckOut.length)}>
-              {busy ? (created !== null ? 'Checking out…' : 'Saving…') : fieldsLoading ? 'Loading fields…' : created !== null ? 'Retry checkout'
+            : <button disabled={busy || !loaded || fieldsLoading || lookups > 0 || (created !== null && !toCheckOut.length)}>
+              {busy ? (created !== null ? 'Checking out…' : 'Saving…') : fieldsLoading ? 'Loading fields…' : lookups ? 'Looking up Assets…' : created !== null ? 'Retry checkout'
                 : toCheckOut.length ? `Save and check out ${toCheckOut.length === 1 ? '1 Asset' : `${toCheckOut.length} Assets`}` : 'Save'}
             </button>}
         </div>
@@ -113,7 +116,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
           )
         })}
       </div>}
-      {kind === 'users' && id === null && <AssetsToCheckOut assets={toCheckOut} setAssets={setToCheckOut} busy={busy} />}
+      {kind === 'users' && id === null && <AssetsToCheckOut assets={toCheckOut} setAssets={setToCheckOut} busy={busy} pending={(by) => setLookups((n) => n + by)} />}
     </form>
   )
 }
@@ -128,40 +131,61 @@ export async function checkOutTo(userId: number, assets: Asset[], checkout: Snip
   return refused
 }
 
-// The New User form's Assets: scanned or typed by Asset Tag, Enter adds one. Only an Asset that can be checked out now is
-// added; Snipe-IT still has the last word when the User is saved. busy: they're being checked out, so the list holds still.
-function AssetsToCheckOut({ assets, setAssets, busy }: { assets: Pending[]; setAssets: React.Dispatch<React.SetStateAction<Pending[]>>; busy: boolean }) {
-  const [text, setText] = useState('')
-  const [error, setError] = useState('')
-  const [looking, setLooking] = useState(false)
-  async function add(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== 'Enter') return
-    // Enter here adds the Asset; it doesn't save the User.
-    e.preventDefault()
-    const tag = text.trim()
-    if (!tag || looking) return
-    setLooking(true)
-    setError('')
-    try {
-      const a = await window.snipeIt.assetByTag(tag)
-      const why = !a ? `No Asset has the Asset Tag ${tag}.` : assets.some((p) => p.asset.id === a.id) ? `${a.assetTag} is already listed.` : checkoutReason(a) && `${a.assetTag}: ${checkoutReason(a)}.`
-      if (why) return setError(why)
-      setAssets((all) => (all.some((p) => p.asset.id === a!.id) ? all : [...all, { asset: a! }]))
-      // Whatever was scanned next while this one was looked up stays.
-      setText((t) => (t.trim() === tag ? '' : t))
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setLooking(false)
-    }
+/**
+ * One scanned or typed Asset Tag, looked up on its own, so scans that come faster than Snipe-IT answers are neither merged
+ * nor dropped. pending counts lookups not back yet (Save waits for them). Only an Asset that can be checked out now is added;
+ * Snipe-IT still has the last word when the User is saved.
+ */
+export async function scanAsset(raw: string, { lookup, listed, add, refuse, pending }: {
+  lookup: (tag: string) => Promise<Asset | null>; listed: () => Pending[]
+  add: (tag: string, asset: Asset) => void; refuse: (tag: string, why: string) => void; pending: (by: 1 | -1) => void
+}) {
+  const tag = cleanTag(raw)
+  if (!tag) return
+  pending(1)
+  try {
+    const a = await lookup(tag)
+    if (!a) refuse(tag, `No Asset has the Asset Tag ${tag}.`)
+    else if (listed().some((p) => p.asset.id === a.id)) refuse(tag, `${a.assetTag} is already listed.`)
+    else if (checkoutReason(a)) refuse(tag, `${a.assetTag}: ${checkoutReason(a)}.`)
+    else add(tag, a)
+  } catch (e) {
+    refuse(tag, `${tag}: ${(e as Error).message}`)
+  } finally {
+    pending(-1)
   }
+}
+
+// The New User form's Assets, added by Asset Tag (Enter adds one). A refusal stays until that tag is added, so the next
+// scan doesn't wipe it. busy: they're being checked out, so the list holds still.
+function AssetsToCheckOut({ assets, setAssets, busy, pending }: {
+  assets: Pending[]; setAssets: React.Dispatch<React.SetStateAction<Pending[]>>; busy: boolean; pending: (by: 1 | -1) => void
+}) {
+  const [text, setText] = useState('')
+  const [refused, setRefused] = useState<Record<string, string>>({})
+  const listed = useRef(assets)
+  listed.current = assets
+  const unrefuse = (tag: string) => setRefused(({ [tag.toUpperCase()]: _, ...rest }) => rest)
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    // Enter here adds the Asset; it doesn't save the User. The tag is taken at once, so the field is clear for the next scan.
+    e.preventDefault()
+    const raw = e.currentTarget.value
+    setText('')
+    scanAsset(raw, {
+      lookup: (tag) => window.snipeIt.assetByTag(tag), listed: () => listed.current, pending,
+      add: (tag, asset) => (setAssets((all) => (all.some((p) => p.asset.id === asset.id) ? all : [...all, { asset }])), unrefuse(tag)),
+      refuse: (tag, why) => setRefused((r) => ({ ...r, [tag.toUpperCase()]: why })),
+    })
+  }
+  const refusals = Object.values(refused)
   return (
     <div className="form-grid">
       <div className="form-field wide">
         <label htmlFor="f-assets">Assets to check out to this User</label>
-        <input id="f-assets" value={text} disabled={busy} onChange={(e) => (setText(e.target.value), setError(''))} onKeyDown={add} autoComplete="off"
-          placeholder="Scan or type an Asset Tag, then Enter" aria-invalid={!!error || undefined} aria-describedby={error ? 'e-assets' : undefined} />
-        {error && <p id="e-assets" className="field-error" role="alert">{error}</p>}
+        <input id="f-assets" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} autoComplete="off"
+          placeholder="Scan or type an Asset Tag, then Enter" aria-describedby={refusals.length ? 'e-assets' : undefined} />
+        {refusals.length > 0 && <div id="e-assets" role="alert">{refusals.map((why) => <p key={why} className="field-error">{why}</p>)}</div>}
         {assets.map(({ asset, error }) => (
           <div key={asset.id} className="actions">
             <b>{asset.assetTag}</b> <span className="dim">{asset.name || asset.model}</span>
