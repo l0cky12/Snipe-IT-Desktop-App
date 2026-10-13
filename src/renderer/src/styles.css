@@ -345,6 +345,14 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
+/* The Reports page's compact table and Schedule form, inside a Settings card. */
+.scheduled-reports .history { margin-top: 8px; }
+.scheduled-reports .history td { padding: 5px 0; height: auto; }
+.scheduled-reports .history td:first-child { width: 30%; }
+.scheduled-reports .history td:last-child { padding-left: 14px; }
+.scheduled-reports .history tr:last-child td { border-bottom: 0; }
+.settings-page .schedule label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 500; }
+.settings-page .schedule input, .settings-page .schedule select { width: auto; }
 .settings-about dl { margin: 12px 0 16px; }
 .settings-about dl div { display: flex; justify-content: space-between; gap: 16px; margin: 8px 0; }
 .settings-about dt { color: var(--dim); }
