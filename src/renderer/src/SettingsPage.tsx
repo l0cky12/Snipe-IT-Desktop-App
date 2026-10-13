@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Appearance, Background, MailInput, Settings, SettingsInput, TempCheckout } from '../../main/config'
 import { formatCalendar } from '../../main/calendar'
+import { ScheduledReports } from './ReportsView'
 
 // onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
 export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
@@ -117,6 +118,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </section>
     </fieldset>
     {place === 'background' && notes}
+    {settings.hasToken && <ScheduledReports />}
     {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
     <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, endOfDay, automaticAt })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
       <fieldset disabled={busy}>

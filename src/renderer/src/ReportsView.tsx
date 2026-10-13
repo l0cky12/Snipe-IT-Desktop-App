@@ -117,6 +117,42 @@ function ScheduleForm({ report, schedule, name, onDone }: { report: ScheduleKey;
   )
 }
 
+// Every Report's Schedule, built-in Reports then Saved Reports; shown in Settings. Read again each minute so a send
+// the scheduler just made (or failed) shows.
+export function ScheduledReports() {
+  const [schedules, setSchedules] = useState<Scheduled[]>([])
+  const [saved, setSaved] = useState<SavedReport[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => {
+    const fail = (e: Error) => setError(e.message)
+    const load = () => window.settings.schedules().then(setSchedules, fail)
+    load()
+    window.settings.savedReports().then(setSaved, fail)
+    const timer = setInterval(load, 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  const rows: { report: ScheduleKey; name: string }[] = [
+    ...REPORTS.map((k) => ({ report: { builtIn: k }, name: REPORT_NAMES[k] })),
+    ...saved.map((r) => ({ report: { saved: r.id }, name: r.name })),
+  ]
+  return (
+    <section className="settings-section scheduled-reports">
+      <h2>Scheduled Reports</h2><p className="dim">Reports emailed to you on a schedule, through the Email settings above.</p>
+      {error && <p className="message error" role="alert">{error}</p>}
+      <table className="history">
+        <tbody>
+          {rows.map(({ report, name }) => (
+            <tr key={keyOf(report)}>
+              <td>{name}</td>
+              <td><ScheduleCell report={report} schedule={schedules.find((s) => keyOf(s.report) === keyOf(report))?.schedule} name={name} onChange={setSchedules} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
 type Notice = { text: string; error?: true }
 // Emails the Report to the Operator now (the main process runs it afresh); what happened shows as the page's notice.
 function EmailNow({ report, name, onDone }: { report: ReportRef; name: string; onDone: (notice: Notice) => void }) {
@@ -168,15 +204,6 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
-  // Every schedule, read again each minute so a send the scheduler just made (or failed) shows.
-  const [schedules, setSchedules] = useState<Scheduled[]>([])
-  useEffect(() => {
-    const load = () => window.settings.schedules().then(setSchedules, (e: Error) => setNotice({ text: e.message, error: true }))
-    load()
-    const timer = setInterval(load, 60_000)
-    return () => clearInterval(timer)
-  }, [])
-  const scheduleOf = (r: ScheduleKey) => schedules.find((s) => keyOf(s.report) === keyOf(r))?.schedule
   // Whether the chosen report narrows to a Location and a Category, and their choices, loaded the first time one is chosen;
   // a list that doesn't load just leaves fewer choices.
   const placeFilters = LOCATION_CATEGORY_REPORTS.includes(kind)
@@ -275,20 +302,7 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
-      <section className="saved-reports" aria-label="Built-in Reports">
-        <h2>Built-in Reports</h2>
-        <table className="history">
-          <tbody>
-            {REPORTS.map((k) => (
-              <tr key={k}>
-                <td>{REPORT_NAMES[k]}</td>
-                <td><ScheduleCell report={{ builtIn: k }} schedule={scheduleOf({ builtIn: k })} name={REPORT_NAMES[k]} onChange={setSchedules} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} scheduleOf={scheduleOf} onScheduled={setSchedules} />
+      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} />
       {report?.capped && <p className="message notice" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
       {report && (
         <table className="history list-table">
@@ -302,9 +316,8 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   )
 }
 
-// The Operator's Saved Reports, each opening as its List, emailed now or on a schedule, renamed in place, or deleted after asking.
-function SavedReports({ onOpen, onEmailed, scheduleOf, onScheduled }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void
-  scheduleOf: (r: ScheduleKey) => KeptSchedule | undefined; onScheduled: (all: Scheduled[]) => void }) {
+// The Operator's Saved Reports, each opening as its List, emailed now, renamed in place, or deleted after asking. Schedules are in Settings.
+function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void }) {
   const [reports, setReports] = useState<SavedReport[] | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -341,7 +354,6 @@ function SavedReports({ onOpen, onEmailed, scheduleOf, onScheduled }: { onOpen: 
                   ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
                 </td>
                 <td className="dim">{listName[r.kind]}{r.view && `, ${ASSET_VIEWS[r.view].name}`}</td>
-                <td><ScheduleCell report={{ saved: r.id }} schedule={scheduleOf({ saved: r.id })} name={r.name} onChange={onScheduled} /></td>
                 <td><div className="actions">
                   {deleting === r.id ? (
                     <span className="confirm" role="alertdialog" aria-label={`Delete ${r.name}?`}>
