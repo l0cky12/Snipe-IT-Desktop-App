@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { FORMS, type Asset } from '../../main/snipeit'
-import { checkOutTo, headButtons, isOff, scanAsset, withValue } from './RecordForm'
+import { LEFT_FIRST, checkOutTo, headButtons, isOff, scanAsset, withValue } from './RecordForm'
 
 describe('New User: Enable login', () => {
   const field = (key: string) => FORMS.users.find((f) => f.key === key)!
@@ -31,6 +31,15 @@ describe('New User: Assets to check out', () => {
       { asset: asset(2), error: 'TEST-2 is already checked out to Test User. Check it in first.' },
     ])
     expect(checkout.mock.calls).toEqual([1, 2, 3].map((id) => [id, { targetType: 'user', targetId: 900 }]))
+  })
+
+  it('the form closed (another page, Settings): no more Checkouts are sent, so none reaches a server changed since; the rest say why', async () => {
+    let closed = false
+    const checkout = vi.fn(async () => { closed = true })
+    expect(await checkOutTo(900, [asset(1), asset(2), asset(3)], checkout, () => closed)).toEqual([
+      { asset: asset(2), error: LEFT_FIRST }, { asset: asset(3), error: LEFT_FIRST },
+    ])
+    expect(checkout).toHaveBeenCalledTimes(1)
   })
 
   it('nothing listed, nothing checked out', async () => {

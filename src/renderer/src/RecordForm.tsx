@@ -7,7 +7,10 @@ import { cleanTag } from './workflows'
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
 // An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
 // costs with separators), and saving them unchanged would rewrite them.
-export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id: number | null; onSaved: (id: number) => void; onCancel: () => void }) {
+// onUnfinished: what's left undone when the Operator leaves the form while it's still sending (the rail shows it).
+export function RecordForm({ kind, id, onSaved, onCancel, onUnfinished }: {
+  kind: EditKind; id: number | null; onSaved: (id: number) => void; onCancel: () => void; onUnfinished: (text: string) => void
+}) {
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [initial, setInitial] = useState<Record<string, string>>({})
@@ -27,6 +30,12 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
   const [created, setCreated] = useState<number | null>(null)
   // Asset lookups not back yet: Save waits, so a scanned Asset isn't left out of the Checkout.
   const [lookups, setLookups] = useState(0)
+  // The form is closed (another page, Settings): no more Checkouts are sent, so none can reach a server changed since.
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => { gone.current = true }
+  }, [])
 
   useEffect(() => {
     let stale = false
@@ -74,11 +83,14 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
         if (!result.ok) return (setErrors(result.errors), setMessage(result.message))
         saved = result.id
       }
-      const refused = await checkOutTo(saved, toCheckOut.map((p) => p.asset))
-      if (!refused.length) return onSaved(saved)
+      const refused = await checkOutTo(saved, toCheckOut.map((p) => p.asset), (...a) => window.snipeIt.checkout(...a), () => gone.current)
+      // Left while sending: the Operator is elsewhere now, so they aren't taken to the User; what didn't go shows in the rail.
+      if (!refused.length) return gone.current || onSaved(saved)
+      const says = `The User is created, but ${refused.length === 1 ? "1 Asset wasn't" : `${refused.length} Assets weren't`} checked out to them`
+      if (gone.current) return onUnfinished(`${says}: ${refused.map((p) => `${p.asset.assetTag} (${p.error})`).join(', ')}.`)
       setCreated(saved)
       setToCheckOut(refused)
-      setMessage(`The User is created, but ${refused.length === 1 ? "1 Asset wasn't" : `${refused.length} Assets weren't`} checked out to them: see below. Retry, or open the User.`)
+      setMessage(`${says}: see below. Retry, or open the User.`)
     } catch (err) {
       setMessage((err as Error).message)
     } finally {
@@ -139,10 +151,15 @@ export function headButtons({ busy, loaded, fieldsLoading, lookups, created, toC
 /** An Asset to check out to a new User; error: why the last try didn't. */
 type Pending = { asset: Asset; error?: string }
 
-/** Checks each Asset out to the User in turn; returns the ones that didn't go, each with the reason. */
-export async function checkOutTo(userId: number, assets: Asset[], checkout: SnipeItBridge['checkout'] = (...a) => window.snipeIt.checkout(...a)): Promise<Pending[]> {
+/** Why an Asset wasn't checked out: the form was closed before its turn. */
+export const LEFT_FIRST = 'not sent: the form was closed first'
+/** Checks each Asset out to the User in turn, until stopped; returns the ones that didn't go, each with the reason. */
+export async function checkOutTo(userId: number, assets: Asset[], checkout: SnipeItBridge['checkout'], stopped: () => boolean = () => false): Promise<Pending[]> {
   const refused: Pending[] = []
-  for (const asset of assets) await checkout(asset.id, { targetType: 'user', targetId: userId }).catch((e: Error) => refused.push({ asset, error: e.message }))
+  for (const asset of assets) {
+    if (stopped()) refused.push({ asset, error: LEFT_FIRST })
+    else await checkout(asset.id, { targetType: 'user', targetId: userId }).catch((e: Error) => refused.push({ asset, error: e.message }))
+  }
   return refused
 }
 
