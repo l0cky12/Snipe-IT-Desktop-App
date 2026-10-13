@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dist": "electron-vite build && electron-builder --linux --win",
+    "dist:arch": "electron-vite build && electron-builder --linux pacman",
     "postinstall": "node node_modules/electron/install.js"
   },
   "build": {
