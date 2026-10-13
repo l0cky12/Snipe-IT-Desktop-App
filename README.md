@@ -9,6 +9,20 @@ npm install
 npm run dev
 ```
 
+## Arch Linux
+
+Build and install it as a pacman package, so it shows in your app menu and `pacman -R snipe-it-desktop` removes it:
+
+```sh
+sudo pacman -S --needed git nodejs npm libxcrypt-compat
+git clone https://github.com/l0cky12/Snipe-IT-Desktop-App.git && cd Snipe-IT-Desktop-App
+npm ci
+npm run dist:arch
+sudo pacman -U dist/snipe-it-desktop-*.pacman
+```
+
+`libxcrypt-compat` is only for building (electron-builder's packager needs `libcrypt.so.1`). To keep your API token encrypted, run a password store such as GNOME Keyring or KWallet (see [Settings](#settings)). To update, `git pull` and run the last three commands again.
+
 ## Try it with made-up data
 
 ```sh
@@ -23,7 +37,7 @@ Then in Settings use `http://127.0.0.1:8765` and any API token. The mock holds f
 npm run dist
 ```
 
-Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, a `.deb` for Debian/Ubuntu, and a `.pacman` package for Arch (install it with `sudo pacman -U snipe-it-desktop-*.pacman`). In `package.json`, `deb.depends` is electron-builder's default list plus `libasound2`; `pacman.depends` replaces the default because Arch dropped `http-parser` and `libappindicator-gtk3`. The Arch package needs `bsdtar` on the build machine (`sudo apt-get install libarchive-tools` on Debian/Ubuntu). Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
+Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, a `.deb` for Debian/Ubuntu, and a `.pacman` package for Arch (install it with `sudo pacman -U snipe-it-desktop-*.pacman`; on Arch itself, build only that one with `npm run dist:arch`, see [Arch Linux](#arch-linux)). In `package.json`, `deb.depends` is electron-builder's default list plus `libasound2`; `pacman.depends` replaces the default because Arch dropped `http-parser` and `libappindicator-gtk3`. The Arch package needs `bsdtar` on the build machine (`sudo apt-get install libarchive-tools` on Debian/Ubuntu). Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
 
 ```sh
 docker run --rm -v "$PWD":/project -w /project electronuserland/builder:wine npx electron-builder --win
