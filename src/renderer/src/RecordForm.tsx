@@ -6,10 +6,11 @@ import { cleanTag } from './workflows'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
 // An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
-// costs with separators), and saving them unchanged would rewrite them.
+// costs with separators), and saving them unchanged would rewrite them. prefill: a new record's starting values.
 // onUnfinished: what's left undone when the Operator leaves the form while it's still sending (the rail shows it).
-export function RecordForm({ kind, id, onSaved, onCancel, onUnfinished }: {
-  kind: EditKind; id: number | null; onSaved: (id: number) => void; onCancel: () => void; onUnfinished: (text: string) => void
+export function RecordForm({ kind, id, prefill, onSaved, onCancel, onUnfinished }: {
+  kind: EditKind; id: number | null; prefill?: Record<string, string>; onSaved: (id: number, values: Record<string, string>) => void
+  onCancel: () => void; onUnfinished: (text: string) => void
 }) {
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
@@ -42,13 +43,13 @@ export function RecordForm({ kind, id, onSaved, onCancel, onUnfinished }: {
     window.snipeIt.form(kind, id ?? undefined).then((f) => {
       if (stale) return
       setFields(f.fields)
-      setValues(f.values)
+      setValues({ ...f.values, ...(id === null && prefill) })
       setInitial(f.values)
       setLoaded(true)
       loadNames(f.fields, (n, v) => !stale && setNames((all) => ({ ...all, [n]: v })))
     }, (e: Error) => !stale && setMessage(e.message))
     return () => { stale = true }
-  }, [kind, id])
+  }, [kind, id, prefill])
 
   // An Asset's custom fields are its Asset Model's, so choosing another Asset Model swaps them.
   function set(key: string, value: string) {
@@ -85,7 +86,7 @@ export function RecordForm({ kind, id, onSaved, onCancel, onUnfinished }: {
       }
       const refused = await checkOutTo(saved, toCheckOut.map((p) => p.asset), (...a) => window.snipeIt.checkout(...a), () => gone.current)
       // Left while sending: the Operator is elsewhere now, so they aren't taken to the User; what didn't go shows in the rail.
-      if (!refused.length) return gone.current || onSaved(saved)
+      if (!refused.length) return gone.current || onSaved(saved, values)
       const says = `The User is created, but ${refused.length === 1 ? "1 Asset wasn't" : `${refused.length} Assets weren't`} checked out to them`
       if (gone.current) return onUnfinished(`${says}: ${refused.map((p) => `${p.asset.assetTag} (${p.error})`).join(', ')}.`)
       setCreated(saved)
@@ -104,7 +105,7 @@ export function RecordForm({ kind, id, onSaved, onCancel, onUnfinished }: {
       <header className="head">
         <h1>{created !== null ? 'User created' : id === null ? `New ${singular(kind)}` : `Edit ${singular(kind)}`}</h1>
         <div className="actions">
-          <button type="button" className="quiet" disabled={head.cancel.disabled} onClick={() => (created !== null ? onSaved(created) : onCancel())}>{head.cancel.label}</button>
+          <button type="button" className="quiet" disabled={head.cancel.disabled} onClick={() => (created !== null ? onSaved(created, values) : onCancel())}>{head.cancel.label}</button>
           {fieldsFailed
             ? <button type="button" onClick={() => set('model_id', values.model_id ?? '')}>Retry custom fields</button>
             : <button disabled={head.save.disabled}>{head.save.label}</button>}

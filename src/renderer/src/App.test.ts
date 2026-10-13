@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { auditedLine, auditedResult, CheckinForm, CheckoutForm, defaultLocationChoice, ifShowing, layoutFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
+import { auditedLine, auditedResult, CheckinForm, CheckoutForm, defaultLocationChoice, createdUser, ifShowing, layoutFrom, newUserFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -137,7 +137,7 @@ describe('a Quick Action form opening in the Asset panel', () => {
   const asset = { id: 1, assetTag: 'T1', statusId: 1, assignee: { id: 2, name: 'Fake', type: 'user' }, can: { checkin: true }, defaultLocation: '' } as unknown as Parameters<typeof StatusForm>[0]['asset']
   const forms = (autoFocus?: boolean) => [
     createElement(CheckinForm, { defaultLocation: null, locations: [], asset, statusLabels: [], onCheckin: async () => {}, autoFocus }),
-    createElement(CheckoutForm, { defaultLocation: null, onCheckout: async () => {}, autoFocus }),
+    createElement(CheckoutForm, { defaultLocation: null, onCheckout: async () => {}, onUnfinished: () => {}, autoFocus }),
     createElement(StatusForm, { asset, statusLabels: [], onSave: async () => {}, autoFocus }),
   ].map((f) => renderToStaticMarkup(f))
 
@@ -200,5 +200,21 @@ describe('clicking an Upcoming audits day', () => {
     showAuditDay({ day: '2026-10-19', assets: [{ id: 7 } as never] }, () => (steps.push('cancel'), ++latest), (m) => steps.push(`show ${m.assets.length}`))
     expect(steps).toEqual(['cancel', 'show 1'])
     expect(mine !== latest).toBe(true)
+  })
+})
+
+describe('Create User… from Checkout', () => {
+  it('starts the New User form with the searched name, the last word as the last name', () => {
+    expect(newUserFrom('  Pat  Q. Example ')).toEqual({ first_name: 'Pat Q.', last_name: 'Example' })
+    expect(newUserFrom('Pat')).toEqual({ first_name: 'Pat' })
+  })
+
+  it("leaves the name blank for a scanned number, an email or nothing, which aren't names", () => {
+    for (const text of ['40012', 'pat@example.test', 'Pat 2', '', '   ']) expect(newUserFrom(text)).toEqual({})
+  })
+
+  it('chooses the created User by the id Snipe-IT returned, named as Snipe-IT names Users', () => {
+    expect(createdUser(42, { first_name: 'Pat', last_name: 'Example', username: 'pexample', password: 'x' })).toEqual({ id: 42, name: 'Pat Example', detail: 'pexample' })
+    expect(createdUser(43, { first_name: ' Pat ', last_name: '' })).toEqual({ id: 43, name: 'Pat', detail: '' })
   })
 })

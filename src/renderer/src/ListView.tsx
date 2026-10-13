@@ -677,7 +677,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
               {/* Off as its button is: while a run goes, or once the Selection holds an Asset Snipe-IT won't let the Operator act on. */}
               <fieldset className="plain" disabled={moveOff || MOVES[bulkForm].cant([...selection.values()] as Asset[])}>
                 {bulkForm === 'checkout'
-                  ? <CheckoutForm defaultLocation={defaultLocation} onCheckout={async (o) => runForm(checkoutAction(window.snipeIt, o))} />
+                  ? <CheckoutForm defaultLocation={defaultLocation} onCheckout={async (o) => runForm(checkoutAction(window.snipeIt, o))} onUnfinished={(text) => setMessage({ text, error: true })} />
                   : <BulkCheckinForm statusLabels={statusLabels} locations={locations} defaultLocation={defaultLocation} onCheckin={(o) => runForm(checkinAction(window.snipeIt, o))} />}
               </fieldset>
             </section>
