@@ -1576,10 +1576,14 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (kind === 'damaged') return damaged(now)
       const assets = (await allRows<RawAsset>('/hardware')).map((r) => toAsset(r, now))
       if (kind === 'duplicates') {
+        // The plain list leaves Archived Assets out unless Snipe-IT's "show archived in list" is on; a retired device
+        // re-entered under a new Asset Tag is just the duplicate to find, so they're asked for too.
+        const listed = new Set(assets.map((a) => a.id))
+        const shelved = (await allRows<RawAsset>('/hardware?status=Archived')).filter((r) => !listed.has(r.id)).map((r) => toAsset(r, now))
         const rows: string[][] = []
         for (const [field, of] of [['Serial', (a: Asset) => a.serial], ['Asset Tag', (a: Asset) => a.assetTag]] as const) {
           const groups = new Map<string, Asset[]>()
-          for (const a of assets) {
+          for (const a of [...assets, ...shelved]) {
             const key = of(a).trim().toUpperCase()
             if (key) groups.set(key, [...groups.get(key) ?? [], a])
           }

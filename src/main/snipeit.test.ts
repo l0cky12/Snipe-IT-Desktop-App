@@ -1875,10 +1875,15 @@ describe('report', () => {
       asset(1, 'NOMMA-1', 'ABC'), asset(2, 'NOMMA-2', 'abc '), asset(3, 'NOMMA-3', 'XYZ'),
       asset(4, 'nomma-3', ''), asset(5, 'NOMMA-5', null), asset(6, 'NOMMA-6', ''),
     ]
-    const { fetch } = fakeFetch({ '/hardware': { body: { total: hardware.length, rows: hardware } } })
+    // Archived Assets come only from their own list (Snipe-IT's "show archived in list" off); one is shared, as when it's on.
+    const shelved = [asset(7, 'NOMMA-7', 'xyz'), hardware[0]]
+    const fetch = (async (input: string | URL | Request) => {
+      const rows = new URL(String(input)).searchParams.get('status') === 'Archived' ? shelved : hardware
+      return new Response(JSON.stringify({ total: rows.length, rows }))
+    }) as typeof globalThis.fetch
     const report = await createSnipeIt(config, fetch, today).report('duplicates')
     expect(report.columns).toEqual(['Shared', 'Value', 'Asset Tag', 'Name', 'Serial', 'Asset Model', 'Status'])
-    expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
+    expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Serial', 'XYZ', 'NOMMA-3'], ['Serial', 'xyz', 'NOMMA-7'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
   })
 
   it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
