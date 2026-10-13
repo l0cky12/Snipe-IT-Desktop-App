@@ -51,7 +51,7 @@ export const holdsStudentInfo = (kind: ListKind) => STUDENT_INFO.includes(kind)
 type Option = { value: string; label: string }
 type Filter = { key: string; label: string; options: Option[] }
 type Names = Partial<Record<'models' | 'categories' | 'departments', StatusLabel[]>>
-const toOptions = (list: StatusLabel[] = []): Option[] => list.map((l) => ({ value: String(l.id), label: l.name }))
+export const toOptions = (list: StatusLabel[] = []): Option[] => list.map((l) => ({ value: String(l.id), label: l.name }))
 const namesNeeded: Partial<Record<ListKind, (keyof Names)[]>> = { assets: ['models', 'categories'], users: ['departments'], models: ['categories'] }
 
 function filtersFor(kind: ListKind, names: Names, statusLabels: StatusLabel[], locations: StatusLabel[]): Filter[] {
