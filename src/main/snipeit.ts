@@ -373,12 +373,13 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
 /**
  * One input of a record's form. key is Snipe-IT's field name (a custom field's is its db column, _snipeit_…).
  * A choice's options come from `choices` (a List's names) or `options` (a custom field's fixed values); 'choices' is a
- * custom checkbox field, any of its options, kept as Snipe-IT keeps them ("A, B"). from: where an
+ * custom checkbox field, any of its options, kept as Snipe-IT keeps them ("A, B"); a 'checkbox' is one yes/no, '1' or ''. from: where an
  * edited record keeps the value, when not under key (an id sits in its object: model_id in model.id). newOnly: creating only.
+ * when: the checkbox this field needs checked; until then it's off: blank, not required, and its value isn't the Operator's.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices'
-  required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox'
+  required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean; when?: string
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
 export type RecordForm = { fields: FormField[]; values: Record<string, string> }
@@ -855,7 +856,10 @@ export const FORMS: Record<EditKind, FormField[]> = {
   ],
   users: [
     txt('first_name', 'First name', { required: true }), txt('last_name', 'Last name'), txt('username', 'Username', { required: true }),
-    { key: 'password', label: 'Password', type: 'password', required: true, newOnly: true }, { key: 'password_confirmation', label: 'Password again', type: 'password', required: true, newOnly: true },
+    // A new User can't sign in unless the Operator turns it on (#166); an existing User's login is left as it is.
+    { key: 'activated', label: 'Enable login', type: 'checkbox', newOnly: true },
+    { key: 'password', label: 'Password', type: 'password', required: true, newOnly: true, when: 'activated' },
+    { key: 'password_confirmation', label: 'Password again', type: 'password', required: true, newOnly: true, when: 'activated' },
     { key: 'email', label: 'Email', type: 'email' }, txt('employee_num', 'Employee No.'), txt('jobtitle', 'Job title'), txt('phone', 'Phone'),
     pick('department_id', 'Department', 'departments'), pick('location_id', 'Location', 'locations'), pick('company_id', 'Company', 'companies'), { key: 'notes', label: 'Notes', type: 'textarea' },
   ],
@@ -1623,7 +1627,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
         if (f?.newOnly && id !== null) continue
         const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
-        body[key] = value === '' && blankIsNone ? null : value
+        body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
+      }
+      if (kind === 'users' && id === null) {
+        if (values.activated === '1') {
+          const errors: Record<string, string> = {
+            ...(!values.password && { password: 'Enter a password, or turn off Enable login.' }),
+            ...(!!values.password && values.password_confirmation !== values.password && { password_confirmation: "This doesn't match the password." }),
+          }
+          if (Object.keys(errors).length) return { ok: false, message: 'Not saved: see the fields marked below.', errors }
+        } else {
+          // Snipe-IT requires a password even for a User who can't sign in: a random one, never shown or kept, so no
+          // password the Operator typed goes with it. The suffix meets any complexity rule Snipe-IT may be set to.
+          const password = `${crypto.randomUUID()}Aa1!`
+          Object.assign(body, { activated: false, password, password_confirmation: password })
+        }
       }
       const path = LISTS[kind].path
       const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
