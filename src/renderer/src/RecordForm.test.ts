@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { FORMS, type Asset } from '../../main/snipeit'
-import { checkOutTo, isOff, scanAsset, withValue } from './RecordForm'
+import { checkOutTo, headButtons, isOff, scanAsset, withValue } from './RecordForm'
 
 describe('New User: Enable login', () => {
   const field = (key: string) => FORMS.users.find((f) => f.key === key)!
@@ -84,5 +84,24 @@ describe('New User: Assets to check out', () => {
       'TEST-5': 'TEST-5: Snipe-IT took too long to answer',
     })
     expect(f.pending()).toBe(0)
+  })
+})
+
+describe('New User: header buttons', () => {
+  const ready = { busy: false, loaded: true, fieldsLoading: false, lookups: 0, created: null, toCheckOut: 0 }
+
+  it("Cancel can't be pressed while the User and its Checkouts are being sent, since it couldn't take them back", () => {
+    expect(headButtons(ready).cancel).toEqual({ label: 'Cancel', disabled: false })
+    expect(headButtons({ ...ready, busy: true, toCheckOut: 2 })).toEqual({ cancel: { label: 'Cancel', disabled: true }, save: { label: 'Saving…', disabled: true } })
+    expect(headButtons({ ...ready, busy: true, created: 900, toCheckOut: 1 })).toEqual({ cancel: { label: 'Open User', disabled: true }, save: { label: 'Checking out…', disabled: true } })
+    expect(headButtons({ ...ready, created: 900, toCheckOut: 1 })).toEqual({ cancel: { label: 'Open User', disabled: false }, save: { label: 'Retry checkout', disabled: false } })
+  })
+
+  it('Save says how many Assets go with the User, and waits for Asset lookups still out', () => {
+    expect(headButtons(ready).save).toEqual({ label: 'Save', disabled: false })
+    expect(headButtons({ ...ready, toCheckOut: 1 }).save).toEqual({ label: 'Save and check out 1 Asset', disabled: false })
+    expect(headButtons({ ...ready, toCheckOut: 3 }).save).toEqual({ label: 'Save and check out 3 Assets', disabled: false })
+    expect(headButtons({ ...ready, toCheckOut: 1, lookups: 2 }).save).toEqual({ label: 'Looking up Assets…', disabled: true })
+    expect(headButtons({ ...ready, created: 900 }).save.disabled).toBe(true)
   })
 })

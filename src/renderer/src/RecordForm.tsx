@@ -86,20 +86,16 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     }
   }
 
+  const head = headButtons({ busy, loaded, fieldsLoading, lookups, created, toCheckOut: toCheckOut.length })
   return (
     <form className="record-form" onSubmit={submit} noValidate>
       <header className="head">
         <h1>{created !== null ? 'User created' : id === null ? `New ${singular(kind)}` : `Edit ${singular(kind)}`}</h1>
         <div className="actions">
-          {created !== null
-            ? <button type="button" className="quiet" disabled={busy} onClick={() => onSaved(created)}>Open User</button>
-            : <button type="button" className="quiet" onClick={onCancel}>Cancel</button>}
+          <button type="button" className="quiet" disabled={head.cancel.disabled} onClick={() => (created !== null ? onSaved(created) : onCancel())}>{head.cancel.label}</button>
           {fieldsFailed
             ? <button type="button" onClick={() => set('model_id', values.model_id ?? '')}>Retry custom fields</button>
-            : <button disabled={busy || !loaded || fieldsLoading || lookups > 0 || (created !== null && !toCheckOut.length)}>
-              {busy ? (created !== null ? 'Checking out…' : 'Saving…') : fieldsLoading ? 'Loading fields…' : lookups ? 'Looking up Assets…' : created !== null ? 'Retry checkout'
-                : toCheckOut.length ? `Save and check out ${toCheckOut.length === 1 ? '1 Asset' : `${toCheckOut.length} Assets`}` : 'Save'}
-            </button>}
+            : <button disabled={head.save.disabled}>{head.save.label}</button>}
         </div>
       </header>
       {message && <p className="message error" role="alert">{message}</p>}
@@ -119,6 +115,25 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
       {kind === 'users' && id === null && <AssetsToCheckOut assets={toCheckOut} setAssets={setToCheckOut} busy={busy} pending={(by) => setLookups((n) => n + by)} />}
     </form>
   )
+}
+
+/**
+ * The form's header buttons: Cancel (Open User once the User is created) and Save, with what each says. Both wait while
+ * saving: the User and its Checkouts are already on their way to Snipe-IT, and a Cancel can't take them back. Save also
+ * waits for Asset lookups still out (lookups), so a scanned Asset isn't left out. toCheckOut: how many Assets are listed.
+ */
+export function headButtons({ busy, loaded, fieldsLoading, lookups, created, toCheckOut }: {
+  busy: boolean; loaded: boolean; fieldsLoading: boolean; lookups: number; created: number | null; toCheckOut: number
+}) {
+  const assets = toCheckOut === 1 ? '1 Asset' : `${toCheckOut} Assets`
+  return {
+    cancel: { label: created !== null ? 'Open User' : 'Cancel', disabled: busy },
+    save: {
+      disabled: busy || !loaded || fieldsLoading || lookups > 0 || (created !== null && !toCheckOut),
+      label: busy ? (created !== null ? 'Checking out…' : 'Saving…') : fieldsLoading ? 'Loading fields…' : lookups ? 'Looking up Assets…'
+        : created !== null ? 'Retry checkout' : toCheckOut ? `Save and check out ${assets}` : 'Save',
+    },
+  }
 }
 
 /** An Asset to check out to a new User; error: why the last try didn't. */
