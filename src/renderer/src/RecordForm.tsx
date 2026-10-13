@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BULK_FORMS, filled, type Asset, type BulkKind, type EditKind, type FormField, type NamesKind, type SnipeItBridge, type StatusLabel } from '../../main/snipeit'
-import { listName, singular } from './ListView'
+import { choices, filterPick, listName, singular, toOptions } from './ListView'
 import { NOT_ALLOWED, checkoutReason } from './App'
 import { cleanTag } from './workflows'
 
@@ -259,8 +259,9 @@ function FieldInput({ field: f, value, error, names, disabled, blank = f.require
       </div>
     )
   }
+  if (f.type === 'choice' && f.choices) return <NameBox common={common} label={f.label} names={names[f.choices] ?? []} blank={blank} offerBlank={!f.required} onChange={onChange} />
   if (f.type === 'choice') {
-    const options = f.options?.map((o) => ({ id: o, name: o })) ?? names[f.choices!] ?? []
+    const options = f.options?.map((o) => ({ id: o, name: o })) ?? []
     return (
       <select {...common} onChange={(e) => onChange(e.target.value)}>
         <option value="">{blank}</option>
@@ -271,6 +272,47 @@ function FieldInput({ field: f, value, error, names, disabled, blank = f.require
     )
   }
   return <input {...common} type={f.type} step={f.type === 'number' ? 'any' : undefined} autoComplete={f.type === 'password' ? 'new-password' : 'off'} onChange={(e) => onChange(e.target.value)} />
+}
+
+// A name box's choices, and what typing `text` picks: an id, '' to clear, or null while it names no choice yet.
+// matches: some choice still has the text in its name, ignoring case.
+export function namePick(names: StatusLabel[], blank: string, text: string) {
+  const f = { label: blank, options: toOptions(names) }
+  const options = choices(f)
+  const t = text.trim().toLowerCase()
+  return { options, picked: filterPick(f, text, options), matches: !t || options.some((o) => o.label.toLowerCase().includes(t)) }
+}
+
+// Snipe-IT's names (Asset Models, Status Labels, Locations…) can run long, so like the List filters they're a box to type in,
+// with the browser's datalist to scroll or narrow. Focusing empties it to show every choice; only a whole name picks, and its
+// id is what's saved. Text that names no choice is put back on leaving the box.
+function NameBox({ common, label, names, blank, offerBlank, onChange }: {
+  common: { id: string; value: string; required?: boolean; disabled?: boolean; 'aria-invalid'?: boolean; 'aria-describedby'?: string }
+  label: string; names: StatusLabel[]; blank: string; offerBlank: boolean; onChange: (value: string) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const { options } = namePick(names, blank, '')
+  // The current value shows even before the names load.
+  const shown = options.find((o) => o.value === common.value)?.label ?? (common.value ? '…' : '')
+  const none = draft !== null && !namePick(names, blank, draft).matches
+  function change(t: string) {
+    const { picked } = namePick(names, blank, t)
+    setDraft(picked === null ? t : null)
+    if (picked !== null && picked !== common.value) onChange(picked)
+  }
+  const hint = `${common.id}-none`
+  return (
+    <>
+      <input {...common} value={draft ?? shown} list={`${common.id}-names`} placeholder={shown || blank} autoComplete="off"
+        aria-describedby={[common['aria-describedby'], none && hint].filter(Boolean).join(' ') || undefined}
+        onFocus={() => setDraft('')} onBlur={() => setDraft(null)} onKeyDown={(e) => e.key === 'Escape' && setDraft('')} onChange={(e) => change(e.target.value)} />
+      <datalist id={`${common.id}-names`}>
+        {offerBlank && <option value={blank} />}
+        {options.map((o) => <option key={o.value} value={o.label} />)}
+      </datalist>
+      {none && <p id={hint} className="dim" role="status">No {label} matches “{draft!.trim()}”.</p>}
+    </>
+  )
 }
 
 // "Edit shared fields" for a Selection: it starts empty, and only what the Operator fills in is applied to each Record;
