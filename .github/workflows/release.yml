@@ -41,6 +41,9 @@ jobs:
       # The .deb must install too, not just build.
       - if: runner.os == 'Linux'
         run: sudo apt-get install -y ./dist/*.deb && test -x '/opt/Snipe-IT Desktop/snipe-it-desktop'
+      # So must the Arch package, on Arch (this catches a renamed package in pacman.depends).
+      - if: runner.os == 'Linux'
+        run: docker run --rm -v "$PWD/dist:/dist" archlinux:latest bash -c 'pacman -Syu --noconfirm && pacman -U --noconfirm /dist/*.pacman && test -x "/opt/Snipe-IT Desktop/snipe-it-desktop"'
       # The installer must install, not just build: a silent per-user install puts the app in
       # %LOCALAPPDATA%\Programs\snipe-it-desktop, and its uninstaller takes it away again.
       - if: runner.os == 'Windows'

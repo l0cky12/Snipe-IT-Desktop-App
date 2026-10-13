@@ -436,6 +436,7 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .form-field input:not([type=checkbox]), .form-field select, .form-field textarea { min-height: 28px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
   border-radius: var(--r-ctl); padding: 0 10px; font: 13px var(--sans); }
 .form-field textarea { padding: 5px 10px; }
+.form-field :disabled { opacity: .5; cursor: default; }
 .form-field input[aria-invalid], .form-field select[aria-invalid], .form-field textarea[aria-invalid] { border-color: var(--red); }
 /* A field's error: the text color, after a red icon. */
 .field-error { --edge: var(--red); margin: 0; color: var(--text); font-size: 12px; font-weight: 500; }

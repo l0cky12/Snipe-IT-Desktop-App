@@ -362,6 +362,7 @@ export function App() {
     asset: a, baseUrl: settings?.baseUrl ?? '', defaultLocation: settings?.defaultLocation ?? null, locations, statusLabels,
     audited: audited?.id === a.id ? audited.result : undefined,
     onCheckin: checkin, onCheckout: checkout, onStatus: changeStatus, onAudit: audit, onOpenRecord: openRecord, onOpenAsset: pick, onEdit: () => editRecord('assets', a.id), onDeleted,
+    onUnfinished: (text) => setMessage({ text, error: true }),
   })
   // An Asset deleted from the panel leaves it (unless another Asset opened there meanwhile); the List stays.
   const panelDeleted = (a: Asset) => (forget(a.id), setPanel((p) => ifShowing(p, a.id, () => null)), setMessage({ text: `Deleted ${a.assetTag}` }))
@@ -478,7 +479,7 @@ export function App() {
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
-        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
+        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} onNew={(k) => editRecord(k, null)}
           panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
@@ -583,7 +584,8 @@ export const createdUser = (id: number, v: Record<string, string>): CheckoutTarg
 
 // Checking out to a User who isn't in Snipe-IT yet: Create User… opens the New User form under it, and the User it creates is
 // chosen here, with the typed Expected Checkin and note kept. Checkout is still the Operator's click, and a failed one keeps the User.
-export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; autoFocus?: boolean }) {
+// onUnfinished: Assets the new User's form didn't check out because it closed while sending.
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; onUnfinished: (text: string) => void; autoFocus?: boolean }) {
   // The New User form's starting values while it's open.
   const [creating, setCreating] = useState<Record<string, string> | null>(null)
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
@@ -661,7 +663,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
       )}
     </form>
     {creating && (
-      <RecordForm kind="users" id={null} prefill={creating} onCancel={() => setCreating(null)}
+      <RecordForm kind="users" id={null} prefill={creating} onCancel={() => setCreating(null)} onUnfinished={props.onUnfinished}
         onSaved={(id, values) => (setTarget(createdUser(id, values)), setCreating(null))} />
     )}
     </>
@@ -748,13 +750,14 @@ export type SheetProps = {
   onOpenAsset: (id: number) => void
   onEdit: () => void
   onDeleted: () => void
+  onUnfinished: (text: string) => void
 }
 /** The Asset panel's extras: Tick (the Asset in the List's Selection or not), Close, and whether the Asset is outside the open View. */
 export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void; notInView: boolean }
 
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
-export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
+export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, onUnfinished, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
   const [form, setForm] = useState<SheetForm | null>(initialForm ?? null)
   const root = useRef<HTMLDivElement>(null)
   // Read as it renders, before a form's autoFocus moves it: a field holding text (a half-typed scan) keeps focus.
@@ -814,7 +817,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
       {form && (
         <div className="sheet-form">
           {form === 'checkin' && <CheckinForm defaultLocation={defaultLocation} locations={locations} asset={a} statusLabels={statusLabels} onCheckin={onCheckin} autoFocus={takesFocus} />}
-          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} autoFocus={takesFocus} />}
+          {form === 'checkout' && canCheckout && <CheckoutForm defaultLocation={defaultLocation} onCheckout={(o) => onCheckout(a.id, o)} onUnfinished={onUnfinished} autoFocus={takesFocus} />}
           {form === 'status' && <StatusForm asset={a} statusLabels={statusLabels} onSave={(statusId) => onStatus(a.id, statusId)} autoFocus={takesFocus} />}
           {form === 'audit' && a.can.audit && <AuditForm onAudit={(o) => onAudit(a.id, o)} onCancel={() => setForm(null)} autoFocus={takesFocus} />}
         </div>

@@ -137,7 +137,7 @@ describe('a Quick Action form opening in the Asset panel', () => {
   const asset = { id: 1, assetTag: 'T1', statusId: 1, assignee: { id: 2, name: 'Fake', type: 'user' }, can: { checkin: true }, defaultLocation: '' } as unknown as Parameters<typeof StatusForm>[0]['asset']
   const forms = (autoFocus?: boolean) => [
     createElement(CheckinForm, { defaultLocation: null, locations: [], asset, statusLabels: [], onCheckin: async () => {}, autoFocus }),
-    createElement(CheckoutForm, { defaultLocation: null, onCheckout: async () => {}, autoFocus }),
+    createElement(CheckoutForm, { defaultLocation: null, onCheckout: async () => {}, onUnfinished: () => {}, autoFocus }),
     createElement(StatusForm, { asset, statusLabels: [], onSave: async () => {}, autoFocus }),
   ].map((f) => renderToStaticMarkup(f))
 

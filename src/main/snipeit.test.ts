@@ -2412,10 +2412,43 @@ describe('create, edit and delete', () => {
     expect(requests.at(-1)?.body).toEqual({ min_amt: '0' })
   })
 
-  it('a new User asks for a password; editing one does not', async () => {
-    const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes' } } }).fetch)
-    expect((await snipeIt.form('users')).fields.map((f) => f.key)).toContain('password_confirmation')
+  it('a new User starts with Enable login off, before the passwords that need it; editing one shows neither, so its login stays as it is', async () => {
+    const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes', activated: true } } }).fetch)
+    const blank = await snipeIt.form('users')
+    expect(blank.fields.find((f) => f.key === 'activated')).toEqual({ key: 'activated', label: 'Enable login', type: 'checkbox', newOnly: true })
+    expect(blank.fields.filter((f) => f.when === 'activated').map((f) => f.key)).toEqual(['password', 'password_confirmation'])
+    expect(blank.values.activated ?? '').toBe('')
+    expect((await snipeIt.form('users', 311)).fields.map((f) => f.key)).not.toContain('activated')
     expect((await snipeIt.form('users', 311)).fields.map((f) => f.key)).not.toContain('password')
+  })
+
+  const newUser = { first_name: 'Test', last_name: 'Student', username: 'tstudent' }
+  const created = { 'POST /users': { body: { status: 'success', payload: { id: 900 } } } }
+
+  it("a new User without Enable login can't sign in: activated false, and a random password nobody typed, new each time", async () => {
+    const { fetch, requests } = fakeFetch(created)
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.save('users', null, { ...newUser, activated: '', password: 'typed-then-turned-off', password_confirmation: 'typed-then-turned-off' })).toEqual({ ok: true, id: 900 })
+    await snipeIt.save('users', null, newUser)
+    const [first, second] = requests.map((r) => r.body as Record<string, unknown>)
+    expect(first).toMatchObject({ ...newUser, activated: false })
+    expect(first.password).toBe(first.password_confirmation)
+    expect(first.password).not.toBe('typed-then-turned-off')
+    expect(String(first.password)).toMatch(/^[0-9a-f-]{36}Aa1!$/)
+    expect(second).toMatchObject({ activated: false })
+    expect(second.password).not.toBe(first.password)
+  })
+
+  it('with Enable login, the password typed twice is sent; a missing or mismatched one is marked beside its field before Snipe-IT is asked', async () => {
+    const { fetch, requests, calls } = fakeFetch(created)
+    const snipeIt = createSnipeIt(config, fetch)
+    const login = (password: string, password_confirmation: string) => snipeIt.save('users', null, { ...newUser, activated: '1', password, password_confirmation })
+    const notSaved = (errors: Record<string, string>) => ({ ok: false, message: 'Not saved: see the fields marked below.', errors })
+    expect(await login('', '')).toEqual(notSaved({ password: 'Enter a password, or turn off Enable login.' }))
+    expect(await login('Fake-Pass-2026', 'Fake-Pass-2025')).toEqual(notSaved({ password_confirmation: "This doesn't match the password." }))
+    expect(calls).toHaveLength(0)
+    expect(await login('Fake-Pass-2026', 'Fake-Pass-2026')).toEqual({ ok: true, id: 900 })
+    expect(requests.at(-1)?.body).toEqual({ ...newUser, activated: true, password: 'Fake-Pass-2026', password_confirmation: 'Fake-Pass-2026' })
   })
 
   it('creating sends the form to Snipe-IT, a blank choice or date as none, and returns the new id', async () => {
@@ -2436,10 +2469,10 @@ describe('create, edit and delete', () => {
       .toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { username: 'The username has already been taken.' } })
   })
 
-  it('editing PATCHes only the form, leaving out a new-only password; a field the form lacks is refused', async () => {
+  it('editing PATCHes only the form, leaving out a new-only password and login; a field the form lacks is refused', async () => {
     const { fetch, requests, calls } = fakeFetch({ 'PATCH /users/311': { body: { status: 'success', payload: { id: 311 } } } })
     const snipeIt = createSnipeIt(config, fetch)
-    expect(await snipeIt.save('users', 311, { first_name: 'Jordan', password: 'x', department_id: '' })).toEqual({ ok: true, id: 311 })
+    expect(await snipeIt.save('users', 311, { first_name: 'Jordan', password: 'x', activated: '', department_id: '' })).toEqual({ ok: true, id: 311 })
     expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { first_name: 'Jordan', department_id: null } })
     await expect(snipeIt.save('users', 311, { permissions: '{"superuser":"1"}' })).rejects.toThrow('Invalid field: permissions')
     await expect(snipeIt.save('users', 311, { _snipeit_mac_1: 'x' })).rejects.toThrow('Invalid field')
