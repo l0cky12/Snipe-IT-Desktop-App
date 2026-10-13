@@ -571,7 +571,21 @@ export function CheckinForm(props: { defaultLocation: StatusLabel | null; locati
   )
 }
 
+// What the Operator searched for, as a new User's name: the last word is the last name. A scanned number or an email isn't a name.
+export function newUserFrom(text: string): Record<string, string> {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  if (!words.length || /[\d@]/.test(text)) return {}
+  return words.length === 1 ? { first_name: words[0] } : { first_name: words.slice(0, -1).join(' '), last_name: words.at(-1)! }
+}
+/** The User just created from Checkout, chosen by the id Snipe-IT returned, named as Snipe-IT names Users. */
+export const createdUser = (id: number, v: Record<string, string>): CheckoutTarget =>
+  ({ id, name: [v.first_name, v.last_name].map((n) => n?.trim()).filter(Boolean).join(' '), detail: v.username?.trim() ?? '' })
+
+// Checking out to a User who isn't in Snipe-IT yet: Create User… opens the New User form under it, and the User it creates is
+// chosen here, with the typed Expected Checkin and note kept. Checkout is still the Operator's click, and a failed one keeps the User.
 export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; autoFocus?: boolean }) {
+  // The New User form's starting values while it's open.
+  const [creating, setCreating] = useState<Record<string, string> | null>(null)
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
   const [text, setText] = useState('')
   const [found, setFound] = useState<CheckoutTarget[]>([])
@@ -606,12 +620,13 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
   }
 
   return (
+    <>
     <form className="checkout" onSubmit={onSubmit}>
       <div className="actions">
         <select
           value={targetType}
           // Drop the other kind's results so a User id is never sent as a Location (or vice versa).
-          onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setTarget(e.target.value === 'location' && props.defaultLocation ? { ...props.defaultLocation, detail: '' } : null), setText(e.target.value === 'location' ? props.defaultLocation?.name ?? '' : ''), setFound([]))}
+          onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setCreating(null), setTarget(e.target.value === 'location' && props.defaultLocation ? { ...props.defaultLocation, detail: '' } : null), setText(e.target.value === 'location' ? props.defaultLocation?.name ?? '' : ''), setFound([]))}
           aria-label="Check out to"
         >
           <option value="user">User</option>
@@ -631,7 +646,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
       {searchError ? (
         <p className="message error" role="alert">{searchError}</p>
       ) : (
-        !target && text.trim() && (
+        !target && !creating && text.trim() && (
           <div className="targets">
             {found.map((t) => (
               <button type="button" key={t.id} onClick={() => setTarget(t)}>
@@ -639,10 +654,17 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
               </button>
             ))}
             {found.length === 0 && <span className="dim">No {kind[targetType]} matches "{text.trim()}"</span>}
+            {/* Beside the matches too: a User with a matching name may not be the one this Asset is for. */}
+            {targetType === 'user' && <button type="button" className="create" onClick={() => setCreating(newUserFrom(text))}>Create User…</button>}
           </div>
         )
       )}
     </form>
+    {creating && (
+      <RecordForm kind="users" id={null} prefill={creating} onCancel={() => setCreating(null)}
+        onSaved={(id, values) => (setTarget(createdUser(id, values)), setCreating(null))} />
+    )}
+    </>
   )
 }
 

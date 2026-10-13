@@ -5,8 +5,10 @@ import { NOT_ALLOWED } from './App'
 
 // Creates (id null) or edits one record. Snipe-IT checks it; its reasons show beside the field they're about.
 // An edit sends only what the Operator changed: Snipe-IT sends some fields back reworded (notes rendered from Markdown,
-// costs with separators), and saving them unchanged would rewrite them.
-export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id: number | null; onSaved: (id: number) => void; onCancel: () => void }) {
+// costs with separators), and saving them unchanged would rewrite them. prefill: a new record's starting values.
+export function RecordForm({ kind, id, prefill, onSaved, onCancel }: {
+  kind: EditKind; id: number | null; prefill?: Record<string, string>; onSaved: (id: number, values: Record<string, string>) => void; onCancel: () => void
+}) {
   const [fields, setFields] = useState<FormField[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [initial, setInitial] = useState<Record<string, string>>({})
@@ -26,13 +28,13 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
     window.snipeIt.form(kind, id ?? undefined).then((f) => {
       if (stale) return
       setFields(f.fields)
-      setValues(f.values)
+      setValues({ ...f.values, ...(id === null && prefill) })
       setInitial(f.values)
       setLoaded(true)
       loadNames(f.fields, (n, v) => !stale && setNames((all) => ({ ...all, [n]: v })))
     }, (e: Error) => !stale && setMessage(e.message))
     return () => { stale = true }
-  }, [kind, id])
+  }, [kind, id, prefill])
 
   // An Asset's custom fields are its Asset Model's, so choosing another Asset Model swaps them.
   function set(key: string, value: string) {
@@ -61,7 +63,7 @@ export function RecordForm({ kind, id, onSaved, onCancel }: { kind: EditKind; id
       // Only what the form shows now goes to Snipe-IT (not a previous Asset Model's custom fields), and editing, only what changed.
       const shown = fields.map((f): [string, string] => [f.key, values[f.key] ?? ''])
       const result = await window.snipeIt.save(kind, id, Object.fromEntries(id === null ? shown : shown.filter(([k, v]) => v !== (initial[k] ?? ''))))
-      if (result.ok) return onSaved(result.id)
+      if (result.ok) return onSaved(result.id, values)
       setErrors(result.errors)
       setMessage(result.message)
     } catch (err) {
