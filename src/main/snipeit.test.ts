@@ -2646,6 +2646,24 @@ describe('permissions', () => {
     await expect(createSnipeIt(config, refused.fetch).deleteGroup(3)).rejects.toThrow('This group has users associated with it.')
   })
 
+  it("a User is put in or taken out of one group, keeping their others; already so, nothing is sent", async () => {
+    const user = { id: 311, name: 'Jordan Reyes', permissions: {}, groups: { total: 2, rows: [{ id: 1, name: 'IT Staff' }, { id: 2, name: 'Library Aides' }] } }
+    const { fetch, requests } = fakeFetch({ '/users/311': { body: user }, 'PATCH /users/311': { body: { status: 'success' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.setGroupMember(311, 3, true)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [1, 2, 3] } })
+    expect(await snipeIt.setGroupMember(311, 1, false)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [2] } })
+    expect(await snipeIt.setGroupMember(311, 2, true)).toBe(false)
+    expect(requests.at(-1)?.method).toBe('GET')
+  })
+
+  it('the Users List can be filtered to one group', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('users', { filters: { group_id: '2' } })
+    expect(queries.at(-1)).toMatchObject({ group_id: '2' })
+  })
+
   it("the Operator's own account and groups come from /users/me", async () => {
     const { fetch } = fakeFetch({ '/users/me': { body: { id: 5, permissions: { superuser: '1' }, groups: { total: 1, rows: [{ id: 1, name: 'IT Staff' }] } } } })
     expect(await createSnipeIt(config, fetch).operatorAccess()).toEqual({ id: 5, permissions: { superuser: '1' }, groups: [{ id: 1, name: 'IT Staff' }] })

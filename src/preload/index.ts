@@ -68,6 +68,7 @@ const snipeIt: SnipeItBridge = {
   saveGroup: call('snipeit:saveGroup'),
   deleteGroup: call('snipeit:deleteGroup'),
   operatorAccess: call('snipeit:operatorAccess'),
+  setGroupMember: call('snipeit:setGroupMember'),
   canImport: call('snipeit:canImport'),
   imports: call('snipeit:imports'),
   uploadImport: call('snipeit:uploadImport'),

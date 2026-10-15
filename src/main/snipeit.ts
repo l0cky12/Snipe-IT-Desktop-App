@@ -811,7 +811,7 @@ const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', '
 const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
   assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'], missing: MISSING_FIELDS }, row: toAsset },
   users: {
-    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', activated: ['0', '1'] },
+    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', group_id: 'id', activated: ['0', '1'] },
     row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
@@ -1801,6 +1801,18 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       for (const g of groupIds) checkId(g, 'group')
       const result = await request(`/users/${userId}`, { groups: groupIds }, 'PATCH')
       if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    // Puts a User in a group or takes them out, keeping their other groups (Snipe-IT sets a User's groups all at once).
+    // Whether that changed anything: they may already have been in it, or not.
+    async setGroupMember(userId: number, groupId: number, member: boolean): Promise<boolean> {
+      checkId(userId, 'User')
+      checkId(groupId, 'group')
+      const ids = accessOf(await request(`/users/${userId}`)).groups.map((g) => g.id)
+      if (ids.includes(groupId) === member) return false
+      const result = await request(`/users/${userId}`, { groups: member ? [...ids, groupId] : ids.filter((g) => g !== groupId) }, 'PATCH')
+      if (isError(result)) throw new Error(reason(result.messages))
+      return true
     },
 
     // A group's name and what it grants; id null makes a new group. Only permission keys and grant/not reach Snipe-IT, which
