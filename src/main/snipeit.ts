@@ -166,11 +166,14 @@ export type RecordKind = Exclude<ListKind, 'activity'>
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
 /** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
 /** remaining: how many an Accessory or Consumable has left to check out. */
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; can: Can }
+/** assets: how many Assets a Status Label is on. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; assets?: number; can: Can }
 /** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
 export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
-/** A permission group and what it grants (key → '1' granted, '0' not). */
-export type Group = { id: number; name: string; permissions: Record<string, string> }
+/** A permission group, how many Users are in it, and what it grants (key → '1' granted, '0' not). */
+export type Group = { id: number; name: string; members: number; permissions: Record<string, string> }
+/** A permission group in the list of them. */
+export type GroupSummary = { id: number; name: string; members: number }
 
 // Snipe-IT's permission keys (config/permissions.php), by area, as its group editor shows them.
 export const PERMISSIONS: [area: string, keys: string[]][] = [
@@ -372,10 +375,10 @@ export type ReportQuery = { from?: string; to?: string; itemType?: string; actio
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
 /** The kinds the app can create, edit and delete. */
-export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components'] as const
+export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'statuslabels'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 /** The kinds the app can delete: every List of Records, including the kinds it doesn't edit. */
-export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies', 'statuslabels'] as const
+export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies'] as const
 export type DeleteKind = (typeof DELETE_KINDS)[number]
 /** Where a choice's options come from (see names()). */
 export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels' | 'locations' | 'suppliers' | 'companies' | 'manufacturers'
@@ -388,7 +391,7 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
  * when: the checkbox this field needs checked; until then it's off: blank, not required, and its value isn't the Operator's.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox'
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox' | 'color'
   required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean; when?: string
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
@@ -825,7 +828,7 @@ const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', '
 const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
   assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'], missing: MISSING_FIELDS }, row: toAsset },
   users: {
-    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', activated: ['0', '1'] },
+    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', group_id: 'id', activated: ['0', '1'] },
     row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
@@ -904,6 +907,10 @@ export const FORMS: Record<EditKind, FormField[]> = {
   accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')], 'min_qty'),
   consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
+  statuslabels: [
+    txt('name', 'Name', { required: true }), { key: 'type', label: 'Type', type: 'choice', required: true, options: ['deployable', 'pending', 'undeployable', 'archived'] },
+    { key: 'color', label: 'Color', type: 'color' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
 }
 
 /** The kinds a Selection can be bulk edited for. */
@@ -1135,6 +1142,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
+
+  // A User's own permissions (granted or denied; inherited ones aren't sent) and groups, from Snipe-IT's User.
+  const accessOf = (user: { permissions?: unknown; groups?: { rows?: Named[] } | null } | SnipeItError): UserAccess => {
+    if (isError(user)) throw new Error(reason(user.messages))
+    const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
+    return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+  }
 
   // The Asset with exactly this Asset Tag, or null; no search fallback, so a Workflow scan never acts on a near match.
   async function assetByTag(tag: string): Promise<Asset | null> {
@@ -1808,7 +1822,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
       return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }),
-        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }) }
+        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }),
+        ...(kind === 'statuslabels' && { assets: count(body.assets_count) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -1839,7 +1854,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const f = byKey.get(key)
         if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
         if (f?.newOnly && id !== null) continue
-        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
+        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date' || f?.type === 'color'
         body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
       }
       if (kind === 'users' && id === null) {
@@ -1857,6 +1872,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const path = LISTS[kind].path
+      if (kind === 'statuslabels' && id !== null) {
+        // Snipe-IT's edit needs the type every time and clears whatever else of these it isn't sent, so what wasn't changed is sent as it is.
+        const now = await request<RawRow>(`${path}/${id}`)
+        if (isError(now)) throw new Error(reason(now.messages))
+        body.type ??= now.type
+        if (!('color' in body)) body.color = now.color ?? null
+        body.show_in_nav = !!now.show_in_nav
+        body.default_label = !!now.default_label
+      }
       const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
       if (!isError(result)) {
         const saved = id ?? result.payload?.id
@@ -1934,22 +1958,26 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A User's own permissions and groups; anyone who may view the User may see them.
     async userAccess(id: number): Promise<UserAccess> {
       checkId(id, 'User')
-      const user = await request<{ permissions?: unknown; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
-      if (isError(user)) throw new Error(reason(user.messages))
-      const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
-      return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+      return accessOf(await request(`/users/${id}`))
+    },
+    // The Operator's own account and groups, so a change that could take away their own access asks first.
+    async operatorAccess(): Promise<UserAccess & { id: number }> {
+      const me = await request<{ id: number; permissions?: unknown; groups?: { rows?: Named[] } | null }>('/users/me')
+      return { ...accessOf(me), id: (me as { id: number }).id }
     },
 
-    // Every permission group (superuser only).
-    async groups(): Promise<StatusLabel[]> {
-      return (await allRows<StatusLabel>('/groups')).map(({ id, name }) => ({ id, name }))
+    // Every permission group (superuser only), with how many Users are in each.
+    async groups(): Promise<GroupSummary[]> {
+      return (await allRows<GroupSummary & { users_count?: number | null }>('/groups')).map(({ id, name, users_count }) => ({ id, name, members: count(users_count) }))
     },
 
+    // Snipe-IT's single group doesn't count its Users (users_count is always 0 there), so the Users List filtered to it does.
     async group(id: number): Promise<Group> {
       checkId(id, 'group')
-      const g = await request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`)
+      const [g, users] = await Promise.all([request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`), request<{ total?: number }>(`/users?group_id=${id}&limit=1`)])
       if (isError(g)) throw new Error(reason(g.messages))
-      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
+      if (isError(users)) throw new Error(reason(users.messages))
+      return { id: g.id, name: g.name, members: count(users.total), permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
     },
 
     // A User's groups, all at once: the ones listed are kept or added, the rest removed.
@@ -1961,17 +1989,37 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
-    // A group's name and what it grants. Only permission keys and grant/not reach Snipe-IT, which drops keys it doesn't know.
-    async saveGroup(id: number, name: string, permissions: Record<string, string>): Promise<SaveResult> {
-      checkId(id, 'group')
+    // Puts a User in a group or takes them out, keeping their other groups (Snipe-IT sets a User's groups all at once).
+    // Whether that changed anything: they may already have been in it, or not.
+    async setGroupMember(userId: number, groupId: number, member: boolean): Promise<boolean> {
+      checkId(userId, 'User')
+      checkId(groupId, 'group')
+      const ids = accessOf(await request(`/users/${userId}`)).groups.map((g) => g.id)
+      if (ids.includes(groupId) === member) return false
+      const result = await request(`/users/${userId}`, { groups: member ? [...ids, groupId] : ids.filter((g) => g !== groupId) }, 'PATCH')
+      if (isError(result)) throw new Error(reason(result.messages))
+      return true
+    },
+
+    // A group's name and what it grants; id null makes a new group. Only permission keys and grant/not reach Snipe-IT, which
+    // drops keys it doesn't know (and grants every permission to a new group sent none, so the screen always sends them).
+    async saveGroup(id: number | null, name: string, permissions: Record<string, string>): Promise<SaveResult> {
+      if (id !== null) checkId(id, 'group')
       if (typeof name !== 'string' || typeof permissions !== 'object' || permissions === null) throw new Error('Invalid group')
       for (const [k, v] of Object.entries(permissions)) if (!/^[a-z_]+(\.[a-z_]+)*$/.test(k) || (v !== '1' && v !== '0')) throw new Error(`Invalid permission: ${k}`)
-      const result = await request(`/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, 'PATCH')
-      if (!isError(result)) return { ok: true, id }
+      const result = await request<{ payload?: { id?: number } | null }>(id === null ? '/groups' : `/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, id === null ? 'POST' : 'PATCH')
+      if (!isError(result)) return { ok: true, id: id ?? Number(result.payload?.id) }
       const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
       return fieldMessages
         ? { ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)])) }
         : { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
+    },
+
+    // Deletes a group; Snipe-IT (v8.4.1+) refuses one that still has Users in it, with its reason.
+    async deleteGroup(id: number): Promise<void> {
+      checkId(id, 'group')
+      const result = await request(`/groups/${id}`, {}, 'DELETE')
+      if (isError(result)) throw new Error(reason(result.messages))
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.

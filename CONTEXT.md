@@ -63,7 +63,7 @@ _Avoid_: EOL (alone), retirement
 The IT staff member running the app. Each Operator uses their own Snipe-IT API key, so History shows who did each Checkout/Checkin.
 
 **Permission Group**:
-A named set of Snipe-IT permissions a User inherits by belonging to it. Only a Superuser may change a group or a User's groups.
+A named set of Snipe-IT permissions a User inherits by belonging to it. Only a Superuser may make, change or delete a group, or change a User's groups. Snipe-IT deletes only a group nobody is in.
 
 **Superuser**:
 A Snipe-IT account that may manage Permission Groups and permissions. Distinct from Operator: an Operator may or may not be one.

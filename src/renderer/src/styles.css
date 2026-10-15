@@ -65,6 +65,10 @@ button, input, select { font-family: inherit; }
 .nav:disabled { opacity: .45; cursor: default; }
 /* Key hints. */
 .nav kbd { margin-left: auto; }
+/* The Workflows item, and its button that shows or hides the Workflows under it. */
+.nav-row { display: flex; flex: none; gap: 1px; }
+.nav-row > .nav:first-child { flex: 1; min-width: 0; }
+.nav.toggle { width: 28px; padding: 0; justify-content: center; }
 /* A Workflow, listed under the Workflows item. */
 .nav.sub { padding-left: 44px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
@@ -480,6 +484,7 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .access-body { padding: 4px 16px 16px; display: grid; gap: 10px; }
 .access-body .k { font: 600 12px var(--sans); color: var(--dim); }
 .access .message { margin: 6px 16px; }
+.add-member { max-width: 352px; }
 .stock-note { padding: 4px 16px 8px; }
 .stock-note input { width: 320px; }
 /* 24×24 to click, without making the outline taller. */

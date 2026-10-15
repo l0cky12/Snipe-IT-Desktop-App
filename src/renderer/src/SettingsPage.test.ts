@@ -30,7 +30,7 @@ describe('the Settings tabs', () => {
     background: { tray: false, startAtLogin: false }, appearance: 'system',
     tempCheckout: { endOfDay: '14:50', reminder: true, automatic: false, automaticAt: '15:50' }, schoolCalendar: [], repairTypeId: null,
   }
-  const html = renderToStaticMarkup(createElement(SettingsPage, { settings, onSaved: () => {}, onAppearance: () => {} }))
+  const html = renderToStaticMarkup(createElement(SettingsPage, { settings, onSaved: () => {}, onAppearance: () => {}, onStatusLabels: () => {} }))
   // Each panel's text runs from its role attribute to the next panel's: the attributes that follow, then its headings.
   const panels = html.split('role="tabpanel"').slice(1).map((p) => ({ hidden: p.startsWith(' hidden'), headings: [...p.matchAll(/<h2>([^<]*)<\/h2>/g)].map((m) => m[1]) }))
 
@@ -39,9 +39,9 @@ describe('the Settings tabs', () => {
     expect(panels.map((p) => p.hidden)).toEqual([false, true, true, true])
   })
 
-  it('each hold their sections, About and Repairs with the connection', () => {
+  it('each hold their sections, About, Repairs and Status Labels with the connection', () => {
     expect(panels.map((p) => p.headings)).toEqual([
-      ['Connection', 'About', 'Repairs'], ['Email', 'Scheduled Reports'], ['Temp checkout', 'School calendar'], ['Running in the background', 'Appearance'],
+      ['Connection', 'About', 'Repairs', 'Status Labels'], ['Email', 'Scheduled Reports'], ['Temp checkout', 'School calendar'], ['Running in the background', 'Appearance'],
     ])
   })
 })

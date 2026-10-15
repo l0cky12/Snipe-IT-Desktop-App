@@ -90,6 +90,8 @@ export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'fie
 
 // Stored per computer, like the Dashboard layout: which groups of pages in the sidebar are open. Browse starts open, the rest closed.
 const GROUPS_KEY = 'sidebarGroups'
+// Likewise whether the sidebar lists each Workflow under the Workflows item; hidden until opened.
+const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
@@ -166,6 +168,8 @@ export function App() {
   const search = useRef<HTMLInputElement>(null)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{"Browse":true}'))
   useEffect(() => localStorage.setItem(GROUPS_KEY, JSON.stringify(openGroups)), [openGroups])
+  const [workflowsOpen, setWorkflowsOpen] = useState(() => localStorage.getItem(WORKFLOWS_OPEN_KEY) === 'true')
+  useEffect(() => localStorage.setItem(WORKFLOWS_OPEN_KEY, String(workflowsOpen)), [workflowsOpen])
   // What was in the box is selected, so a scan replaces it.
   function openPanel() {
     search.current?.focus()
@@ -346,6 +350,8 @@ export function App() {
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
   const shown = (kind: EditKind, id: number) => (kind === 'assets' ? pick(id) : openRecord(kind, id))
+  // A Status Label added, edited or deleted: every Status choice offers the new set.
+  const reloadLabels = (kind: EditKind) => kind === 'statuslabels' && window.snipeIt.statusLabels().then(setStatusLabels, () => {})
   // A deleted Asset leaves the rail.
   function forget(id: number) {
     setRecent((r) => r.filter((a) => a.id !== id))
@@ -353,6 +359,7 @@ export function App() {
   }
   function deleted(kind: EditKind, id: number, name: string) {
     if (kind === 'assets') forget(id)
+    reloadLabels(kind)
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
@@ -384,13 +391,15 @@ export function App() {
   const openSettings = () => (cancel(), setShowSettings(true))
   const show = (p: 'dashboard' | 'workflows' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
   // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
-  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string }
+  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string; toggle?: { open: boolean; flip: () => void } }
   const pages: Page[][] = [
     [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
     [
-      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows', open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+      // With the Workflows hidden, the Workflows item stands for whichever is open.
+      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+        toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
         aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
-      ...BUILT.map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
+      ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
       ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
     ],
     [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
@@ -456,26 +465,32 @@ export function App() {
               <button className={`grp${!open && pages[i].some((p) => p.sel) ? ' sel' : ''}`} aria-expanded={open} onClick={() => setOpenGroups((g) => ({ ...g, [name]: !open }))}>
                 {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{name}{!open && badge > 0 && <span className={`badge${paused ? ' paused' : ''}`}>{badge}</span>}
               </button>
-              {open && pages[i].map((p) => (
-                <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
+              {open && pages[i].map((p) => {
+                const item = <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
                   <p.Icon size={18} />{p.label}{!!p.badge && <span className={`badge${p.paused ? ' paused' : ''}`}>{p.badge}</span>}{p.kbd && <kbd>{p.kbd}</kbd>}
                 </button>
-              ))}
+                return p.toggle ? <div key={p.label} className="nav-row">
+                  {item}
+                  <button aria-label={`${p.toggle.open ? 'Hide' : 'Show'} ${p.label}`} aria-expanded={p.toggle.open} className="nav toggle" onClick={p.toggle.flip}>
+                    {p.toggle.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+                </div> : item
+              })}
             </Fragment>
           })}
           <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
         </nav>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} onStatusLabels={() => go('statuslabels')} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Incoming repair' ? <IncomingRepairView flow={incomingRepair} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} onSettings={openSettings} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
-        : view?.page === 'groups' ? <GroupsView canManage={canManage} />
+        : view?.page === 'groups' ? <GroupsView canManage={canManage} onDrill={go} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
-        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
+        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => (reloadLabels(view.kind), shown(view.kind, id))} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} onNew={(k) => editRecord(k, null)}
           panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
