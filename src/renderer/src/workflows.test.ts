@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
-import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceChange, MaintenanceInput, OpenMaintenance, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, CheckinOptions, CheckoutOptions, MaintenanceChange, MaintenanceInput, OpenMaintenance, StatusLabel, StockCheckout, StockKind, UserCard } from '../../main/snipeit'
 import { parseCalendar, type SchoolTimes } from '../../main/calendar'
 import { cleanTag, createBulkCheckout, createBulkReturn, createIncomingRepair, createRepairIntake, createRunner, createTempCheckout, fieldKey, NOT_ALLOWED, NOT_SENT, pauseSays, sharedRepairType } from './workflows'
 
@@ -66,6 +66,13 @@ function fakeBridge(assets: Asset[]) {
     supplierSelectlist: vi.fn(async (text: string): Promise<StatusLabel[]> => (calls.push(`suppliers ${text}`), [])),
     appendUserNotes: vi.fn(async (id: number, line: string) => { calls.push(`user notes ${id} ${line}`) }),
     removeUserNotesLine: vi.fn(async (id: number, line: string) => { calls.push(`remove user notes ${id} ${line}`) }),
+    // Lookup finds a charger, a User (never a Handout) and a Licenses list that couldn't be read.
+    lookup: vi.fn(async (q: string) => (calls.push(`lookup ${q}`), { exact: false as const, assets: [], others: [
+      { kind: 'accessories' as const, rows: [{ id: 3, name: 'USB-C Charger', detail: '', matched: 'name' }] }, { kind: 'users' as const, rows: [{ id: 7, name: 'Avery Testwell', detail: '', matched: 'name' }] },
+      { kind: 'consumables' as const, rows: [{ id: 5, name: 'Toner', detail: '', matched: 'name' }] }, { kind: 'licenses' as const, error: "Couldn't read Licenses" }] })),
+    checkoutStock: vi.fn(async (kind: StockKind, id: number, o: StockCheckout) => (calls.push(`stock ${kind} ${id} ×${o.qty} to ${o.userId} "${o.note}"`), { rowIds: Array.from({ length: o.qty }, (_, i) => 100 + i) })),
+    checkinAccessory: vi.fn(async (rowId: number, note?: string) => { calls.push(`checkin accessory ${rowId} ${note}`) }),
+    checkinLicense: vi.fn(async (licenseId: number, seatId: number, note?: string) => { calls.push(`checkin license ${licenseId} seat ${seatId} ${note}`) }),
   }
   return { bridge, calls, checkins, checkouts, history }
 }
@@ -2954,5 +2961,95 @@ describe('Incoming repair', () => {
       bridge.deleteMaintenance.mockRejectedValueOnce(new Error("Can't reach Snipe-IT"))
       expect(await undo(flow)).toMatchObject({ result: { state: 'undone' }, undoFailed: "the note failed: HTTP 500; the Maintenance wasn't deleted: Can't reach Snipe-IT" })
     })
+  })
+})
+
+describe('Handouts (#188)', () => {
+  const CHARGER = { kind: 'accessories' as const, id: 3, name: 'USB-C Charger', qty: 2 }
+  const SEAT = { kind: 'licenses' as const, id: 4, name: 'Office Suite', qty: 1 }
+  const TONER = { kind: 'consumables' as const, id: 5, name: 'Toner', qty: 1 }
+  async function serving(make = createBulkCheckout) {
+    const fake = fakeBridge([])
+    const failed = vi.fn()
+    const flow = make(fake.bridge, { changed: () => {}, failed }, undefined, 0)
+    fake.bridge.exactUsers.mockResolvedValueOnce([AVERY])
+    await flow.find('atestwell')
+    return { ...fake, flow, failed }
+  }
+
+  it('finds stock by name through Lookup: Accessories, Consumables and Licenses only, a list that failed left out', async () => {
+    const { flow } = await serving()
+    expect(await flow.suggestStock(' charger ')).toEqual([{ kind: 'accessories', id: 3, name: 'USB-C Charger' }, { kind: 'consumables', id: 5, name: 'Toner' }])
+    expect(await flow.suggestStock('  ')).toEqual([])
+  })
+
+  it("hands it out at once with the Workflow note, as a done row that counts in the round's line", async () => {
+    const { flow, calls } = await serving()
+    expect(flow.setOptions({ expectedCheckin: '', note: 'cart 3' })).toBe('')
+    expect(await flow.handOut(CHARGER)).toBe('')
+    expect(calls).toContain('stock accessories 3 ×2 to 7 "[Bulk checkout] cart 3"')
+    expect(flow.runner.rows[0]).toMatchObject({ tag: '', name: 'USB-C Charger ×2', what: 'Accessory to Avery Testwell', result: { state: 'done', text: 'Handed out' }, stock: true, assetId: null })
+    expect(flow.runner.announce).toBe('USB-C Charger ×2: Handed out')
+    flow.done()
+    expect(flow.summary(flow.runner.rows[0])).toBe('Checked out 0 Assets and 1 handout to Avery Testwell')
+  })
+
+  it('Undo last checks in exactly the rows (seats) written, with the [Undo] note, re-reading no Asset', async () => {
+    const { flow, bridge, calls } = await serving()
+    await flow.handOut(CHARGER)
+    expect(flow.runner.askUndo()).toBe('')
+    expect(flow.runner.confirm).toBe('Undo: USB-C Charger ×2 → Avery Testwell? Enter to undo, Esc to cancel.')
+    await flow.runner.undo()
+    expect(calls.filter((c) => c.startsWith('checkin'))).toEqual(['checkin accessory 100 [Undo] Bulk checkout', 'checkin accessory 101 [Undo] Bulk checkout'])
+    expect(bridge.assetByTag).not.toHaveBeenCalled()
+    expect(flow.runner.rows[0].result).toEqual({ state: 'undone' })
+    await flow.handOut(SEAT)
+    flow.runner.askUndo()
+    await flow.runner.undo()
+    expect(calls.at(-1)).toBe('checkin license 4 seat 100 [Undo] Bulk checkout')
+  })
+
+  it('an Undo that fails partway says how far it got, and the row stays done', async () => {
+    const { flow, bridge } = await serving()
+    await flow.handOut(CHARGER)
+    bridge.checkinAccessory.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Checkin not allowed'))
+    flow.runner.askUndo()
+    await flow.runner.undo()
+    expect(flow.runner.rows[0]).toMatchObject({ result: { state: 'done' }, undoFailed: 'Checked in 1 of 2: Checkin not allowed' })
+  })
+
+  it("a Consumable's row can't be undone; one whose rows couldn't be read back says to open the User", async () => {
+    const { flow, bridge } = await serving()
+    await flow.handOut(TONER)
+    expect(flow.runner.undoBlocked).toBe('A Consumable is never checked in')
+    bridge.checkoutStock.mockResolvedValueOnce({ rowIds: [] })
+    await flow.handOut(CHARGER)
+    expect(flow.runner.undoBlocked).toBe("Couldn't read back which ones went out. Open Avery Testwell to check them in by hand.")
+  })
+
+  it('a refusal is a failed row with the error sound; the quick list keeps the item across Done', async () => {
+    const { flow, bridge, failed } = await serving()
+    bridge.checkoutStock.mockRejectedValueOnce(new Error('Not enough remaining.'))
+    flow.addQuick(CHARGER)
+    flow.addQuick({ ...CHARGER, qty: 5 })
+    expect(await flow.handOut(CHARGER)).toBe('')
+    expect(flow.runner.rows[0]).toMatchObject({ name: 'USB-C Charger ×2', result: { state: 'failed', reason: 'Not enough remaining.' } })
+    expect(failed).toHaveBeenCalledTimes(1)
+    flow.done()
+    expect(flow.quick).toEqual([CHARGER])
+    flow.removeQuick(CHARGER)
+    expect(flow.quick).toEqual([])
+  })
+
+  it('needs a User first; Temp checkout refuses; another server forgets the quick list', async () => {
+    const { flow } = await serving()
+    flow.done()
+    expect(await flow.handOut(CHARGER)).toBe('Find the User first')
+    expect(await flow.handOut({ ...CHARGER, qty: 0 })).toBe('Find the User first')
+    const temp = await serving((bridge, events, now, pace) => createTempCheckout(bridge, events, () => ({ endOfDay: '14:50', calendar: [] }), now, pace))
+    expect(await temp.flow.handOut(CHARGER)).toBe('Temp checkout hands out Assets only')
+    flow.addQuick(CHARGER)
+    flow.reset()
+    expect(flow.quick).toEqual([])
   })
 })

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Check, ChevronDown, ChevronRight, Copy, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { SIDEBAR_DEFAULT } from '../../main/sidebar'
 import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
@@ -91,11 +92,13 @@ export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'fie
 
 // Stored per computer, like the Dashboard layout: which groups of pages in the sidebar are open. Browse starts open, the rest closed.
 const GROUPS_KEY = 'sidebarGroups'
+// Likewise whether the sidebar lists each Workflow under the Workflows item; hidden until opened.
+const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the sidebar's Browse group; every List (these and the rest) is on the All records page.
-const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
+// The Lists the sidebar's Browse group can list (Settings chooses which); every List (these and the rest) is on the All records page.
+const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity', 'licenses', 'accessories', 'consumables']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
   components: Cpu, categories: Tags, manufacturers: Factory, suppliers: Truck, departments: Briefcase, companies: Building2, statuslabels: Tag,
@@ -167,6 +170,8 @@ export function App() {
   const search = useRef<HTMLInputElement>(null)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{"Browse":true}'))
   useEffect(() => localStorage.setItem(GROUPS_KEY, JSON.stringify(openGroups)), [openGroups])
+  const [workflowsOpen, setWorkflowsOpen] = useState(() => localStorage.getItem(WORKFLOWS_OPEN_KEY) === 'true')
+  useEffect(() => localStorage.setItem(WORKFLOWS_OPEN_KEY, String(workflowsOpen)), [workflowsOpen])
   // What was in the box is selected, so a scan replaces it.
   function openPanel() {
     search.current?.focus()
@@ -353,6 +358,8 @@ export function App() {
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
   const shown = (kind: EditKind, id: number) => (kind === 'assets' ? pick(id) : openRecord(kind, id))
+  // A Status Label added, edited or deleted: every Status choice offers the new set.
+  const reloadLabels = (kind: EditKind) => kind === 'statuslabels' && window.snipeIt.statusLabels().then(setStatusLabels, () => {})
   // A deleted Asset leaves the rail.
   function forget(id: number) {
     setRecent((r) => r.filter((a) => a.id !== id))
@@ -360,6 +367,7 @@ export function App() {
   }
   function deleted(kind: EditKind, id: number, name: string) {
     if (kind === 'assets') forget(id)
+    reloadLabels(kind)
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
@@ -379,8 +387,9 @@ export function App() {
     window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => epoch === bulkEpoch.current && setMessage({ text: e.message, error: true }))
   }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
-  // The All records item stands for every page not in the sidebar.
-  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+  // The pages Settings shows in the sidebar; a hidden page is still on All records, in search results and on its shortcut.
+  const listed = new Set<string>(settings?.sidebar ?? SIDEBAR_DEFAULT)
+  const lists = LISTS.filter((k) => listed.has(k))
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
   const workflowsBusy = Object.values(runners).reduce((n, r) => n + r!.pending, 0)
   // The badge turns red while any Workflow is Paused, for an Operator who left it.
@@ -390,17 +399,32 @@ export function App() {
   useEffect(() => void window.workflows.unsent(unsent), [unsent])
   const openSettings = () => (cancel(), setShowSettings(true))
   const show = (p: 'dashboard' | 'workflows' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
+  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string; toggle?: { open: boolean; flip: () => void } }
+  // The pages Settings hides from the sidebar; All records still opens them.
+  const unlisted: Omit<Page, 'sel'>[] = [
+    { label: 'Workflows', Icon: WorkflowsIcon, open: () => show('workflows') }, ...(canImport ? [{ label: 'Import', Icon: FileUp, open: () => show('import') }] : []),
+    { label: 'Dashboard', Icon: LayoutGrid, open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, open: () => show('reports') },
+  ].filter((p) => !listed.has(p.label.toLowerCase()))
+  // The All records item stands for every page not in the sidebar.
+  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !lists.includes(page as ListKind))
+    || (!!page && !listed.has(page === 'workflow' ? 'workflows' : page) && ['workflows', 'workflow', 'import', 'dashboard', 'reports'].includes(page))
   // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
-  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string }
   const pages: Page[][] = [
-    [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
+    [...lists.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
     [
-      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows', open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
-        aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
-      ...BUILT.map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
-      ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
+      ...(listed.has('workflows') ? [
+        // With the Workflows hidden, the Workflows item stands for whichever is open.
+        { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+          toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
+          aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
+        ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
+      ] : []),
+      ...(canImport && listed.has('import') ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
     ],
-    [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
+    [
+      ...(listed.has('dashboard') ? [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }] : []),
+      ...(listed.has('reports') ? [{ label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }] : []),
+    ],
   ]
 
   // What the sidebar says, under the scan box.
@@ -455,6 +479,8 @@ export function App() {
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={(a) => pick(a.id)} />}
           </div>
           {['Browse', 'Act', 'Admin'].map((name, i) => {
+            // A group with every page hidden in Settings isn't listed.
+            if (pages[i].length === 0) return null
             const open = !!openGroups[name]
             const badge = pages[i].reduce((n, p) => n + (p.badge ?? 0), 0)
             const paused = pages[i].some((p) => p.paused)
@@ -463,26 +489,32 @@ export function App() {
               <button className={`grp${!open && pages[i].some((p) => p.sel) ? ' sel' : ''}`} aria-expanded={open} onClick={() => setOpenGroups((g) => ({ ...g, [name]: !open }))}>
                 {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{name}{!open && badge > 0 && <span className={`badge${paused ? ' paused' : ''}`}>{badge}</span>}
               </button>
-              {open && pages[i].map((p) => (
-                <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
+              {open && pages[i].map((p) => {
+                const item = <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
                   <p.Icon size={18} />{p.label}{!!p.badge && <span className={`badge${p.paused ? ' paused' : ''}`}>{p.badge}</span>}{p.kbd && <kbd>{p.kbd}</kbd>}
                 </button>
-              ))}
+                return p.toggle ? <div key={p.label} className="nav-row">
+                  {item}
+                  <button aria-label={`${p.toggle.open ? 'Hide' : 'Show'} ${p.label}`} aria-expanded={p.toggle.open} className="nav toggle" onClick={p.toggle.flip}>
+                    {p.toggle.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+                </div> : item
+              })}
             </Fragment>
           })}
           <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
         </nav>
       </aside>
-      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} onStatusLabels={() => go('statuslabels')} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Incoming repair' ? <IncomingRepairView flow={incomingRepair} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} onSettings={openSettings} />
-        : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
-        : view?.page === 'groups' ? <GroupsView canManage={canManage} />
+        : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} pages={unlisted} />
+        : view?.page === 'groups' ? <GroupsView canManage={canManage} onDrill={go} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
-        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
+        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => (reloadLabels(view.kind), shown(view.kind, id))} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} onNew={(k) => editRecord(k, null)}
           panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
@@ -491,8 +523,8 @@ export function App() {
   )
 }
 
-// Every List, the ones in the sidebar and the rest.
-function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
+// Every List, the ones in the sidebar and the rest, then the pages hidden from the sidebar.
+export function RecordsIndex({ onGo, onGroups, pages }: { onGo: (page: ListKind) => void; onGroups: () => void; pages: { label: string; Icon: LucideIcon; open: () => void }[] }) {
   return (
     <>
       <header className="head"><h1>All records</h1></header>
@@ -502,6 +534,7 @@ function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGr
           return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={18} />{listName[k]}</button>
         })}
         <button className="record-kind" onClick={onGroups}><ShieldCheck size={18} />Permission groups</button>
+        {pages.map(({ label, Icon, open }) => <button key={label} className="record-kind" onClick={open}><Icon size={18} />{label}</button>)}
       </div>
     </>
   )

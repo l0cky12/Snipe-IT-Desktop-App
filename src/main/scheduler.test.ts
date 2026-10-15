@@ -109,6 +109,12 @@ describe('running a Report to rows', () => {
     expect(asked.pop()).toEqual(['overdue', { from: '2026-09-01' }])
   })
 
+  it('a Custom Asset Report template runs the Custom Asset Report with its columns and filters, under its name', async () => {
+    const template = { id: 't1', name: 'Chromebooks by room', kind: 'custom' as const, search: '' as const, filters: { category_id: '3' }, sort: null, columns: ['asset_tag', 'location'] }
+    expect(await reportRunner(client as never, () => [template])({ saved: 't1' })).toEqual({ name: 'Chromebooks by room', columns: ['Asset Tag'], rows: [['NOMMA-1']], capped: false })
+    expect(asked.pop()).toEqual(['custom', { columns: ['asset_tag', 'location'], filters: { category_id: '3' } }])
+  })
+
   it('a deleted Saved Report says so', async () => {
     await expect(run({ saved: 'gone' })).rejects.toThrow('That Saved Report no longer exists.')
   })

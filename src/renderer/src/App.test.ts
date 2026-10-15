@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { assetFacts, auditedLine, auditedResult, CheckinForm, CopyButton, CheckoutForm, defaultLocationChoice, createdUser, ifShowing, layoutFrom, newUserFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
+import { assetFacts, auditedLine, auditedResult, CheckinForm, CopyButton, CheckoutForm, defaultLocationChoice, createdUser, ifShowing, layoutFrom, newUserFrom, RecordsIndex, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
+import { LayoutGrid } from 'lucide-react'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -237,5 +238,20 @@ describe('copying a fact from the Asset panel', () => {
 
   it('names the fact on its Copy button', () => {
     expect(renderToStaticMarkup(createElement(CopyButton, { label: 'Serial', text: 'FAKE-SERIAL-1' }))).toContain('aria-label="Copy Serial"')
+  })
+})
+
+describe('All records', () => {
+  const buttons = (pages: { label: string; Icon: typeof LayoutGrid; open: () => void }[]) =>
+    [...renderToStaticMarkup(createElement(RecordsIndex, { onGo: () => {}, onGroups: () => {}, pages })).matchAll(/<button[^>]*>(?:<svg.*?<\/svg>)?([^<]*)<\/button>/g)].map((m) => m[1])
+
+  it('lists every List and Permission groups', () => {
+    expect(buttons([])).toContain('Assets')
+    expect(buttons([])).toContain('Consumables')
+    expect(buttons([]).at(-1)).toBe('Permission groups')
+  })
+
+  it('also opens the pages hidden from the sidebar, so Settings never strands one', () => {
+    expect(buttons([{ label: 'Dashboard', Icon: LayoutGrid, open: () => {} }]).slice(-2)).toEqual(['Permission groups', 'Dashboard'])
   })
 })

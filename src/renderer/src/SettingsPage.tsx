@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { BRAND_DEFAULTS, HEX, type BrandingInput } from '../../main/branding'
 import type { Appearance, Background, MailInput, Settings, SettingsInput, TempCheckout } from '../../main/config'
 import { applyColors } from './branding'
+import { SIDEBAR_PAGES, type SidebarPage } from '../../main/sidebar'
 import { formatCalendar } from '../../main/calendar'
 import { ScheduledReports } from './ReportsView'
 
-// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
+// The Sidebar section's labels, as the sidebar shows them (ListView's listName would import App back into this page).
+const sidebarName: Record<SidebarPage, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', workflows: 'Workflows', import: 'Import', dashboard: 'Dashboard', reports: 'Reports' }
+
+// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look or the sidebar did.
 /** Plain HTTP to another machine, LAN included: the token and data cross the network readable. Allowed, but warned (ADR 0002). */
 export function unencryptedRemote(baseUrl: string) {
   let url: URL
@@ -16,7 +20,21 @@ export function unencryptedRemote(baseUrl: string) {
 /** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the organisation's look, the Temp checkout rules, and this PC alone. */
 const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['branding', 'Branding'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
 
-export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
+// Sidebar ticks save one at a time, each on top of the one before it, so two quick ticks both stick. One that fails is
+// undone before the next is saved.
+export function sidebarTicks<T>(start: SidebarPage[], save: (sidebar: SidebarPage[]) => Promise<T>) {
+  let current = start
+  let queue: Promise<unknown> = Promise.resolve()
+  const flip = (page: SidebarPage, on: boolean) => (current = on ? [...current, page] : current.filter((s) => s !== page))
+  return (page: SidebarPage, on: boolean) => {
+    const run = queue.then(() => save(flip(page, on)).catch((err: unknown) => { flip(page, !on); throw err }))
+    queue = run.catch(() => {})
+    return run
+  }
+}
+
+// onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
+export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void; onStatusLabels: () => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -32,6 +50,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
+  const [tickSidebar] = useState(() => sidebarTicks(settings.sidebar, (s) => window.settings.saveSidebar(s)))
   const [repairType, setRepairType] = useState(settings.repairTypeId?.toString() ?? '')
   const [brand, setBrand] = useState<BrandingInput>(() => { const { icon: _, ...b } = settings.branding; return b })
   const setBrandField = (change: Partial<BrandingInput>) => { setBrand((b) => ({ ...b, ...change })); setMessage('') }
@@ -115,6 +134,10 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'repairs' && notes}
+    {settings.hasToken && <section className="settings-section">
+      <h2>Status Labels</h2><p className="dim">Kept in Snipe-IT, so a change is every Operator's.</p>
+      <button type="button" onClick={onStatusLabels}>Manage Status Labels →</button>
+    </section>}
   </div>
   <div className="settings-page" role="tabpanel" hidden={tab !== 'mail'}>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
@@ -251,6 +274,13 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
         setAppearanceError('')
         window.settings.saveAppearance(appearance).then(onAppearance, (err: Error) => setAppearanceError(err.message))
       }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </section>
+    <section className="settings-section">
+      <h2>Sidebar</h2><p className="dim">On this PC only. The pages the sidebar lists; every page is still on All records, and Import only shows when your token may import.</p>
+      {SIDEBAR_PAGES.map((p) => <label key={p} className="check"><input type="checkbox" checked={settings.sidebar.includes(p)} onChange={(e) => {
+        setAppearanceError('')
+        tickSidebar(p, e.target.checked).then(onAppearance, (err: Error) => setAppearanceError(err.message))
+      }} /><span>{sidebarName[p]}</span></label>)}
     </section>
     {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}
   </div>

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { automaticCheckins, lastSendText, pickerOptions, reportFilters, scheduleText, weekCheckouts } from './ReportsView'
+import { automaticCheckins, DEFAULT_CUSTOM_COLUMNS, lastSendText, pickerOptions, reportFilters, scheduleText, weekCheckouts } from './ReportsView'
 
 it("says when a Report emails itself and over which dates", () => {
   expect(scheduleText({ every: 'day', time: '07:00' })).toBe('Daily at 07:00')
@@ -31,6 +31,13 @@ it("opens on a starting query: Automatic check-in's is that day's automatic chec
   // A search is the Activity Report's own, like its record type and action.
   expect(reportFilters('overdue', { ...start.query, locationId: '3' })).toEqual({ from: '2026-10-12', to: '2026-10-12' })
   expect(reportFilters('auditDue', { search: 'x', locationId: '3' })).toEqual({ from: undefined, to: undefined, locationId: '3', categoryId: undefined })
+})
+
+it('the Custom Asset Report sends its columns (every standard one until chosen) and its filters, and nothing else', () => {
+  expect(DEFAULT_CUSTOM_COLUMNS.slice(0, 3)).toEqual(['id', 'company', 'asset_tag'])
+  expect(reportFilters('custom', { from: '2026-01-01', filters: { category_id: '3' } })).toEqual({ columns: DEFAULT_CUSTOM_COLUMNS, filters: { category_id: '3' } })
+  expect(reportFilters('custom', { columns: ['asset_tag'] })).toEqual({ columns: ['asset_tag'], filters: {} })
+  expect(reportFilters('overdue', { columns: ['asset_tag'], from: '2026-01-01' })).toEqual({ from: '2026-01-01', to: undefined })
 })
 
 it('a week of Checkouts over time opens its Asset Checkouts, Monday through Sunday, across a year end too', () => {

@@ -124,6 +124,8 @@ export function reportRunner(client: Pick<SnipeIt, 'exportList' | 'report'>, sav
     }
     const r = savedReports().find((s) => s.id === ref.saved)
     if (!r) throw new Error('That Saved Report no longer exists.')
+    // A template runs the Custom Asset Report with its columns and filters, under its name.
+    if (r.kind === 'custom') return { name: r.name, ...await client.report('custom', { columns: r.columns, filters: r.filters }) }
     // Its View's route, or its in-app lookup (Out on temp, Overdue), with the View's own column.
     const { rows, capped } = await client.exportList(r.kind, { search: r.search, filters: r.filters, sort: r.sort?.key, order: r.sort?.order, ...(r.view && { view: r.view }) })
     const shown = shownColumns(r.kind, r.columns)

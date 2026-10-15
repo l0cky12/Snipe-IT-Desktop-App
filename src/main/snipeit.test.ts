@@ -1886,6 +1886,106 @@ describe('report', () => {
     expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Serial', 'XYZ', 'NOMMA-3'], ['Serial', 'xyz', 'NOMMA-7'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
   })
 
+  describe('Custom Asset Report', () => {
+    const asset = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, assigned_to: null, notes: null, purchase_date: null, purchase_cost: null, last_checkout: null, custom_fields: {}, ...fields })
+    const ready = { id: 1, name: 'Ready to Deploy', status_type: 'deployable', status_meta: 'deployable' }
+    const hardware = [
+      asset(1, { purchase_date: { date: '2026-08-01' }, purchase_cost: '1,250.00', last_checkout: { datetime: '2026-09-20 08:15:00' }, notes: '<p>Charger <strong>missing</strong></p>',
+        status_label: { id: 2, name: 'Deployed', status_type: 'deployable', status_meta: 'deployed' },
+        assigned_to: { id: 3, name: 'Jordan Reyes', type: 'user', username: 'jreyes', email: 'jreyes@example.org', employee_number: '4471' },
+        custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: '00:1A:2B:00:00:01' } } }),
+      asset(2, { purchase_date: { date: '2026-09-10' }, purchase_cost: '300.00', status_label: ready }),
+      asset(3, { status_label: ready }),
+    ]
+    // Archived and deleted Assets come only from their own lists (Snipe-IT's "show archived in list" off; status=Deleted).
+    const shelved = [asset(4, { status_label: { id: 9, name: 'Retired', status_type: 'archived', status_meta: 'archived' } })]
+    const trashed = [asset(5, { status_label: ready, deleted_at: { datetime: '2026-09-30 12:00:00' } })]
+    const fields = [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1' }, { id: 2, name: 'Cart', db_column_name: '_snipeit_cart_2' }]
+    // The log's Checkouts, newest first: NOMMA-1 out in October and in September, NOMMA-2 (whose last_checkout is blank) in September.
+    const checkout = (id: number, assetId: number, datetime: string) =>
+      ({ id, action_type: 'checkout', created_at: { datetime }, created_by: { id: 5, name: 'E. Caldwell' }, target: { id: 311, name: 'Jordan Reyes' }, note: null, item: { id: assetId, name: `NOMMA-${assetId}`, type: 'asset' } })
+    const log = [checkout(3, 1, '2026-10-02 09:00:00'), checkout(2, 1, '2026-09-20 09:00:00'), checkout(1, 2, '2026-09-15 09:00:00')]
+    function customFetch(fieldsStatus = 200) {
+      const queries: Record<string, string>[] = []
+      const fetch = (async (input: string | URL | Request) => {
+        const url = new URL(String(input))
+        if (url.pathname.endsWith('/fields')) return new Response(JSON.stringify(fieldsStatus === 200 ? { total: fields.length, rows: fields } : { status: 'error', messages: 'You do not have permission to access this area.', payload: null }), { status: fieldsStatus })
+        queries.push(Object.fromEntries(url.searchParams))
+        if (url.pathname.endsWith('/reports/activity')) return new Response(JSON.stringify({ total: log.length, rows: log }))
+        const rows = { Archived: shelved, Deleted: trashed }[url.searchParams.get('status') ?? ''] ?? hardware
+        return new Response(JSON.stringify({ total: rows.length, rows }))
+      }) as typeof globalThis.fetch
+      return { fetch, queries }
+    }
+
+    it('has the columns picked, in that order, from the Asset, its Assignee and its Custom Fields, with Archived Assets read from their own list', async () => {
+      const { fetch, queries } = customFetch()
+      const columns = ['asset_tag', 'status', 'purchase_cost', 'checkout_date', 'notes', 'url', 'assigned_to', 'username', 'email', 'employee_num', '_snipeit_mac_address_1']
+      const r = await createSnipeIt(config, fetch, today).report('custom', { columns, filters: {} })
+      expect(r.columns).toEqual(['Asset Tag', 'Status Label', 'Purchase cost', 'Checked out', 'Notes', 'URL', 'Assignee', 'Username', 'Email', 'Employee No.', 'MAC Address'])
+      expect(r.rows).toEqual([
+        ['NOMMA-1', 'Deployed (deployed)', '1250.00', '2026-09-20 08:15', 'Charger **missing**', 'https://snipe.example.org/hardware/1', 'Jordan Reyes', 'jreyes', 'jreyes@example.org', '4471', '00:1A:2B:00:00:01'],
+        ['NOMMA-2', 'Ready to Deploy (deployable)', '300.00', '', '', 'https://snipe.example.org/hardware/2', '', '', '', '', ''],
+        ['NOMMA-3', 'Ready to Deploy (deployable)', '', '', '', 'https://snipe.example.org/hardware/3', '', '', '', '', ''],
+        ['NOMMA-4', 'Retired (archived)', '', '', '', 'https://snipe.example.org/hardware/4', '', '', '', '', ''],
+      ])
+      expect(r.capped).toBe(false)
+      expect(queries.map((q) => q.status)).toEqual([undefined, 'Archived'])
+    })
+
+    it("heads a Custom Field column as the Assets name it, or as Snipe-IT's field list does; a key neither names, or that the list can't be read for, stays a key", async () => {
+      const columns = ['_snipeit_mac_address_1', '_snipeit_cart_2', '_snipeit_gone_3']
+      expect((await createSnipeIt(config, customFetch().fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', 'Cart', '_snipeit_gone_3'])
+      expect((await createSnipeIt(config, customFetch(403).fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', '_snipeit_cart_2', '_snipeit_gone_3'])
+      // The picker's list, too, comes from the Assets when /fields is refused.
+      expect(await createSnipeIt(config, customFetch(403).fetch, today).customFieldList()).toEqual([{ key: '_snipeit_mac_address_1', label: 'MAC Address' }])
+    })
+
+    it('a Checked out range matches any Checkout in the log within it, not only the last one', async () => {
+      const { fetch, queries } = customFetch()
+      const run = (filters: Record<string, string>) => createSnipeIt(config, fetch, today).report('custom', { columns: ['asset_tag'], filters }).then((r) => r.rows.map((row) => row[0]))
+      expect(await run({ checkout_from: '2026-09-01', checkout_to: '2026-09-30' })).toEqual(['NOMMA-1', 'NOMMA-2'])
+      expect(queries.find((q) => q.action_type)).toMatchObject({ action_type: 'checkout', sort: 'created_at', order: 'desc' })
+      expect(await run({ checkout_from: '2026-10-01' })).toEqual(['NOMMA-1'])
+      expect(await run({ checkout_to: '2026-09-16' })).toEqual(['NOMMA-2'])
+    })
+
+    it('sends the id and Order number filters to Snipe-IT and applies the dates, cost, checked out, Archived and deleted ones itself', async () => {
+      const { fetch, queries } = customFetch()
+      const snipeIt = createSnipeIt(config, fetch, today)
+      const run = (filters: Record<string, string>) => snipeIt.report('custom', { columns: ['asset_tag'], filters }).then((r) => r.rows.map((row) => row[0]))
+      expect(await run({ category_id: '3', order_number: 'PO-1', purchase_from: '2026-09-01' })).toEqual(['NOMMA-2'])
+      expect(queries[0]).toMatchObject({ category_id: '3', order_number: 'PO-1' })
+      expect(queries[0].purchase_from).toBeUndefined()
+      expect(await run({ purchase_to: '2026-08-31' })).toEqual(['NOMMA-1'])
+      expect(await run({ purchase_cost_min: '300', purchase_cost_max: '1000' })).toEqual(['NOMMA-2'])
+      expect(await run({ assignment: 'assigned' })).toEqual(['NOMMA-1'])
+      // Left out, the Archived list isn't even read; nor with a Status Label, whose list includes them.
+      expect(await run({ assignment: 'unassigned', exclude_archived: '1' })).toEqual(['NOMMA-2', 'NOMMA-3'])
+      expect(queries.at(-1)?.status).toBeUndefined()
+      expect(await run({ status_id: '1' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3'])
+      expect(queries.at(-1)).toMatchObject({ status_id: '1' })
+      expect(queries.at(-1)?.status).toBeUndefined()
+      // Deleted Assets have their own list too, read beside the others or, for Only deleted, alone.
+      expect(await run({ deleted: 'include' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3', 'NOMMA-4', 'NOMMA-5'])
+      expect(queries.slice(-3).map((q) => q.status)).toEqual([undefined, 'Archived', 'Deleted'])
+      expect(await run({ deleted: 'only', category_id: '3' })).toEqual(['NOMMA-5'])
+      expect(queries.slice(-1)).toEqual([{ category_id: '3', status: 'Deleted', limit: '500', offset: '0', sort: 'id', order: 'asc' }])
+    })
+
+    it('refuses an unknown column or filter, a malformed value, or no columns, without asking Snipe-IT', async () => {
+      const { fetch, calls } = fakeFetch({})
+      const snipeIt = createSnipeIt(config, fetch)
+      await expect(snipeIt.report('custom', { columns: [], filters: {} })).rejects.toThrow('at least one column')
+      await expect(snipeIt.report('custom', { columns: ['password'] })).rejects.toThrow('Unknown column')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { search: 'x' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { purchase_from: '9/1/2026' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { company_id: '1 or 1' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { deleted: 'all' } })).rejects.toThrow('Invalid filter')
+      expect(calls).toEqual([])
+    })
+  })
+
   it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
     const asset = (id: number, datetime: string) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: { datetime } })
     const hardware = [asset(1, '2026-09-24 15:30:00'), asset(2, '2026-09-24 14:50:00'), asset(3, '2026-09-23 00:00:00'), asset(4, '2026-09-24 16:30:00')]
@@ -2429,6 +2529,20 @@ describe('create, edit and delete', () => {
     expect(requests.at(-1)?.body).toEqual({ min_amt: '0' })
   })
 
+  it("editing a Status Label sends back its type, color and Snipe-IT-only flags, which Snipe-IT's edit would otherwise clear", async () => {
+    const { fetch, requests } = fakeFetch({
+      '/statuslabels/4': { body: { id: 4, name: 'Broken', type: 'undeployable', color: '#ff0000', notes: null, show_in_nav: true, default_label: true, assets_count: 3 } },
+      'PATCH /statuslabels/4': { body: { status: 'success' } },
+    })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.form('statuslabels', 4)).values).toMatchObject({ name: 'Broken', type: 'undeployable', color: '#ff0000', notes: '' })
+    expect((await snipeIt.record('statuslabels', 4)).assets).toBe(3)
+    await snipeIt.save('statuslabels', 4, { name: 'Cracked' })
+    expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Cracked', type: 'undeployable', color: '#ff0000', show_in_nav: true, default_label: true } })
+    await snipeIt.save('statuslabels', 4, { type: 'archived', color: '' })
+    expect(requests.at(-1)?.body).toEqual({ type: 'archived', color: null, show_in_nav: true, default_label: true })
+  })
+
   it('a new User starts with Enable login off, before the passwords that need it; editing one shows neither, so its login stays as it is', async () => {
     const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes', activated: true } } }).fetch)
     const blank = await snipeIt.form('users')
@@ -2588,7 +2702,7 @@ describe('permissions', () => {
     expect(await createSnipeIt(config, fetch).userAccess(311)).toEqual({ permissions: { 'reports.view': '1', 'assets.delete': '-1' }, groups: [{ id: 2, name: 'Library Aides' }] })
     const none = fakeFetch({ '/users/5': { body: { id: 5, name: 'New', permissions: null, groups: null } } })
     expect(await createSnipeIt(config, none.fetch).userAccess(5)).toEqual({ permissions: {}, groups: [] })
-    const text = fakeFetch({ '/users/6': { body: { id: 6, name: 'Old', permissions: '{"admin":"1"}', groups: null } }, '/groups/3': { body: { id: 3, name: 'G', permissions: '{"assets.view":"1"}' } } })
+    const text = fakeFetch({ '/users/6': { body: { id: 6, name: 'Old', permissions: '{"admin":"1"}', groups: null } }, '/groups/3': { body: { id: 3, name: 'G', permissions: '{"assets.view":"1"}' } }, '/users': { body: { total: 0, rows: [] } } })
     expect((await createSnipeIt(config, text.fetch).userAccess(6)).permissions).toEqual({ admin: '1' })
     expect((await createSnipeIt(config, text.fetch).group(3)).permissions).toEqual({ 'assets.view': '1' })
   })
@@ -2605,10 +2719,11 @@ describe('permissions', () => {
   it("a group's permissions are read as granted or not, and saved as Snipe-IT's JSON; only permission keys are sent", async () => {
     const { fetch, requests } = fakeFetch({
       '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': 1, 'assets.delete': '0' } } },
+      '/users': { body: { total: 0, rows: [] } },
       'PATCH /groups/2': { body: { status: 'success' } },
     })
     const snipeIt = createSnipeIt(config, fetch)
-    expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
+    expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', members: 0, permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
     await snipeIt.saveGroup(2, 'Library Aides', { 'assets.view': '1', 'assets.checkin': '1' })
     expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/groups/2', body: { name: 'Library Aides', permissions: '{"assets.view":"1","assets.checkin":"1"}' } })
     await expect(snipeIt.saveGroup(2, 'x', { 'assets.view"}': '1' })).rejects.toThrow('Invalid permission')
@@ -2618,6 +2733,54 @@ describe('permissions', () => {
   it("a group Snipe-IT refuses to save says why, beside the field", async () => {
     const { fetch } = fakeFetch({ 'PATCH /groups/2': { body: { status: 'error', messages: { name: ['The name field is required.'] } } } })
     expect(await createSnipeIt(config, fetch).saveGroup(2, '', {})).toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { name: 'The name field is required.' } })
+  })
+
+  it("a group's member count is the Users List filtered to it, since Snipe-IT's single group always says 0", async () => {
+    const { fetch, queries } = fakeFetch({ '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: {}, users_count: 0 } }, '/users': { body: { total: 7, rows: [] } } })
+    expect((await createSnipeIt(config, fetch).group(2)).members).toBe(7)
+    expect(queries).toContainEqual({ group_id: '2', limit: '1' })
+  })
+
+  it('every group comes with how many Users are in it', async () => {
+    const { fetch } = fakeFetch({ '/groups': { body: { total: 2, rows: [{ id: 1, name: 'IT Staff', users_count: 3 }, { id: 2, name: 'Empty', users_count: null }] } } })
+    expect(await createSnipeIt(config, fetch).groups()).toEqual([{ id: 1, name: 'IT Staff', members: 3 }, { id: 2, name: 'Empty', members: 0 }])
+  })
+
+  it('a new group is POSTed with its permissions and opens as the id Snipe-IT gave it', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /groups': { body: { status: 'success', payload: { id: 9, name: 'Aides' } } } })
+    expect(await createSnipeIt(config, fetch).saveGroup(null, 'Aides', { 'assets.view': '0' })).toEqual({ ok: true, id: 9 })
+    expect(requests.at(-1)).toEqual({ method: 'POST', path: '/groups', body: { name: 'Aides', permissions: '{"assets.view":"0"}' } })
+  })
+
+  it("deleting a group Snipe-IT refuses (it still has Users) throws Snipe-IT's reason", async () => {
+    const { fetch, requests } = fakeFetch({ 'DELETE /groups/2': { body: { status: 'success' } } })
+    await createSnipeIt(config, fetch).deleteGroup(2)
+    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/groups/2' })
+    const refused = fakeFetch({ 'DELETE /groups/3': { body: { status: 'error', messages: 'This group has users associated with it.' } } })
+    await expect(createSnipeIt(config, refused.fetch).deleteGroup(3)).rejects.toThrow('This group has users associated with it.')
+  })
+
+  it("a User is put in or taken out of one group, keeping their others; already so, nothing is sent", async () => {
+    const user = { id: 311, name: 'Jordan Reyes', permissions: {}, groups: { total: 2, rows: [{ id: 1, name: 'IT Staff' }, { id: 2, name: 'Library Aides' }] } }
+    const { fetch, requests } = fakeFetch({ '/users/311': { body: user }, 'PATCH /users/311': { body: { status: 'success' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.setGroupMember(311, 3, true)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [1, 2, 3] } })
+    expect(await snipeIt.setGroupMember(311, 1, false)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [2] } })
+    expect(await snipeIt.setGroupMember(311, 2, true)).toBe(false)
+    expect(requests.at(-1)?.method).toBe('GET')
+  })
+
+  it('the Users List can be filtered to one group', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('users', { filters: { group_id: '2' } })
+    expect(queries.at(-1)).toMatchObject({ group_id: '2' })
+  })
+
+  it("the Operator's own account and groups come from /users/me", async () => {
+    const { fetch } = fakeFetch({ '/users/me': { body: { id: 5, permissions: { superuser: '1' }, groups: { total: 1, rows: [{ id: 1, name: 'IT Staff' }] } } } })
+    expect(await createSnipeIt(config, fetch).operatorAccess()).toEqual({ id: 5, permissions: { superuser: '1' }, groups: [{ id: 1, name: 'IT Staff' }] })
   })
 })
 
@@ -2982,15 +3145,21 @@ describe('Accessory and Consumable checkout', () => {
   const ok = { body: { status: 'success', messages: 'Checked out.', payload: null } }
   const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
 
-  it('an Accessory goes to a User with its quantity and note', async () => {
-    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': ok })
-    await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 2, note: ' spare ' })
+  it("an Accessory goes to a User with its quantity and note, and the User's newest rows are read back as the ones written", async () => {
+    const row = (id: number, user: number) => ({ id, assigned_to: { id: user, name: 'x', type: 'user' }, note: null, created_at: null })
+    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': ok, '/accessories/7/checkedout': { body: { total: 4, rows: [row(9, 311), row(4, 311), row(8, 40), row(7, 311)] } } })
+    expect(await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 2, note: ' spare ' })).toEqual({ rowIds: [7, 9] })
     expect(posted(requests)).toEqual([{ method: 'POST', path: '/accessories/7/checkout', body: { checkout_to_type: 'user', assigned_user: 311, checkout_qty: 2, note: 'spare' } }])
   })
 
-  it('a Consumable names its User as assigned_to', async () => {
+  it("rows that can't be read back are no rows, not a failure: the Checkout went through", async () => {
+    const { fetch } = fakeFetch({ 'POST /accessories/7/checkout': ok })
+    expect(await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 1 })).toEqual({ rowIds: [] })
+  })
+
+  it('a Consumable names its User as assigned_to, and has no rows to come back', async () => {
     const { fetch, requests } = fakeFetch({ 'POST /consumables/3/checkout': ok })
-    await createSnipeIt(config, fetch).checkoutStock('consumables', 3, { userId: 311, qty: 1 })
+    expect(await createSnipeIt(config, fetch).checkoutStock('consumables', 3, { userId: 311, qty: 1 })).toEqual({ rowIds: [] })
     expect(posted(requests)).toEqual([{ method: 'POST', path: '/consumables/3/checkout', body: { assigned_to: 311, checkout_qty: 1 } }])
   })
 
@@ -3028,9 +3197,73 @@ describe('Accessory checkin', () => {
     await expect(createSnipeIt(config, fetch).returnAccessory(7, 999, 1)).rejects.toThrow('Not checked out to that User')
   })
 
-  it("a User's Accessories are counted per Accessory", async () => {
+  it("a User's Accessories are counted per Accessory, from unit rows (v8.8) or Accessory rows (earlier)", async () => {
     const acc = (id: number, name: string) => ({ id, name, available_actions: { checkin: true } })
     const { fetch } = fakeFetch({ '/users/311/accessories': { body: { total: 3, rows: [acc(7, 'Charger'), acc(7, 'Charger'), acc(8, 'Mouse')] } } })
     expect((await createSnipeIt(config, fetch).userAccessories(311)).map(({ name, count }) => [name, count])).toEqual([['Charger', 2], ['Mouse', 1]])
+    const unit = (id: number, accessory: number, name: string) => ({ id, accessory: { id: accessory, name }, name, available_actions: { checkin: false } })
+    const v88 = fakeFetch({ '/users/311/accessories': { body: { total: 3, rows: [unit(21, 7, 'Charger'), unit(25, 7, 'Charger'), unit(30, 8, 'Mouse')] } } })
+    expect((await createSnipeIt(config, v88.fetch).userAccessories(311)).map(({ id, count, can }) => [id, count, can.checkin])).toEqual([[7, 2, false], [8, 1, false]])
+  })
+
+  it('Check in everything returns each unit and seat one at a time, a line per thing, and carries on past a refusal', async () => {
+    const checkedIn = { body: { status: 'success', messages: 'Checked in.', payload: null } }
+    const unit = (id: number, accessory: number, name: string) => ({ id, accessory: { id: accessory, name }, name })
+    const seatRow = (id: number, license: number, name: string) => ({ id, license: { id: license, name }, name })
+    const seat = (id: number, user: number) => ({ id, assigned_user: { id: user, name: 'Jordan Reyes' }, assigned_asset: null, notes: null, updated_at: null })
+    const { fetch, requests } = fakeFetch({
+      '/users/311/accessories': { body: { total: 3, rows: [unit(21, 7, 'Charger'), unit(25, 7, 'Charger'), unit(30, 8, 'Mouse')] } },
+      '/users/311/licenses': { body: { total: 1, rows: [seatRow(2, 4, 'Office')] } },
+      '/accessories/7/checkedout': holders, '/accessories/8/checkedout': { body: { total: 1, rows: [row(30, 311, 'Jordan Reyes')] } },
+      'POST /accessories/2/checkin': checkedIn, 'POST /accessories/5/checkin': { body: { status: 'error', messages: 'Not allowed.', payload: null } }, 'POST /accessories/30/checkin': checkedIn,
+      '/licenses/4/seats': { body: { total: 2, rows: [seat(2, 311), seat(9, 40)] } }, 'POST /licenses/4/checkin': checkedIn,
+    })
+    expect(await createSnipeIt(config, fetch).returnAll(311, 'left')).toEqual([
+      { name: 'Charger', outcome: 'Checked in 1 of 2: Not allowed.', failed: true }, { name: 'Mouse', outcome: 'Checked in 1' }, { name: 'Office', outcome: 'Checked in 1' },
+    ])
+    expect(checkins(requests)).toEqual(['/accessories/2/checkin', '/accessories/5/checkin', '/accessories/30/checkin', '/licenses/4/checkin'])
+    expect(requests.at(-1)!.body).toEqual({ seat_id: 2, notes: 'left' })
+  })
+})
+
+describe('License seats', () => {
+  const ok = { body: { status: 'success', messages: 'Checked out.', payload: { id: 77 } } }
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
+  const seat = (id: number, user: number | null, name: string) => ({ id, assigned_user: user === null ? null : { id: user, name }, assigned_asset: user === null ? { id: 9, name } : null, notes: '<b>lab</b>', updated_at: { datetime: `2026-09-0${id} 10:00:00` } })
+  const seats = { body: { total: 3, rows: [seat(5, 311, 'Jordan Reyes'), seat(2, 311, 'Jordan Reyes'), seat(3, null, 'NOMMA-000009 (Chromebook)')] } }
+  const checkedIn = { body: { status: 'success', messages: 'Checked in.', payload: null } }
+
+  it('a seat goes to a User per Checkout, qty times, with the note as "notes"', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /licenses/4/checkout': ok })
+    expect(await createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 2, note: ' lab ' })).toEqual({ rowIds: [77, 77] })
+    expect(posted(requests)).toEqual([1, 2].map(() => ({ method: 'POST', path: '/licenses/4/checkout', body: { target_type: 'user', assigned_to: 311, notes: 'lab' } })))
+  })
+
+  it('a refusal partway says how many went through', async () => {
+    let n = 0
+    const { fetch } = fakeFetch({ 'POST /licenses/4/checkout': { body: () => (++n > 1 ? { status: 'error', messages: 'Not enough seats.', payload: null } : ok.body) } })
+    await expect(createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 3 })).rejects.toThrow('Checked out 1 of 3: Not enough seats.')
+  })
+
+  it('lists who holds each seat In use, by seat id, an Asset holder too', async () => {
+    const { fetch, queries } = fakeFetch({ '/licenses/4/seats': seats })
+    expect((await createSnipeIt(config, fetch).licenseHolders(4)).map((h) => [h.rowId, h.assignee.type, h.assignee.name, h.note])).toEqual([[2, 'user', 'Jordan Reyes', 'lab'], [3, 'asset', 'NOMMA-000009 (Chromebook)', 'lab'], [5, 'user', 'Jordan Reyes', 'lab']])
+    expect(queries[0]).toMatchObject({ status: 'assigned' })
+  })
+
+  it("returning frees that User's lowest seat; a User with none is refused before anything is sent", async () => {
+    const { fetch, requests } = fakeFetch({ '/licenses/4/seats': seats, 'POST /licenses/4/checkin': checkedIn })
+    await createSnipeIt(config, fetch).returnLicense(4, 311, 'done')
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/licenses/4/checkin', body: { seat_id: 2, notes: 'done' } }])
+    await expect(createSnipeIt(config, fetch).returnLicense(4, 999)).rejects.toThrow('Not checked out to that User')
+    expect(posted(requests)).toHaveLength(1)
+  })
+
+  it("a User's Licenses are counted per License, from seat rows (v8.8) or License rows (earlier)", async () => {
+    const seatRow = (id: number, license: number, name: string) => ({ id, license: { id: license, name }, name, available_actions: { checkin: true } })
+    const v88 = fakeFetch({ '/users/311/licenses': { body: { total: 3, rows: [seatRow(21, 4, 'Office'), seatRow(22, 4, 'Office'), seatRow(23, 6, 'Filter')] } } })
+    expect((await createSnipeIt(config, v88.fetch).userLicenses(311)).map(({ id, name, count }) => [id, name, count])).toEqual([[4, 'Office', 2], [6, 'Filter', 1]])
+    const v87 = fakeFetch({ '/users/311/licenses': { body: { total: 2, rows: [{ id: 4, name: 'Office', available_actions: { checkin: false } }, { id: 4, name: 'Office' }] } } })
+    expect((await createSnipeIt(config, v87.fetch).userLicenses(311)).map(({ id, count, can }) => [id, count, can.checkin])).toEqual([[4, 2, false]])
   })
 })

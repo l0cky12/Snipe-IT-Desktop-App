@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
 import { BRAND_DEFAULTS, HEX, type Branding, type BrandingInput } from './branding'
+import { SIDEBAR_DEFAULT, SIDEBAR_PAGES, type SidebarPage } from './sidebar'
 import { END_OF_DAY, later, parseCalendar, realTime, type CalendarEntry } from './calendar'
 import { FORMATS, type ExportFormat } from './report'
 import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
@@ -11,7 +12,7 @@ import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type
 export type { Branding, BrandingInput } from './branding'
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance; branding: Branding
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance; branding: Branding; sidebar: SidebarPage[]
   tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[]
   /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
   repairTypeId: number | null }
@@ -52,6 +53,8 @@ export type SettingsApi = {
   /** Opens a file dialog for a PNG icon; cancelling changes nothing. */
   pickIcon(): Promise<Settings>
   removeIcon(): Promise<Settings>
+  /** The sidebar's pages to show, on this PC; any order, kept in sidebar order. */
+  saveSidebar(input: SidebarPage[]): Promise<Settings>
   saveTempCheckout(input: TempCheckout): Promise<Settings>
   /** The School calendar box's text; throws "Line N: …" and saves nothing when a line is bad. */
   saveSchoolCalendar(text: string): Promise<Settings>
@@ -69,9 +72,15 @@ export type SettingsApi = {
 }
 /** A List as the Operator saved it. label names a drilled-into filter that has no filter box ("Checked out to …").
  * view: an Assets one's View (All when left out). */
-export type SavedReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[]; view?: AssetView }
+/** A List saved as a Saved Report: its search, filters, sort, Columns and, for Assets, its View. */
+export type ListReportQuery = { kind: ListKind; search: string; filters: Record<string, string>; label?: string; sort: { key: string; order: 'asc' | 'desc' } | null; columns: string[]; view?: AssetView }
+/** A Custom Asset Report saved as a template: its columns and filters (see CUSTOM_FILTERS). It has no search, sort or View. */
+export type CustomReportQuery = { kind: 'custom'; search: ''; filters: Record<string, string>; label?: undefined; sort: null; columns: string[]; view?: undefined }
+export type SavedReportQuery = ListReportQuery | CustomReportQuery
 // Re-saving and renaming leave its schedule be.
 export type SavedReport = SavedReportQuery & { id: string; name: string; schedule?: KeptSchedule }
+/** A Saved Report that opens as a List (every one but a Custom Asset Report template). */
+export type SavedListReport = Exclude<SavedReport, { kind: 'custom' }>
 /** No id: a new Saved Report. An id: re-saves that one. */
 export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
 /**
@@ -90,7 +99,7 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; branding?: Partial<BrandingInput>
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; branding?: Partial<BrandingInput>; sidebar?: SidebarPage[]
   release?: ReleaseCache; repairTypeId?: number | null
   tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string; automaticDay?: string }
 
@@ -100,6 +109,11 @@ const isStrings = (v: unknown, of: 'array' | 'record') =>
 function reportQuery(r: SavedReportInput): SavedReportQuery & { name: string } {
   const name = typeof r?.name === 'string' ? r.name.trim() : ''
   if (!name) throw new Error('Name the report.')
+  if (r.kind === 'custom') {
+    if (!isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || r.sort !== null || r.view !== undefined) throw new Error('Invalid report')
+    if (!r.columns.length) throw new Error('Choose at least one column.')
+    return { name, kind: 'custom', search: '', filters: Object.fromEntries(Object.entries(r.filters).filter(([, v]) => v)), sort: null, columns: [...r.columns] }
+  }
   const sorts: Record<string, string> | undefined = Object.hasOwn(LIST_SORTS, r.kind) ? LIST_SORTS[r.kind] : undefined
   if (!sorts || typeof r.search !== 'string' || !isStrings(r.filters, 'record') || !isStrings(r.columns, 'array') || (r.label !== undefined && typeof r.label !== 'string')
     || (r.sort !== null && !(Object.hasOwn(sorts, r.sort?.key) && ['asc', 'desc'].includes(r.sort.order)))
@@ -201,7 +215,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null,
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', sidebar: value.sidebar ?? SIDEBAR_DEFAULT, repairTypeId: value.repairTypeId ?? null,
       tempCheckout: tempCheckout(value.tempCheckout), schoolCalendar: value.schoolCalendar ?? [],
       branding: { ...BRAND_DEFAULTS, ...value.branding, icon: iconPath() && `data:image/png;base64,${readFileSync(iconFile).toString('base64')}` } }
   }
@@ -295,6 +309,12 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
       rmSync(iconFile, { force: true })
       return get()
     },
+    saveSidebar(sidebar: SidebarPage[]) {
+      if (!Array.isArray(sidebar) || !sidebar.every((p) => SIDEBAR_PAGES.includes(p))) throw new Error('Invalid sidebar pages')
+      // Kept in sidebar order, once each, so the sidebar never depends on the order the boxes were ticked.
+      write({ ...read(), sidebar: SIDEBAR_PAGES.filter((p) => sidebar.includes(p)) })
+      return get()
+    },
     /** The newer Snipe-IT release check's cache and hidden tag, on this PC (see createReleaseCheck). */
     release: (): ReleaseCache => read().release ?? {},
     saveRelease(release: ReleaseCache) {
@@ -364,6 +384,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
      * it can't skip a send that's just come due. Changing a schedule keeps its last send.
      */
     setSchedule(key: ScheduleKey, input: Schedule | null, since: Date) {
+      // The Custom Asset Report has no columns of its own to send; a template (a Saved Report) does.
+      if ((key as { builtIn?: unknown } | null)?.builtIn === 'custom') throw new Error('Save the Custom Asset Report as a template, then schedule the template.')
       const schedule = input && checkSchedule(input, takesRange(key))
       reschedule(key, (old) => schedule ? {
         ...schedule,

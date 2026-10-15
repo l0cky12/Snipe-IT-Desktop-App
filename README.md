@@ -60,6 +60,7 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 - **Activity Report**: every Checkout, Checkin, and edit in a date range, optionally narrowed to one record type (Assets, Licenses, Accessories, Consumables, Components, Users) and one action.
 - **Overdue**: every Overdue Asset, most late first, optionally only those whose Expected Checkin falls in a date range.
 - **Warranty expiring**: every Expiring Warranty (the next 90 days), soonest first, optionally within a date range.
+- **Custom Asset Report**: Snipe-IT's own Custom Asset Report, in the app. Tick which Asset fields (and Custom Fields) are its columns, then narrow by Company, Location, Default Location, Supplier, Asset Model, Manufacturer, Category, Status Label, Order number, Purchase cost, a date range on any of the Asset's dates, whether it's checked out, and whether Archived or deleted Assets are included. **Save report…** keeps it as a template under Saved Reports, where it can be emailed now or on a Schedule.
 
 **Export…** saves the table as a CSV, HTML or PDF file where you choose. HTML and PDF carry your organisation's icon, name and primary colour (see Branding), the date, the row count and your Report footer line; the PDF is landscape Letter with the footer line and page numbers on every page. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
 
@@ -95,6 +96,8 @@ Legacy `config.json` is no longer read. Enter those credentials in Settings, the
 Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report; **All records** (the boxes icon) lists every kind, adding Licenses, Accessories, Consumables, Components, Categories, Manufacturers, Suppliers, Departments, Companies and Status Labels. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Asset rows have Quick Actions: Checkin, Checkout and Status.
 
 **New …** on the Assets, Users, Locations, Licenses, Accessories, Consumables and Components Lists creates one; **Edit** and **Delete…** on its page (or the Asset sheet) change or remove it, and Delete asks first. Snipe-IT checks every save, and its reasons show beside the field they're about. An Asset's form includes its Asset Model's custom fields.
+
+Status Labels work the same way, from **Settings → Manage Status Labels** or **All records → Status Labels**: add one, or edit any (Snipe-IT's own "Ready to Deploy" and the rest included) by name, type, color and notes. They're kept in Snipe-IT, so a change is every Operator's. A label any Asset is on can't be deleted until those Assets move to another; its page counts them and lists them in one click.
 
 Opening any other row shows every field Snipe-IT has for it; a related record (its Location, Department, Manager…) links to its own page, and buttons open what belongs to it, such as a User's checked-out Assets or a Location's Assets and Users. An Asset's sheet has the same under **All fields**, custom fields included.
 

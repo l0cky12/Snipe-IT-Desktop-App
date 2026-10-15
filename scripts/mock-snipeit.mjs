@@ -90,6 +90,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
     // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
     last_checkout: holder ? { datetime: local(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
+    last_checkin: holder || i % 3 ? null : { datetime: local(new Date(Date.now() - (i + 2) * 36e5)) }, created_at: { datetime: `${day(-420 - i)} 09:00:00` },
+    updated_at: { datetime: local(new Date(Date.now() - i * 36e5)) }, deleted_at: null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -113,6 +115,9 @@ const money = (v) => (v === null || v === undefined || v === '' ? null : Number(
 // One row per checked-out unit of an Accessory, as Snipe-IT keeps them; a Checkin names the row.
 const accessoryCheckouts = [[1, 3], [1, 5], [1, 5], [2, 8]].map(([accessory, user], i) =>
   ({ id: i + 1, accessory, assigned_to: { id: users[user].id, name: users[user].name, type: 'user' }, note: null, created_at: { datetime: local(new Date(Date.now() - (9 - i) * 864e5)) } }))
+// A License's seats In use, as Snipe-IT keeps them (one row per seat; free_seats_count above counts the rest). A Checkin names the seat.
+const licenseSeats = [[1, 3], [1, 5], [3, 8]].map(([license, user], i) =>
+  ({ id: i + 1, license_id: license, assigned_user: { id: users[user].id, name: users[user].name }, assigned_asset: null, notes: null, updated_at: { datetime: local(new Date(Date.now() - (6 - i) * 864e5)) } }))
 const log = []
 // item is an Asset, or an Accessory or Consumable given as { id, name, type }.
 const act = (action_type, item, target, note = null, when = new Date(), operator = 'Demo Operator') =>
@@ -207,7 +212,7 @@ const lists = {
   hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model?.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model?.id === +v, category_id: (a, v) => a.category.id === +v,
-    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : !a.assigned_to && a.status_label.status_meta === 'deployable'),
+    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : v === 'Deleted' ? !!a.deleted_at : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model?.name ?? '', category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial ?? '',
     next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
     purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' }, archived: (a) => a.status_label.status_meta === 'archived' },
@@ -268,10 +273,15 @@ Object.assign(lists, {
 })
 lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
 lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department?.id === d.id) }))
-lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
-Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
+// As in Snipe-IT, a label any Asset is on can't be deleted.
+lists.statuslabels.rows = () => statuses.map((s) => {
+  const assets_count = tally(assets, (a) => a.status_label.id === s.id)
+  return { ...s, type: s.status_meta, assets_count, available_actions: { ...s.available_actions, delete: s.available_actions.delete && !assets_count } }
+})
+Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v,
+  rtd_location_id: (a, v) => a.rtd_location?.id === +v, order_number: (a, v) => a.order_number === v })
 // A User made in the app may have no Location or department.
-Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
+Object.assign(lists.users.filters, { group_id: (u, v) => u.groups.rows.some((g) => g.id === +v), company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
 // Snipe-IT's audit routes: next audit within its Audit warning setting (30 days here), or past; never Archived Assets.
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
@@ -300,11 +310,13 @@ maintenances.push(...Array.from({ length: 24 }, (_, i) => {
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
 const fieldset = { id: 1, name: 'Chromebooks', fields: [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1', type: 'text', format: 'MAC', required: 0, field_values_array: null }] }
 for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fieldset.id, name: fieldset.name } : null
+// Every Custom Field (GET /fields), for the Custom Asset Report's column picker.
+lists.fields = { rows: () => fieldset.fields }
 // The kinds the app only deletes are kept here too, so a delete takes them out of their List.
 const store = { hardware: assets, users, locations, models, categories, manufacturers, suppliers, departments, companies, statuslabels: statuses, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
 const required = { hardware: ['asset_tag', 'model_id', 'status_id'], users: ['first_name', 'username'], locations: ['name'], licenses: ['name', 'seats', 'category_id'],
-  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'] }
+  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'], statuslabels: ['name', 'type'] }
 const refs = { model_id: ['model', models], status_id: ['status_label', statuses], location_id: ['location', locations], rtd_location_id: ['rtd_location', locations], parent_id: ['parent', locations],
   category_id: ['category', categories], manufacturer_id: ['manufacturer', manufacturers], supplier_id: ['supplier', suppliers], company_id: ['company', companies], department_id: ['department', departments] }
 function saveRecord(kind, body, row) {
@@ -328,6 +340,7 @@ function saveRecord(kind, body, row) {
   }
   if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
   if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? target.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
+  if (kind === 'statuslabels') Object.assign(target, { status_type: target.type, status_meta: target.type, available_actions: target.available_actions ?? actions })
   if (!row) store[kind].push(target)
   return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
 }
@@ -373,8 +386,8 @@ const routes = [
   [/^(users\/me|users\/selectlist|suppliers\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store|(accessories|consumables)\/\d+\/checkout|accessories\/\d+\/checkin)$/, ['POST']],
-  [/^(accessories\/\d+\/checkedout|users\/\d+\/accessories)$/, ['GET']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store|(accessories|consumables|licenses)\/\d+\/checkout|(accessories|licenses)\/\d+\/checkin)$/, ['POST']],
+  [/^(accessories\/\d+\/checkedout|licenses\/\d+\/seats|users\/\d+\/(accessories|licenses))$/, ['GET']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -404,7 +417,7 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' }, groups: groupsOf(limited ? [] : [1]) })
   if (path === 'maintenance-types') return limited ? send(refused, 403) : send(listPage({ rows: () => maintenanceTypeRows, search: (t) => text(t.name) }, url.searchParams))
   if (path === 'maintenances' && req.method === 'POST') {
     const item = assets.find((a) => a.id === body.asset_id)
@@ -450,16 +463,30 @@ createServer(async (req, res) => {
   }
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
-    if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
+    // Like Snipe-IT: the list counts each group's Users, a single group doesn't (users_count 0), and one with Users won't delete.
+    const members = (g) => users.filter((u) => u.groups.rows.some((x) => x.id === g.id)).length
+    if (path === 'groups' && req.method === 'POST') {
+      if (!body.name) return fail({ name: ['The name field is required.'] })
+      if (groups.some((x) => x.name === body.name)) return fail({ name: ['The name has already been taken.'] })
+      const g = { id: Math.max(0, ...groups.map((x) => x.id)) + 1, name: body.name, permissions: JSON.parse(body.permissions ?? '{}') }
+      groups.push(g)
+      return send({ status: 'success', messages: 'Created.', payload: { ...g, users_count: 0 } })
+    }
+    if (path === 'groups') return send(listPage({ rows: () => groups.map((g) => ({ ...g, users_count: members(g) })) }, url.searchParams))
     const g = groups.find((x) => x.id === Number(path.split('/')[1]))
     if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
+    if (req.method === 'DELETE') {
+      if (members(g)) return send({ status: 'error', messages: 'This group has users associated with it and cannot be deleted.', payload: null })
+      groups.splice(groups.indexOf(g), 1)
+      return send({ status: 'success', messages: 'Deleted.', payload: null })
+    }
     if (req.method === 'PATCH') {
       if (!body.name) return fail({ name: ['The name field is required.'] })
       let permissions
       try { permissions = body.permissions && JSON.parse(body.permissions) } catch { return fail({ permissions: ['The permissions must be JSON.'] }) }
       Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
     }
-    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
+    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : { ...g, users_count: 0 })
   }
   if (path === 'imports' || path.startsWith('imports/')) {
     if (limited) return send(refused, 403)
@@ -516,6 +543,7 @@ createServer(async (req, res) => {
     if (!row) return send({ status: 'error', messages: 'Not found' }, 404)
     if (req.method === 'PATCH' || req.method === 'PUT') return send(saveRecord(m[1], body, row))
     if (m[1] === 'hardware' && row.assigned_to) return fail('This asset is currently checked out, and cannot be deleted. Check it in first.')
+    if (m[1] === 'statuslabels' && assets.some((x) => x.status_label.id === row.id)) return fail('Status label is in use and cannot be deleted.')
     if (m[1] === 'users' && assets.some((x) => x.assigned_to?.type === 'user' && x.assigned_to.id === row.id)) return fail('This user has items assigned and could not be deleted.')
     store[m[1]].splice(store[m[1]].indexOf(row), 1)
     return send({ status: 'success', messages: 'Deleted.', payload: null })
@@ -583,8 +611,39 @@ createServer(async (req, res) => {
     return send({ status: 'success', messages: 'Checked in.', payload: null })
   }
   if ((m = path.match(/^accessories\/(\d+)\/checkedout$/))) return send(listPage({ rows: () => accessoryCheckouts.filter((c) => c.accessory === +m[1]) }, url.searchParams))
+  // v8.8+: one row per unit, its id the checkout row, the Accessory under "accessory".
   if ((m = path.match(/^users\/(\d+)\/accessories$/))) {
-    const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => accessories.find((a) => a.id === c.accessory))
+    const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => {
+      const a = accessories.find((a) => a.id === c.accessory)
+      return { id: c.id, accessory: { id: a.id, name: a.name }, name: a.name, note: c.note, created_at: c.created_at, assigned_to: c.assigned_to.id, checkin_backto: 'user', available_actions: { checkin: true } }
+    })
+    return send({ total: rows.length, rows })
+  }
+  // License seats: one goes to a User per Checkout (the next Free one), and comes back by seat id. v8.8+ lists a User's as seat rows.
+  if ((m = path.match(/^licenses\/(\d+)\/checkout$/))) {
+    const license = licenses.find((l) => l.id === +m[1])
+    const user = users.find((u) => u.id === body.assigned_to)
+    if (!license) return send({ status: 'error', messages: 'Not found' }, 404)
+    if (body.target_type !== 'user' || !user) return fail('User does not exist.')
+    if (license.free_seats_count < 1) return fail('There are not enough free seats available.')
+    license.free_seats_count--
+    const seat = { id: Math.max(0, ...licenseSeats.map((s) => s.id)) + 1, license_id: license.id, assigned_user: { id: user.id, name: user.name }, assigned_asset: null, notes: body.notes ?? null, updated_at: { datetime: local(new Date()) } }
+    licenseSeats.push(seat)
+    act('checkout', { id: license.id, name: license.name, type: 'license' }, user, body.notes)
+    return send({ status: 'success', messages: 'License checked out successfully.', payload: seat })
+  }
+  if ((m = path.match(/^licenses\/(\d+)\/checkin$/))) {
+    const seat = licenseSeats.find((s) => s.id === body.seat_id && s.license_id === +m[1])
+    if (!seat) return fail('License seat not found.')
+    const license = licenses.find((l) => l.id === seat.license_id)
+    licenseSeats.splice(licenseSeats.indexOf(seat), 1)
+    license.free_seats_count++
+    act('checkin from', { id: license.id, name: license.name, type: 'license' }, { ...seat.assigned_user, type: 'user' }, body.notes)
+    return send({ status: 'success', messages: 'License checked in successfully.', payload: { ...seat, assigned_user: null } })
+  }
+  if ((m = path.match(/^licenses\/(\d+)\/seats$/))) return send(listPage({ rows: () => licenseSeats.filter((s) => s.license_id === +m[1]) }, url.searchParams))
+  if ((m = path.match(/^users\/(\d+)\/licenses$/))) {
+    const rows = licenseSeats.filter((s) => s.assigned_user.id === +m[1]).map((s) => ({ id: s.id, license: { id: s.license_id, name: licenses.find((l) => l.id === s.license_id).name }, name: licenses.find((l) => l.id === s.license_id).name, assigned_user: s.assigned_user.id, available_actions: { checkin: true } }))
     return send({ total: rows.length, rows })
   }
   // One record of any other kind by id.

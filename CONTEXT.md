@@ -16,10 +16,10 @@ _Avoid_: ID, barcode (the barcode *encodes* the Asset Tag)
 The manufacturer's serial number of an Asset. Not guaranteed unique across manufacturers.
 
 **Checkout**:
-Assigning an Asset to an Assignee, or handing a quantity of an Accessory or Consumable to a User, recorded in Snipe-IT.
+Assigning an Asset to an Assignee, or handing a quantity of an Accessory or Consumable, or seats of a License, to a User, recorded in Snipe-IT.
 
 **Checkin**:
-Returning a checked-out Asset to inventory, clearing its Assignee; or taking back units of an Accessory from the User who has them. A Consumable is never checked in.
+Returning a checked-out Asset to inventory, clearing its Assignee; or taking back units of an Accessory, or seats of a License, from the User who has them. A Consumable is never checked in.
 
 **Assignee**:
 Whoever an Asset is currently checked out to: a **User** or a **Location**.
@@ -63,7 +63,7 @@ _Avoid_: EOL (alone), retirement
 The IT staff member running the app. Each Operator uses their own Snipe-IT API key, so History shows who did each Checkout/Checkin.
 
 **Permission Group**:
-A named set of Snipe-IT permissions a User inherits by belonging to it. Only a Superuser may change a group or a User's groups.
+A named set of Snipe-IT permissions a User inherits by belonging to it. Only a Superuser may make, change or delete a group, or change a User's groups. Snipe-IT deletes only a group nobody is in.
 
 **Superuser**:
 A Snipe-IT account that may manage Permission Groups and permissions. Distinct from Operator: an Operator may or may not be one.
@@ -85,11 +85,15 @@ The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, a
 _Avoid_: audit log
 
 **Report**:
-A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances, Duplicates) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
+A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances, Duplicates, the Custom Asset Report) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
 _Avoid_: export (the export is the file a Report is saved to)
 
 **Duplicates**:
 The Report of every Asset whose Serial or Asset Tag another Asset shares, ignoring case and outer spaces. A blank Serial is never a duplicate.
+
+**Custom Asset Report**:
+Snipe-IT's Custom Asset Report, run from the app: the Operator ticks which Asset fields (and Custom Fields) are its columns and narrows the Assets by Company, Location, Default Location, Supplier, Asset Model, Manufacturer, Category, Status Label, Order number, Purchase cost, a date range on any of the Asset's dates, whether checked out, and whether Archived or deleted Assets are included. Saved under a name it's a Saved Report (what Snipe-IT calls a report template).
+_Avoid_: custom report (alone), template (say Saved Report)
 
 **Record type**:
 The kind of thing an Activity Report entry is about: an Asset, License, Accessory, Consumable, Component, or User.
@@ -155,8 +159,12 @@ The note a Workflow writes in Snipe-IT, starting with the Workflow's name in squ
 _Avoid_: tag (alone; an Asset Tag is the identifier), marker
 
 **Bulk checkout**:
-The Workflow for handing Assets to one User, never a Location: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. An Asset already checked out to someone else is moved to this User only if the Operator chooses Move to this User; otherwise it's stopped. Its Running list shows what was checked out this session.
+The Workflow for handing Assets to one User, never a Location: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. An Asset already checked out to someone else is moved to this User only if the Operator chooses Move to this User; otherwise it's stopped. Beside the scans, a Handout gives the User an Accessory, Consumable or License seat. Its Running list shows what was checked out this session.
 _Avoid_: bulk issue, issue (say Checkout)
+
+**Handout**:
+An Accessory, Consumable or License seat given to the User from Bulk checkout, with a quantity, without scanning (stock has no Asset Tag): found by name under "Also hand out", and sent at once with the Workflow note. Each one found stays as a button for the next Users until forgotten, so the same charger goes to thirty students in thirty clicks. It's a row in the Running list and can be undone like a scan, except a Consumable, which is never checked in.
+_Avoid_: stock checkout, kit (Snipe-IT's predefined kits aren't used)
 
 **Bulk return**:
 The Workflow for taking many Assets back: pick the one Location returns go to, then scan Assets one at a time. Each checked-out one is checked in at once, with no confirm, set to Ready to Deploy and sent to that Location. Assets that aren't checked out are reported and left alone. Its Running list shows what came back this session and from whom.
@@ -229,14 +237,14 @@ Creating or updating Records from a CSV through Snipe-IT's own importer, with ea
 _Avoid_: upload, sync
 
 **Saved Report**:
-A List with its filters, Columns and, for Assets, its View, saved under a name by the Operator, which can be emailed to the Operator.
-_Avoid_: custom report, saved search
+A List with its filters, Columns and, for Assets, its View, or a Custom Asset Report with its columns and filters, saved under a name by the Operator, which can be emailed to the Operator.
+_Avoid_: saved search, template
 
 **Schedule**:
 When a Saved Report or built-in Report emails itself to the Operator: daily, weekly or monthly at a set time. An Activity Report, Overdue, Last audited, Temp checkout history or Maintenances Schedule also sets its dates relative to each send (the previous 1, 7 or 30 days, or since the last send). A built-in Report's Schedule sends every Location and Category. A send missed while the app was closed goes out once at the next launch; a failed send tries again each hour.
 
 **License**:
-A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise. Its **Minimum quantity** is the fewest Free seats it should have. A License is **Running out** when its Free seats drop below its Minimum quantity, or reach 0 when none is set; a Minimum quantity of 0 silences it.
+A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise. Seats are checked out to a User one at a time (Snipe-IT picks the next Free one), and each comes back on its own Checkin. Its **Minimum quantity** is the fewest Free seats it should have. A License is **Running out** when its Free seats drop below its Minimum quantity, or reach 0 when none is set; a Minimum quantity of 0 silences it.
 
 **Accessory**:
 A stocked item tracked by quantity, not individually (a charger, a keyboard). Each unit is **Checked out** or **Available**. Checked out to a User a quantity at a time; each unit comes back on its own Checkin.
@@ -249,6 +257,9 @@ A stocked part installed into Assets (RAM, a drive). Each unit is **In use** or 
 
 **Holding**:
 A User who currently has at least one Asset, License seat, or Accessory checked out. Consumables don't count; they never come back.
+
+**Check in everything**:
+The User page's Bulk Action: every Accessory unit and License seat the User holds comes back, one Checkin at a time with one note, with a result per Accessory or License and nothing rolled back. Their Assets are left to Bulk return, which gives each a Location and Status Label.
 
 **Custom Field**:
 An extra field an Asset carries because its Asset Model asks for it (a MAC Address, a Cart). An Asset Model's set of them is its **Fieldset**; choosing another Asset Model swaps them.

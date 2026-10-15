@@ -112,13 +112,16 @@ export type MaintenanceChange = { supplierId?: number | null; cost?: string | nu
 export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; fromStatusId?: number; fromLocationId?: number | null; expectedCheckin?: string; note?: string }
 const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
-/** Accessories and Consumables go to a User only, qty at a time (see CONTEXT.md). */
-export type StockKind = 'accessories' | 'consumables'
+/** Accessories, Consumables and License seats go to a User only, qty at a time (see CONTEXT.md). */
+export type StockKind = 'accessories' | 'consumables' | 'licenses'
 export type StockCheckout = { userId: number; qty: number; note?: string }
-/** One checked-out unit of an Accessory: rowId is Snipe-IT's checkout row, which a Checkin names; since is when it went out. */
+/** One checked-out unit of an Accessory, or one License seat in use: rowId is Snipe-IT's checkout row (the seat), which
+ *  a Checkin names; since is when it went out (for a seat, when it last changed hands: Snipe-IT keeps no more). */
 export type AccessoryCheckout = { rowId: number; assignee: Assignee; since: string; note: string }
-/** An Accessory a User holds, and how many of it. */
+/** An Accessory (or License) a User holds, and how many units (seats) of it. */
 export type HeldAccessory = { id: number; name: string; count: number; can: Can }
+/** How one Accessory or License fared in Check in everything. */
+export type ReturnedLine = { name: string; outcome: string; failed?: true }
 
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
@@ -166,11 +169,14 @@ export type RecordKind = Exclude<ListKind, 'activity'>
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
 /** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
 /** remaining: how many an Accessory or Consumable has left to check out. */
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; can: Can }
+/** assets: how many Assets a Status Label is on. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; assets?: number; can: Can }
 /** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
 export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
-/** A permission group and what it grants (key → '1' granted, '0' not). */
-export type Group = { id: number; name: string; permissions: Record<string, string> }
+/** A permission group, how many Users are in it, and what it grants (key → '1' granted, '0' not). */
+export type Group = { id: number; name: string; members: number; permissions: Record<string, string> }
+/** A permission group in the list of them. */
+export type GroupSummary = { id: number; name: string; members: number }
 
 // Snipe-IT's permission keys (config/permissions.php), by area, as its group editor shows them.
 export const PERMISSIONS: [area: string, keys: string[]][] = [
@@ -342,12 +348,12 @@ const olderThan = (a: readonly number[], b: readonly number[]) => {
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history, Damaged,
  * and Duplicates: every Asset whose Serial or Asset Tag another Asset shares. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged', 'duplicates'] as const
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged', 'duplicates', 'custom'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
   statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', maintenances: 'Maintenances',
-  tempHistory: 'Temp checkout history', damaged: 'Damaged', duplicates: 'Duplicate Serials and Asset Tags',
+  tempHistory: 'Temp checkout history', damaged: 'Damaged', duplicates: 'Duplicate Serials and Asset Tags', custom: 'Custom Asset Report',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory']
@@ -365,17 +371,17 @@ export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> 
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
  * end, next audit, last audit, End of life, Maintenance start, Checkout day). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS. search: Snipe-IT's own
- * search of the Activity Report (notes, among other things).
+ * search of the Activity Report (notes, among other things). columns, filters: the Custom Asset Report's (see CUSTOM_COLUMN_GROUPS, CUSTOM_FILTERS).
  */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string }
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string; columns?: string[]; filters?: Record<string, string> }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
 /** The kinds the app can create, edit and delete. */
-export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components'] as const
+export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'statuslabels'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 /** The kinds the app can delete: every List of Records, including the kinds it doesn't edit. */
-export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies', 'statuslabels'] as const
+export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies'] as const
 export type DeleteKind = (typeof DELETE_KINDS)[number]
 /** Where a choice's options come from (see names()). */
 export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels' | 'locations' | 'suppliers' | 'companies' | 'manufacturers'
@@ -388,7 +394,7 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
  * when: the checkbox this field needs checked; until then it's off: blank, not required, and its value isn't the Operator's.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox'
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox' | 'color'
   required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean; when?: string
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
@@ -479,7 +485,7 @@ type RawAsset = {
   location: Named
   rtd_location: Named
   // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
-  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
+  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null; email?: string | null } | null
   last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
@@ -492,6 +498,22 @@ type RawAsset = {
   // Formatted text, e.g. "1,234.56"; null when none.
   purchase_cost?: string | number | null
   available_actions?: unknown
+  // The rest the Custom Asset Report reads.
+  company?: Named | null
+  manufacturer?: Named | null
+  supplier?: Named | null
+  model_number?: string | null
+  order_number?: string | null
+  // Rendered to inline HTML by Snipe-IT (see markdownOf).
+  notes?: string | null
+  // "36 months", or null.
+  warranty_months?: string | null
+  created_at?: { date?: string; datetime?: string } | null
+  updated_at?: { date?: string; datetime?: string } | null
+  deleted_at?: { date?: string; datetime?: string } | null
+  last_checkin?: { date?: string; datetime?: string } | null
+  // Under each Custom Field's name: its db column and the Asset's value.
+  custom_fields?: Record<string, { field?: string; value?: unknown } | null>
 }
 type RawActivity = {
   id: number
@@ -809,7 +831,7 @@ const ACTIVITY_COLUMNS = ['When', 'Action', 'Operator', 'Record type', 'Item', '
 const LISTS: { [K in ListKind]: { path: string; filters: Record<string, 'id' | readonly string[]>; row: (raw: never, today: Date) => ListRows[K] } } = {
   assets: { path: '/hardware', filters: { status_id: 'id', location_id: 'id', model_id: 'id', category_id: 'id', user_id: 'id', manufacturer_id: 'id', supplier_id: 'id', company_id: 'id', status: ['Deployed', 'RTD'], missing: MISSING_FIELDS }, row: toAsset },
   users: {
-    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', activated: ['0', '1'] },
+    path: '/users', filters: { location_id: 'id', department_id: 'id', company_id: 'id', group_id: 'id', activated: ['0', '1'] },
     row: (r: RawUser) => ({ id: r.id, name: r.name, username: r.username ?? '', email: r.email ?? '', department: nameOf(r.department), location: nameOf(r.location), assets: r.assets_count ?? 0 }),
   },
   locations: {
@@ -888,6 +910,10 @@ export const FORMS: Record<EditKind, FormField[]> = {
   accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')], 'min_qty'),
   consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
+  statuslabels: [
+    txt('name', 'Name', { required: true }), { key: 'type', label: 'Type', type: 'choice', required: true, options: ['deployable', 'pending', 'undeployable', 'archived'] },
+    { key: 'color', label: 'Color', type: 'color' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
 }
 
 /** The kinds a Selection can be bulk edited for. */
@@ -966,6 +992,82 @@ function fieldsOf(raw: RawRow): Field[] {
 }
 
 // `today` is injectable so the date rules can be tested with a fixed date.
+/**
+ * The Custom Asset Report (Snipe-IT's Reports → Custom Asset Report): the Operator picks which Asset fields are its
+ * columns and narrows the Assets, then exports or emails it, or saves it as a template (a Saved Report). Column keys are
+ * Snipe-IT's own checkbox names, so a template reads like its form; a Custom Field's key is its db column (_snipeit_…).
+ */
+export type CustomColumn = { key: string; label: string }
+const stamp = (d: { date?: string; datetime?: string } | null | undefined) => (d?.datetime ?? d?.date)?.slice(0, 16) ?? ''
+// ponytail: the fields an Asset row carries. Snipe-IT's form also offers the Assignee's manager, department, title, phone
+// and address, and each Location's address; those need a request per User or Location, so add them when asked for.
+const CUSTOM_COLUMNS: { group: string; key: string; label: string; cell: (a: RawAsset, baseUrl: string) => string }[] = [
+  { group: 'Asset', key: 'id', label: 'ID', cell: (a) => String(a.id) },
+  { group: 'Asset', key: 'company', label: 'Company', cell: (a) => nameOf(a.company) },
+  { group: 'Asset', key: 'asset_tag', label: 'Asset Tag', cell: (a) => a.asset_tag },
+  { group: 'Asset', key: 'asset_name', label: 'Name', cell: (a) => a.name ?? '' },
+  { group: 'Asset', key: 'manufacturer', label: 'Manufacturer', cell: (a) => nameOf(a.manufacturer) },
+  { group: 'Asset', key: 'model', label: 'Asset Model', cell: (a) => nameOf(a.model) },
+  { group: 'Asset', key: 'model_number', label: 'Model No.', cell: (a) => text(a.model_number) },
+  { group: 'Asset', key: 'category', label: 'Category', cell: (a) => nameOf(a.category) },
+  { group: 'Asset', key: 'serial', label: 'Serial', cell: (a) => a.serial ?? '' },
+  { group: 'Asset', key: 'purchase_date', label: 'Purchase date', cell: (a) => dayOf(a.purchase_date) ?? '' },
+  { group: 'Asset', key: 'purchase_cost', label: 'Purchase cost', cell: (a) => plainNumber(a.purchase_cost) },
+  { group: 'Asset', key: 'eol', label: 'End of life', cell: (a) => dayOf(a.asset_eol_date) ?? '' },
+  { group: 'Asset', key: 'warranty', label: 'Warranty (months)', cell: (a) => plainNumber(a.warranty_months) },
+  { group: 'Asset', key: 'warranty_expires', label: 'Warranty ends', cell: (a) => dayOf(a.warranty_expires) ?? '' },
+  { group: 'Asset', key: 'order', label: 'Order number', cell: (a) => text(a.order_number) },
+  { group: 'Asset', key: 'supplier', label: 'Supplier', cell: (a) => nameOf(a.supplier) },
+  { group: 'Asset', key: 'location', label: 'Location', cell: (a) => nameOf(a.location) },
+  { group: 'Asset', key: 'rtd_location', label: 'Default Location', cell: (a) => nameOf(a.rtd_location) },
+  // As Snipe-IT's own export writes it: the label, then its type in brackets.
+  { group: 'Asset', key: 'status', label: 'Status Label', cell: (a) => (a.status_label ? `${a.status_label.name}${a.status_label.status_meta ? ` (${a.status_label.status_meta})` : ''}` : '') },
+  { group: 'Asset', key: 'checkout_date', label: 'Checked out', cell: (a) => stamp(a.last_checkout) },
+  { group: 'Asset', key: 'checkin_date', label: 'Last checkin', cell: (a) => stamp(a.last_checkin) },
+  { group: 'Asset', key: 'expected_checkin', label: 'Expected Checkin', cell: (a) => expectedCheckinOf(a.expected_checkin) ?? '' },
+  { group: 'Asset', key: 'created_at', label: 'Created', cell: (a) => stamp(a.created_at) },
+  { group: 'Asset', key: 'updated_at', label: 'Updated', cell: (a) => stamp(a.updated_at) },
+  { group: 'Asset', key: 'deleted_at', label: 'Deleted', cell: (a) => stamp(a.deleted_at) },
+  { group: 'Asset', key: 'last_audit_date', label: 'Last audited', cell: (a) => dayOf(a.last_audit_date) ?? '' },
+  { group: 'Asset', key: 'next_audit_date', label: 'Next audit', cell: (a) => dayOf(a.next_audit_date) ?? '' },
+  { group: 'Asset', key: 'notes', label: 'Notes', cell: (a) => markdownOf(a.notes ?? '') },
+  { group: 'Asset', key: 'url', label: 'URL', cell: (a, baseUrl) => `${baseUrl}/hardware/${a.id}` },
+  { group: 'Checked out to', key: 'assigned_to', label: 'Assignee', cell: (a) => a.assigned_to?.name ?? '' },
+  { group: 'Checked out to', key: 'username', label: 'Username', cell: (a) => a.assigned_to?.username ?? '' },
+  { group: 'Checked out to', key: 'email', label: 'Email', cell: (a) => a.assigned_to?.email ?? '' },
+  { group: 'Checked out to', key: 'employee_num', label: 'Employee No.', cell: (a) => a.assigned_to?.employee_number ?? '' },
+]
+const CUSTOM_CELLS = new Map(CUSTOM_COLUMNS.map((c) => [c.key, c]))
+/** The columns to pick from, grouped as Snipe-IT's form groups them; the Custom Fields come from customFieldList(). */
+export const CUSTOM_COLUMN_GROUPS: { name: string; columns: CustomColumn[] }[] = ['Asset', 'Checked out to']
+  .map((name) => ({ name, columns: CUSTOM_COLUMNS.filter((c) => c.group === name).map(({ key, label }) => ({ key, label })) }))
+const CUSTOM_FIELD_KEY = /^_snipeit_[a-z0-9_]+$/
+const customFieldValue = (a: RawAsset, key: string) => String(Object.values(a.custom_fields ?? {}).find((c) => c?.field === key)?.value ?? '')
+// The Asset dates the Custom Asset Report narrows by (<name>_from and <name>_to, "YYYY-MM-DD", both included), and each one's
+// day. Checked out isn't one: its range matches any Checkout in it (see customReport), as Snipe-IT's report reads its log.
+const CUSTOM_DATES: Record<string, (a: RawAsset) => string | null> = {
+  purchase: (a) => dayOf(a.purchase_date), created: (a) => dayOf(a.created_at), checkin: (a) => dayOf(a.last_checkin), expected_checkin: (a) => dayOf(a.expected_checkin),
+  eol: (a) => dayOf(a.asset_eol_date), last_audit: (a) => dayOf(a.last_audit_date), next_audit: (a) => dayOf(a.next_audit_date), updated: (a) => dayOf(a.updated_at),
+}
+/** The date ranges' names, by their key (purchase: Purchase date, …), in the form's order. */
+export const CUSTOM_DATE_LABELS: Record<string, string> = {
+  purchase: 'Purchase date', created: 'Created', checkout: 'Checked out', checkin: 'Last checkin', expected_checkin: 'Expected Checkin',
+  eol: 'End of life', last_audit: 'Last audited', next_audit: 'Next audit', updated: 'Updated',
+}
+/**
+ * The Custom Asset Report's filters, in Snipe-IT's names. An id, or the Order number as typed, Snipe-IT applies; the rest
+ * the app applies after reading the Assets, as Snipe-IT's own report applies them in SQL the API doesn't offer: a date
+ * range per CUSTOM_DATES, a Purchase cost range, Archived Assets left out, checked out or not, and deleted Assets included or alone.
+ */
+export const CUSTOM_FILTERS: Record<string, 'id' | 'text' | 'date' | 'number' | readonly string[]> = {
+  company_id: 'id', location_id: 'id', rtd_location_id: 'id', supplier_id: 'id', model_id: 'id', manufacturer_id: 'id', category_id: 'id', status_id: 'id',
+  order_number: 'text',
+  ...Object.fromEntries(Object.keys(CUSTOM_DATE_LABELS).flatMap((d) => [[`${d}_from`, 'date'], [`${d}_to`, 'date']])),
+  purchase_cost_min: 'number', purchase_cost_max: 'number',
+  exclude_archived: ['1'], assignment: ['assigned', 'unassigned'], deleted: ['include', 'only'],
+}
+const CUSTOM_FILTER_FORMS = { id: /^[1-9]\d*$/, text: /^[^\r\n]{1,100}$/, date: /^\d{4}-\d{2}-\d{2}$/, number: /^\d{1,12}(\.\d{1,2})?$/ }
+
 export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, today = () => new Date()) {
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
@@ -1043,6 +1145,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
   }
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
+
+  // A User's own permissions (granted or denied; inherited ones aren't sent) and groups, from Snipe-IT's User.
+  const accessOf = (user: { permissions?: unknown; groups?: { rows?: Named[] } | null } | SnipeItError): UserAccess => {
+    if (isError(user)) throw new Error(reason(user.messages))
+    const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
+    return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+  }
 
   // The Asset with exactly this Asset Tag, or null; no search fallback, so a Workflow scan never acts on a near match.
   async function assetByTag(tag: string): Promise<Asset | null> {
@@ -1280,6 +1389,55 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (isError(result)) throw new Error(reason(result.messages))
   }
 
+  // Who holds each seat of a License that's In use, by seat id. A seat can be an Asset's; the app checks out to Users only.
+  async function licenseHolders(id: number): Promise<AccessoryCheckout[]> {
+    checkId(id, 'License')
+    const rows = await allRows<{ id: number; assigned_user: Named | null; assigned_asset: Named | null; notes: string | null; updated_at: { datetime: string } | null }>(`/licenses/${id}/seats?status=assigned`)
+    return rows.flatMap((r) => {
+      const to: Assignee | null = r.assigned_user ? { type: 'user', id: r.assigned_user.id, name: r.assigned_user.name } : r.assigned_asset ? { type: 'asset', id: r.assigned_asset.id, name: r.assigned_asset.name } : null
+      return to ? [{ rowId: r.id, assignee: to, since: r.updated_at?.datetime ?? '', note: plainText(r.notes ?? '') }] : []
+    }).sort((a, b) => a.rowId - b.rowId)
+  }
+
+  // Frees one seat of a License (seatId: a licenseHolders row's). Snipe-IT's note field here is "notes".
+  async function checkinLicense(licenseId: number, seatId: number, note?: string): Promise<void> {
+    checkId(licenseId, 'License')
+    checkId(seatId, 'seat')
+    const result = await request(`/licenses/${licenseId}/checkin`, { seat_id: seatId, ...(note?.trim() && { notes: note.trim() }) })
+    if (isError(result)) throw new Error(reason(result.messages))
+  }
+
+  // What a User holds, counted per Accessory. v8.8+ lists each unit (its checkout row, with the Accessory under
+  // "accessory"); earlier v8s list the Accessory itself once per unit.
+  async function userAccessories(userId: number): Promise<HeldAccessory[]> {
+    checkId(userId, 'User')
+    const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return heldOf(body.rows, (r) => (r.accessory as NonNullable<Named> | undefined) ?? r)
+  }
+
+  // The Licenses a User has a seat of, counted per License. v8.8+ lists each seat (with its License under "license");
+  // earlier v8s list the License itself once per seat.
+  async function userLicenses(userId: number): Promise<HeldAccessory[]> {
+    checkId(userId, 'User')
+    const body = await request<{ rows: RawRow[] }>(`/users/${userId}/licenses`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return heldOf(body.rows, (r) => (r.license as NonNullable<Named> | undefined) ?? r)
+  }
+
+  // Rows that name one thing per unit held (an Accessory per unit, a License per seat), counted per thing: of() says
+  // which row field is the thing (the row itself, or the Accessory or License a unit row names).
+  function heldOf(rows: RawRow[], of: (r: RawRow) => NonNullable<Named>): HeldAccessory[] {
+    const held = new Map<number, HeldAccessory>()
+    for (const r of rows) {
+      const it = of(r)
+      const h = held.get(it.id)
+      if (h) h.count++
+      else held.set(it.id, { id: it.id, name: it.name, count: 1, can: canFrom(r.available_actions) })
+    }
+    return [...held.values()]
+  }
+
   // The custom fields an Asset Model's Assets have (its fieldset's), as form fields; none when it has no fieldset.
   async function customFields(modelId: number): Promise<FormField[]> {
     checkId(modelId, 'Asset Model')
@@ -1294,6 +1452,83 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       ...(c.field_values_array?.length ? { type: c.type === 'checkbox' ? 'choices' as const : 'choice' as const, options: c.field_values_array }
         : { type: c.type === 'textarea' ? 'textarea' as const : c.format === 'DATE' ? 'date' as const : c.format === 'NUMERIC' ? 'number' as const : 'text' as const }),
     }))
+  }
+
+  // Every Custom Field, for the Custom Asset Report's column picker: its db column (the column's key) and its name.
+  async function customFieldList(): Promise<CustomColumn[]> {
+    try {
+      return (await allRows<{ name: string; db_column_name: string }>('/fields')).map((f) => ({ key: f.db_column_name, label: f.name }))
+    } catch (e) {
+      if ((e as Partial<Failure>).kind !== 'forbidden') throw e
+      // A key without customfields.view still reads each Asset's fields, so the Assets name them. ponytail: every Asset
+      // is read (as the Report reads them anyway); a field no Asset has a value for yet is missed.
+      const seen = new Map<string, string>()
+      for (const a of await allRows<RawAsset>('/hardware')) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) seen.set(c.field, label)
+      return [...seen].map(([key, label]) => ({ key, label }))
+    }
+  }
+
+  // The Custom Asset Report. Snipe-IT applies the id and Order number filters; the rest are applied here (see CUSTOM_FILTERS).
+  // Archived Assets come from their own list unless left out or a Status Label is asked for (as Duplicates reads them,
+  // Snipe-IT's "show archived in list" being off); deleted ones from theirs (status=Deleted, the only way the list gives
+  // them) when asked for, alone for Only deleted. columns and filters arrive from the screen over IPC.
+  async function customReport(columns: unknown, filters: unknown): Promise<Report> {
+    if (!Array.isArray(columns) || !columns.length) throw new Error('Choose at least one column.')
+    for (const c of columns) if (typeof c !== 'string' || !(CUSTOM_CELLS.has(c) || CUSTOM_FIELD_KEY.test(c))) throw new Error(`Unknown column: ${c}`)
+    if (typeof filters !== 'object' || filters === null) throw new Error('Invalid filters')
+    const f: Record<string, string> = {}
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === '' || value === undefined) continue
+      const form = Object.hasOwn(CUSTOM_FILTERS, key) ? CUSTOM_FILTERS[key] : undefined
+      if (!form || typeof value !== 'string' || !(typeof form === 'string' ? CUSTOM_FILTER_FORMS[form].test(value) : form.includes(value))) throw new Error(`Invalid filter: ${key}`)
+      f[key] = value
+    }
+    const params = new URLSearchParams(Object.entries(f).filter(([key]) => CUSTOM_FILTERS[key] === 'id' || CUSTOM_FILTERS[key] === 'text'))
+    const list = (status?: string) => allRows<RawAsset>(`/hardware?${params}${status ? `&status=${status}` : ''}`)
+    const lists = f.deleted === 'only' ? [list('Deleted')]
+      : [list(), ...(!f.exclude_archived && !f.status_id ? [list('Archived')] : []), ...(f.deleted ? [list('Deleted')] : [])]
+    // Each list in id order (see allRows), merged in id order; an Asset on two lists (a shared Archived one) counts once.
+    const byId = new Map<number, RawAsset>()
+    for (const rows of await Promise.all(lists)) for (const a of rows) byId.has(a.id) || byId.set(a.id, a)
+    const rows = [...byId.values()].sort((a, b) => a.id - b.id)
+    // A Checked out range matches any Checkout in it, not only the last (an Asset out in September and again in October is
+    // in September's), as Snipe-IT's report does: the log's Checkouts, read down to the range's start.
+    let checkedOut: Set<number> | null = null
+    if (f.checkout_from || f.checkout_to) {
+      checkedOut = new Set()
+      for await (const r of activitySince(f.checkout_from, 'checkout')) {
+        const day = dayOf(r.created_at)
+        if (r.item?.type === 'asset' && day && (!f.checkout_to || day <= f.checkout_to)) checkedOut.add(r.item.id)
+      }
+    }
+    const kept = rows.filter((a) => {
+      if (checkedOut && !checkedOut.has(a.id)) return false
+      if (f.exclude_archived && [a.status_label?.status_type, a.status_label?.status_meta].includes('archived')) return false
+      if (f.assignment === 'assigned' && !a.assigned_to) return false
+      if (f.assignment === 'unassigned' && a.assigned_to) return false
+      // A blank cost or date is never in a range, as Snipe-IT's own report has it.
+      const cost = a.purchase_cost === null || a.purchase_cost === undefined ? null : Number(plainNumber(a.purchase_cost))
+      if (f.purchase_cost_min && !(cost !== null && cost >= Number(f.purchase_cost_min))) return false
+      if (f.purchase_cost_max && !(cost !== null && cost <= Number(f.purchase_cost_max))) return false
+      for (const [name, dayOfAsset] of Object.entries(CUSTOM_DATES)) {
+        const [from, to] = [f[`${name}_from`], f[`${name}_to`]]
+        if (!from && !to) continue
+        const day = dayOfAsset(a)
+        if (!day || (from && day < from) || (to && day > to)) return false
+      }
+      return true
+    })
+    // A Custom Field column is headed with the field's name: as the Assets carry it, or else from Snipe-IT's list of
+    // fields. A key no Asset has and the list can't name (the Operator's key may not read /fields) stays as the key.
+    const fieldNames = new Map<string, string>()
+    for (const a of kept) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) fieldNames.set(c.field, label)
+    if (columns.some((c) => CUSTOM_FIELD_KEY.test(c) && !fieldNames.has(c))) for (const c of await customFieldList().catch(() => [])) fieldNames.set(c.key, c.label)
+    const baseUrl = config.baseUrl.replace(/\/+$/, '')
+    return {
+      columns: columns.map((c) => CUSTOM_CELLS.get(c)?.label ?? fieldNames.get(c) ?? c),
+      rows: kept.slice(0, REPORT_MAX).map((a) => columns.map((c) => CUSTOM_CELLS.get(c)?.cell(a, baseUrl) ?? customFieldValue(a, c))),
+      capped: kept.length > REPORT_MAX,
+    }
   }
 
   // The Activity Report newest first, a page at a time: the next page is asked for only when the caller reads on past this
@@ -1445,9 +1680,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
     // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited and End of life read every Asset.
     // Duplicates groups every Asset by Serial, then by Asset Tag, ignoring case and outer spaces; a blank Serial matches nothing.
-    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search }: ReportQuery = {}): Promise<Report> {
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search, columns, filters }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
+      if (kind === 'custom') return customReport(columns, filters ?? {})
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
@@ -1638,7 +1874,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
       return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }),
-        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }) }
+        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }),
+        ...(kind === 'licenses' && { remaining: count(body.free_seats_count) }),
+        ...(kind === 'statuslabels' && { assets: count(body.assets_count) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -1669,7 +1907,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const f = byKey.get(key)
         if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
         if (f?.newOnly && id !== null) continue
-        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
+        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date' || f?.type === 'color'
         body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
       }
       if (kind === 'users' && id === null) {
@@ -1687,6 +1925,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const path = LISTS[kind].path
+      if (kind === 'statuslabels' && id !== null) {
+        // Snipe-IT's edit needs the type every time and clears whatever else of these it isn't sent, so what wasn't changed is sent as it is.
+        const now = await request<RawRow>(`${path}/${id}`)
+        if (isError(now)) throw new Error(reason(now.messages))
+        body.type ??= now.type
+        if (!('color' in body)) body.color = now.color ?? null
+        body.show_in_nav = !!now.show_in_nav
+        body.default_label = !!now.default_label
+      }
       const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
       if (!isError(result)) {
         const saved = id ?? result.payload?.id
@@ -1705,6 +1952,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     customFields,
+    customFieldList,
 
     // Deletes a record; Snipe-IT refuses (e.g. an Asset still checked out) with its reason.
     async remove(kind: DeleteKind, id: number): Promise<void> {
@@ -1763,22 +2011,26 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A User's own permissions and groups; anyone who may view the User may see them.
     async userAccess(id: number): Promise<UserAccess> {
       checkId(id, 'User')
-      const user = await request<{ permissions?: unknown; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
-      if (isError(user)) throw new Error(reason(user.messages))
-      const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
-      return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+      return accessOf(await request(`/users/${id}`))
+    },
+    // The Operator's own account and groups, so a change that could take away their own access asks first.
+    async operatorAccess(): Promise<UserAccess & { id: number }> {
+      const me = await request<{ id: number; permissions?: unknown; groups?: { rows?: Named[] } | null }>('/users/me')
+      return { ...accessOf(me), id: (me as { id: number }).id }
     },
 
-    // Every permission group (superuser only).
-    async groups(): Promise<StatusLabel[]> {
-      return (await allRows<StatusLabel>('/groups')).map(({ id, name }) => ({ id, name }))
+    // Every permission group (superuser only), with how many Users are in each.
+    async groups(): Promise<GroupSummary[]> {
+      return (await allRows<GroupSummary & { users_count?: number | null }>('/groups')).map(({ id, name, users_count }) => ({ id, name, members: count(users_count) }))
     },
 
+    // Snipe-IT's single group doesn't count its Users (users_count is always 0 there), so the Users List filtered to it does.
     async group(id: number): Promise<Group> {
       checkId(id, 'group')
-      const g = await request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`)
+      const [g, users] = await Promise.all([request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`), request<{ total?: number }>(`/users?group_id=${id}&limit=1`)])
       if (isError(g)) throw new Error(reason(g.messages))
-      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
+      if (isError(users)) throw new Error(reason(users.messages))
+      return { id: g.id, name: g.name, members: count(users.total), permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
     },
 
     // A User's groups, all at once: the ones listed are kept or added, the rest removed.
@@ -1790,17 +2042,37 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
-    // A group's name and what it grants. Only permission keys and grant/not reach Snipe-IT, which drops keys it doesn't know.
-    async saveGroup(id: number, name: string, permissions: Record<string, string>): Promise<SaveResult> {
-      checkId(id, 'group')
+    // Puts a User in a group or takes them out, keeping their other groups (Snipe-IT sets a User's groups all at once).
+    // Whether that changed anything: they may already have been in it, or not.
+    async setGroupMember(userId: number, groupId: number, member: boolean): Promise<boolean> {
+      checkId(userId, 'User')
+      checkId(groupId, 'group')
+      const ids = accessOf(await request(`/users/${userId}`)).groups.map((g) => g.id)
+      if (ids.includes(groupId) === member) return false
+      const result = await request(`/users/${userId}`, { groups: member ? [...ids, groupId] : ids.filter((g) => g !== groupId) }, 'PATCH')
+      if (isError(result)) throw new Error(reason(result.messages))
+      return true
+    },
+
+    // A group's name and what it grants; id null makes a new group. Only permission keys and grant/not reach Snipe-IT, which
+    // drops keys it doesn't know (and grants every permission to a new group sent none, so the screen always sends them).
+    async saveGroup(id: number | null, name: string, permissions: Record<string, string>): Promise<SaveResult> {
+      if (id !== null) checkId(id, 'group')
       if (typeof name !== 'string' || typeof permissions !== 'object' || permissions === null) throw new Error('Invalid group')
       for (const [k, v] of Object.entries(permissions)) if (!/^[a-z_]+(\.[a-z_]+)*$/.test(k) || (v !== '1' && v !== '0')) throw new Error(`Invalid permission: ${k}`)
-      const result = await request(`/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, 'PATCH')
-      if (!isError(result)) return { ok: true, id }
+      const result = await request<{ payload?: { id?: number } | null }>(id === null ? '/groups' : `/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, id === null ? 'POST' : 'PATCH')
+      if (!isError(result)) return { ok: true, id: id ?? Number(result.payload?.id) }
       const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
       return fieldMessages
         ? { ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)])) }
         : { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
+    },
+
+    // Deletes a group; Snipe-IT (v8.4.1+) refuses one that still has Users in it, with its reason.
+    async deleteGroup(id: number): Promise<void> {
+      checkId(id, 'group')
+      const result = await request(`/groups/${id}`, {}, 'DELETE')
+      if (isError(result)) throw new Error(reason(result.messages))
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.
@@ -2075,31 +2347,73 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // Snipe-IT refuses more than it has left, with its reason. An Accessory goes as checkout_to_type user, which newer
     // Snipe-ITs need and older ones ignore; a Consumable names its User as assigned_to.
-    async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<void> {
-      if (kind !== 'accessories' && kind !== 'consumables') throw new Error(`Unknown record: ${kind}`)
+    // Resolves to the checkout rows (seats) it wrote, so a Workflow's Undo can check in exactly those: an Accessory's are
+    // read back (Snipe-IT answers with the last one only); a Consumable's never come back, so none.
+    async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<{ rowIds: number[] }> {
+      if (kind !== 'accessories' && kind !== 'consumables' && kind !== 'licenses') throw new Error(`Unknown record: ${kind}`)
       checkId(id, 'record')
       checkId(userId, 'User')
       if (!Number.isInteger(qty) || qty < 1) throw new Error(`Invalid quantity: ${qty}`)
+      const text = note?.trim()
+      // A License gives one seat per Checkout (Snipe-IT picks the next Free one), so qty seats take qty Checkouts; a
+      // refusal partway says how many went through. Its note is "notes" (v8's checkout route).
+      if (kind === 'licenses') {
+        const rowIds: number[] = []
+        for (let i = 0; i < qty; i++) {
+          const result = await request<{ payload?: { id?: number } | null }>(`/licenses/${id}/checkout`, { target_type: 'user', assigned_to: userId, ...(text && { notes: text }) })
+          if (isError(result)) throw new Error(i ? `Checked out ${i} of ${qty}: ${reason(result.messages)}` : reason(result.messages))
+          if (typeof result.payload?.id === 'number') rowIds.push(result.payload.id)
+        }
+        return { rowIds }
+      }
       const to = kind === 'accessories' ? { checkout_to_type: 'user', assigned_user: userId } : { assigned_to: userId }
-      const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(note?.trim() && { note: note.trim() }) })
+      const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(text && { note: text }) })
       if (isError(result)) throw new Error(reason(result.messages))
+      if (kind === 'consumables') return { rowIds: [] }
+      // The User's newest qty rows are the ones just written (rows are numbered as they're made).
+      const theirs = (await accessoryHolders(id).catch((): AccessoryCheckout[] => [])).filter((h) => h.assignee.type === 'user' && h.assignee.id === userId)
+      return { rowIds: theirs.slice(-qty).map((h) => h.rowId) }
     },
 
     accessoryHolders,
     checkinAccessory,
+    licenseHolders,
+    checkinLicense,
 
-    // What a User holds; Snipe-IT lists an Accessory once per unit, so they're counted here.
-    async userAccessories(userId: number): Promise<HeldAccessory[]> {
+    userAccessories,
+    userLicenses,
+
+    // Checks in everything a User holds that comes back: each Accessory unit and License seat, one Checkin at a time,
+    // nothing rolled back (a Bulk Action); one line per thing says what happened. Assets are Bulk return's; Consumables
+    // never come back.
+    async returnAll(userId: number, note?: string): Promise<ReturnedLine[]> {
       checkId(userId, 'User')
-      const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
-      if (isError(body)) throw new Error(reason(body.messages))
-      const held = new Map<number, HeldAccessory>()
-      for (const r of body.rows) {
-        const h = held.get(r.id)
-        if (h) h.count++
-        else held.set(r.id, { id: r.id, name: r.name, count: 1, can: canFrom(r.available_actions) })
+      const [accessories, licenses] = await Promise.all([userAccessories(userId), userLicenses(userId)])
+      const lines: ReturnedLine[] = []
+      const mine = (h: AccessoryCheckout) => h.assignee.type === 'user' && h.assignee.id === userId
+      const each = async (name: string, rows: AccessoryCheckout[], checkin: (rowId: number) => Promise<void>) => {
+        let n = 0
+        try {
+          for (const h of rows) {
+            await checkin(h.rowId)
+            n++
+          }
+          lines.push({ name, outcome: `Checked in ${n}` })
+        } catch (e) {
+          lines.push({ name, outcome: `Checked in ${n} of ${rows.length}: ${(e as Error).message}`, failed: true })
+        }
       }
-      return [...held.values()]
+      for (const a of accessories) await each(a.name, (await accessoryHolders(a.id)).filter(mine), (rowId) => checkinAccessory(rowId, note))
+      for (const l of licenses) await each(l.name, (await licenseHolders(l.id)).filter(mine), (seatId) => checkinLicense(l.id, seatId, note))
+      return lines
+    },
+
+    // A User hands back one seat of a License: their seat is looked up (Snipe-IT checks a seat in by its id) and freed.
+    async returnLicense(licenseId: number, userId: number, note?: string): Promise<void> {
+      checkId(userId, 'User')
+      const theirs = (await licenseHolders(licenseId)).filter((h) => h.assignee.type === 'user' && h.assignee.id === userId)
+      if (!theirs.length) throw new Error('Not checked out to that User')
+      await checkinLicense(licenseId, theirs[0].rowId, note)
     },
 
     // A User hands back qty of an Accessory: their checkout rows are checked in oldest first. Short, it checks in what
