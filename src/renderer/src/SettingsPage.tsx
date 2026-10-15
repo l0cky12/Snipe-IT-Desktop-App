@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { Appearance, Background, MailInput, Settings, SettingsInput, TempCheckout } from '../../main/config'
+import { SIDEBAR_PAGES, type SidebarPage } from '../../main/sidebar'
 import { formatCalendar } from '../../main/calendar'
 import { ScheduledReports } from './ReportsView'
 
-// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
+// The Sidebar section's labels, as the sidebar shows them (ListView's listName would import App back into this page).
+const sidebarName: Record<SidebarPage, string> = { assets: 'Assets', users: 'Users', locations: 'Locations', models: 'Asset Models', activity: 'Activity Report', licenses: 'Licenses', accessories: 'Accessories', consumables: 'Consumables', workflows: 'Workflows', import: 'Import', dashboard: 'Dashboard', reports: 'Reports' }
+
+// onSaved: the connection may have changed, so the session starts over. onAppearance: only the look or the sidebar did.
 /** Plain HTTP to another machine, LAN included: the token and data cross the network readable. Allowed, but warned (ADR 0002). */
 export function unencryptedRemote(baseUrl: string) {
   let url: URL
@@ -187,6 +191,13 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
         setAppearanceError('')
         window.settings.saveAppearance(appearance).then(onAppearance, (err: Error) => setAppearanceError(err.message))
       }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </section>
+    <section className="settings-section">
+      <h2>Sidebar</h2><p className="dim">On this PC only. The pages the sidebar lists; every page is still on All records, and Import only shows when your token may import.</p>
+      {SIDEBAR_PAGES.map((p) => <label key={p} className="check"><input type="checkbox" checked={settings.sidebar.includes(p)} onChange={(e) => {
+        setAppearanceError('')
+        window.settings.saveSidebar(e.target.checked ? [...settings.sidebar, p] : settings.sidebar.filter((s) => s !== p)).then(onAppearance, (err: Error) => setAppearanceError(err.message))
+      }} /><span>{sidebarName[p]}</span></label>)}
     </section>
     {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}
     <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import type { SidebarPage } from './sidebar'
 import { sendMail } from './mail'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
@@ -200,6 +201,7 @@ app.whenReady().then(() => {
     nativeTheme.themeSource = saved.appearance
     return saved
   })
+  handle('settings:saveSidebar', (_e, input: SidebarPage[]) => store.saveSidebar(input))
   // Never clears the session: only Settings that point at another server do that.
   handle('settings:saveRepairs', (_e, input: string) => store.saveRepairs(input))
   handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())

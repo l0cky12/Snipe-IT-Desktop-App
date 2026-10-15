@@ -256,6 +256,17 @@ it('follows the system appearance until one is chosen, and keeps the choice acro
   expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
 })
 
+it('lists the stock sidebar until pages are chosen, keeps them in sidebar order across a restart, and refuses unknown pages', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().sidebar).toEqual(['assets', 'users', 'locations', 'models', 'activity', 'workflows', 'import', 'dashboard', 'reports'])
+  store.save(input)
+  expect(store.saveSidebar(['reports', 'licenses', 'assets', 'assets']).sidebar).toEqual(['assets', 'licenses', 'reports'])
+  expect(createSettingsStore(path, storage, '0.1.0').get()).toMatchObject({ hasToken: true, sidebar: ['assets', 'licenses', 'reports'] })
+  expect(store.saveSidebar([]).sidebar).toEqual([])
+  expect(() => store.saveSidebar(['settings'] as never)).toThrow('Invalid sidebar pages')
+  expect(() => store.saveSidebar('assets' as never)).toThrow('Invalid sidebar pages')
+})
+
 it('the end-of-day time is 2:50 pm until changed, must be a real HH:MM, and is kept across a restart', () => {
   const { path, storage, store } = setup()
   expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50', reminder: true, automatic: false, automaticAt: '15:50' })
