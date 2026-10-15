@@ -82,11 +82,13 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
             )}
           </div>
           {asking && (
-            <span className="confirm" role="alertdialog" aria-label={`Remove yourself from ${asking.name}?`}>
-              <span>Remove yourself from {asking.name}? If your superuser comes from it, you can't manage groups from here any more.</span>
-              <button className="danger" autoFocus disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== asking.id))}>Remove</button>
-              <button className="quiet" disabled={busy} onClick={() => setAsking(null)}>Cancel</button>
-            </span>
+            <div className="actions">
+              <span className="confirm" role="alertdialog" aria-label={`Remove yourself from ${asking.name}?`}>
+                <span>Remove yourself from {asking.name}? If your superuser comes from it, you can't manage groups from here any more.</span>
+                <button className="danger" autoFocus disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== asking.id))}>Remove</button>
+                <button className="quiet" disabled={busy} onClick={() => setAsking(null)}>Cancel</button>
+              </span>
+            </div>
           )}
           <div className="k">Permissions of their own</div>
           <p className="dim">What each group grants is under All records → Permission groups.</p>
