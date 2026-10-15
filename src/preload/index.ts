@@ -4,6 +4,7 @@ import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi, WorkflowsApi } from '../main/index'
 import type { ReleaseApi } from '../main/release'
 import type { ReminderApi } from '../main/reminder'
+import type { ExportApi } from '../main/report'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -88,6 +89,9 @@ contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const exporter: ExportApi = { save: call('export:save') }
+contextBridge.exposeInMainWorld('exporter', exporter)
 
 const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
 contextBridge.exposeInMainWorld('releases', releases)

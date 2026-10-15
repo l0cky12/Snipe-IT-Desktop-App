@@ -61,7 +61,7 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 - **Overdue**: every Overdue Asset, most late first, optionally only those whose Expected Checkin falls in a date range.
 - **Warranty expiring**: every Expiring Warranty (the next 90 days), soonest first, optionally within a date range.
 
-**Export CSV…** saves the table as a CSV file where you choose. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
+**Export…** saves the table as a CSV, HTML or PDF file where you choose. HTML and PDF carry your organisation's icon, name and primary colour (see Branding), the date, the row count and your Report footer line; the PDF is landscape Letter with the footer line and page numbers on every page. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
 
 ## Permissions
 

@@ -4,7 +4,8 @@ import { editable } from './RecordView'
 import { AssetSheet, AuditForm, CheckoutForm, NOT_ALLOWED, auditedResult, StatusChip, checkinReason, checkoutReason, keyPlace, type KeyPlace, type SheetForm, type SheetProps } from './App'
 import { BulkEditForm } from './RecordForm'
 import { PrintLabel } from './AssetCodes'
-import { FerpaConfirm, saveCsv } from './ReportsView'
+import { ExportConfirm, saveExport } from './ReportsView'
+import type { ExportFormat } from '../../main/report'
 import { cellText, exportTable, LIST_COLUMNS, shownColumns, viewColumns, type AnyColumn } from '../../main/export'
 import type { SavedReport } from '../../main/config'
 
@@ -311,7 +312,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const [selectingAll, setSelectingAll] = useState<'asking' | 'fetching' | null>(null)
   const selectEpoch = useRef(0)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  // Export CSV: asking for the FERPA confirmation, or fetching every matching row.
+  // Export…: asking which file (and, with student information, for the FERPA confirmation), or fetching every matching row.
   const [exporting, setExporting] = useState<'asking' | 'fetching' | null>(null)
   const [editing, setEditing] = useState(false)
   // The Checkout… or Checkin… form open under the Selection bar (Assets only).
@@ -432,13 +433,13 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
   const runForm = (action: BulkAction) => (setBulkForm(null), onBulk(action, selectionRun()))
   const auditSelection = (o: AuditOptions) => (setAuditing(false), onBulk(auditAction(o), selectionRun()))
   // The List as shown, every matching row up to the Report row cap; saved where the Operator chooses.
-  async function exportCsv() {
+  async function exportAs(format: ExportFormat) {
     setExporting('fetching')
     try {
       const { rows, capped } = await window.snipeIt.exportList(kind, listQuery(kind, { view, search, filters, sort }))
       const table = exportTable(kind, showing, rows)
-      saveCsv(listName[kind], table.columns, table.rows)
-      setMessage({ text: capped ? `Exported the first ${rows.length.toLocaleString()} rows; filter the List for the rest.` : `Exported ${rows.length.toLocaleString()} rows` })
+      if (await saveExport(format, listName[kind], table.columns, table.rows))
+        setMessage({ text: capped ? `Exported the first ${rows.length.toLocaleString()} rows; filter the List for the rest.` : `Exported ${rows.length.toLocaleString()} rows` })
     } catch (e) {
       setMessage({ text: (e as Error).message, error: true })
     }
@@ -566,9 +567,8 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
           <div className="actions">
             <button className={`quiet${customizing ? ' on' : ''}`} onClick={() => setCustomizing((c) => !c)} aria-expanded={customizing}>Columns</button>
             <button className={`quiet${naming !== null ? ' on' : ''}`} onClick={() => setNaming((n) => (n === null ? saved?.name ?? '' : null))} aria-expanded={naming !== null}>Save report…</button>
-            <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={holdsStudentInfo(kind) ? exporting === 'asking' : undefined}
-              onClick={() => (holdsStudentInfo(kind) ? setExporting((x) => (x ? null : 'asking')) : exportCsv())}>
-              {exporting === 'fetching' ? 'Exporting…' : holdsStudentInfo(kind) ? 'Export CSV…' : 'Export CSV'}
+            <button className="quiet" disabled={!total || exporting === 'fetching'} aria-expanded={exporting === 'asking'} onClick={() => setExporting((x) => (x ? null : 'asking'))}>
+              {exporting === 'fetching' ? 'Exporting…' : 'Export…'}
             </button>
             <button className="quiet" onClick={() => (reload(), panelAsset && onOpenAsset(panelAsset.id))} disabled={loading}>Refresh</button>
             {editable(kind) && <button onClick={() => onNew(kind)}>New {singular(kind)}</button>}
@@ -664,7 +664,7 @@ export function ListView({ kind, drill, report, assetView, baseUrl, statusLabels
               </div>
             )}
           </div>
-          {exporting === 'asking' && <FerpaConfirm rows={Math.min(total, REPORT_MAX)} onExport={exportCsv} onCancel={() => setExporting(null)} />}
+          {exporting === 'asking' && <ExportConfirm ferpa={holdsStudentInfo(kind)} rows={Math.min(total, REPORT_MAX)} onExport={exportAs} onCancel={() => setExporting(null)} />}
           {message.text && <p className={message.error ? 'message error' : 'message list-message'} role={message.error ? 'alert' : 'status'}>{message.text}</p>}
           {page?.tempError && <p className="message error" role="alert">Couldn't mark Temp checkouts: {page.tempError}</p>}
           {bulkForm && selection.size > 0 && kind === 'assets' && (
