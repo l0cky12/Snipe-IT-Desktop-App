@@ -166,7 +166,8 @@ export type RecordKind = Exclude<ListKind, 'activity'>
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
 /** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
 /** remaining: how many an Accessory or Consumable has left to check out. */
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; can: Can }
+/** assets: how many Assets a Status Label is on. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; assets?: number; can: Can }
 /** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
 export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
 /** A permission group and what it grants (key → '1' granted, '0' not). */
@@ -372,10 +373,10 @@ export type ReportQuery = { from?: string; to?: string; itemType?: string; actio
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
 /** The kinds the app can create, edit and delete. */
-export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components'] as const
+export const EDIT_KINDS = ['assets', 'users', 'locations', 'licenses', 'accessories', 'consumables', 'components', 'statuslabels'] as const
 export type EditKind = (typeof EDIT_KINDS)[number]
 /** The kinds the app can delete: every List of Records, including the kinds it doesn't edit. */
-export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies', 'statuslabels'] as const
+export const DELETE_KINDS = [...EDIT_KINDS, 'models', 'categories', 'manufacturers', 'suppliers', 'departments', 'companies'] as const
 export type DeleteKind = (typeof DELETE_KINDS)[number]
 /** Where a choice's options come from (see names()). */
 export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels' | 'locations' | 'suppliers' | 'companies' | 'manufacturers'
@@ -388,7 +389,7 @@ export type NamesKind = 'models' | 'categories' | 'departments' | 'statuslabels'
  * when: the checkbox this field needs checked; until then it's off: blank, not required, and its value isn't the Operator's.
  */
 export type FormField = {
-  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox'
+  key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'email' | 'password' | 'choice' | 'choices' | 'checkbox' | 'color'
   required?: boolean; choices?: NamesKind; options?: string[]; from?: string; newOnly?: boolean; when?: string
 }
 /** A record's form and its current values ('' for none); a new record's values are all ''. */
@@ -888,6 +889,10 @@ export const FORMS: Record<EditKind, FormField[]> = {
   accessories: stockForm('categories:accessory', [txt('model_number', 'Model No.')], 'min_qty'),
   consumables: stockForm('categories:consumable', [txt('item_no', 'Item No.'), txt('model_number', 'Model No.')]),
   components: stockForm('categories:component', [txt('serial', 'Serial')]),
+  statuslabels: [
+    txt('name', 'Name', { required: true }), { key: 'type', label: 'Type', type: 'choice', required: true, options: ['deployable', 'pending', 'undeployable', 'archived'] },
+    { key: 'color', label: 'Color', type: 'color' }, { key: 'notes', label: 'Notes', type: 'textarea' },
+  ],
 }
 
 /** The kinds a Selection can be bulk edited for. */
@@ -1638,7 +1643,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
       return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }),
-        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }) }
+        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }),
+        ...(kind === 'statuslabels' && { assets: count(body.assets_count) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -1669,7 +1675,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         const f = byKey.get(key)
         if ((!f && !(kind === 'assets' && /^_snipeit_[a-z0-9_]+$/.test(key))) || typeof value !== 'string') throw new Error(`Invalid field: ${key}`)
         if (f?.newOnly && id !== null) continue
-        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date'
+        const blankIsNone = f?.type === 'choice' || f?.type === 'number' || f?.type === 'date' || f?.type === 'color'
         body[key] = f?.type === 'checkbox' ? value === '1' : value === '' && blankIsNone ? null : value
       }
       if (kind === 'users' && id === null) {
@@ -1687,6 +1693,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
         }
       }
       const path = LISTS[kind].path
+      if (kind === 'statuslabels' && id !== null) {
+        // Snipe-IT's edit needs the type every time and clears whatever else of these it isn't sent, so what wasn't changed is sent as it is.
+        const now = await request<RawRow>(`${path}/${id}`)
+        if (isError(now)) throw new Error(reason(now.messages))
+        body.type ??= now.type
+        if (!('color' in body)) body.color = now.color ?? null
+        body.show_in_nav = !!now.show_in_nav
+        body.default_label = !!now.default_label
+      }
       const result = await request<{ status?: string; payload?: { id?: number } | null }>(id === null ? path : `${path}/${id}`, body, id === null ? 'POST' : 'PATCH')
       if (!isError(result)) {
         const saved = id ?? result.payload?.id

@@ -11,7 +11,8 @@ export function unencryptedRemote(baseUrl: string) {
   return url.protocol === 'http:' && !['localhost', '[::1]'].includes(url.hostname) && !/^127(\.\d+){3}$/.test(url.hostname)
 }
 
-export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
+// onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
+export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void; onStatusLabels: () => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -178,6 +179,10 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'repairs' && notes}
+    {settings.hasToken && <section className="settings-section">
+      <h2>Status Labels</h2><p className="dim">Kept in Snipe-IT, so a change is every Operator's.</p>
+      <button type="button" onClick={onStatusLabels}>Manage Status Labels →</button>
+    </section>}
     <section className="settings-section">
       <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
       <label htmlFor="appearance">Theme</label>

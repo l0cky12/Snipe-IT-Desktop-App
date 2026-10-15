@@ -251,6 +251,10 @@ function FieldInput({ field: f, value, error, names, disabled, blank = f.require
   const common = { id: `f-${f.key}`, value, required: f.required, disabled, 'aria-invalid': !!error || undefined, 'aria-describedby': error ? `e-${f.key}` : undefined }
   if (f.type === 'checkbox') return <div className="choices"><input {...common} type="checkbox" value="1" checked={value === '1'} onChange={(e) => onChange(e.target.checked ? '1' : '')} /></div>
   if (f.type === 'textarea') return <textarea {...common} rows={3} onChange={(e) => onChange(e.target.value)} />
+  // A color picker always holds a color, so none is a button until one is picked.
+  if (f.type === 'color') return value
+    ? <div className="actions"><input {...common} type="color" onChange={(e) => onChange(e.target.value)} /><button type="button" className="quiet" disabled={disabled} onClick={() => onChange('')}>No color</button></div>
+    : <div className="actions"><button {...common} type="button" className="quiet" onClick={() => onChange('#808080')}>Pick a color…</button></div>
   if (f.type === 'choices') {
     const picked = value.split(',').map((v) => v.trim()).filter(Boolean)
     const toggle = (o: string) => onChange((picked.includes(o) ? picked.filter((p) => p !== o) : [...picked, o]).join(', '))
@@ -351,7 +355,8 @@ export function BulkEditForm({ kind, count, busy, onApply, onCancel }: { kind: B
 }
 
 // Asks before deleting; Snipe-IT's refusal (e.g. an Asset still checked out) shows in place.
-export function DeleteButton({ kind, id, name, onDeleted, allowed = true }: { kind: EditKind; id: number; name: string; onDeleted: () => void; allowed?: boolean }) {
+// why: what a Delete that isn't allowed says, when Snipe-IT's refusal has a reason the Operator can act on.
+export function DeleteButton({ kind, id, name, onDeleted, allowed = true, why = NOT_ALLOWED }: { kind: EditKind; id: number; name: string; onDeleted: () => void; allowed?: boolean; why?: string }) {
   const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -366,7 +371,7 @@ export function DeleteButton({ kind, id, name, onDeleted, allowed = true }: { ki
       setBusy(false)
     }
   }
-  if (!asking) return <button className="quiet danger" disabled={!allowed} title={allowed ? undefined : NOT_ALLOWED} onClick={() => setAsking(true)}>Delete…</button>
+  if (!asking) return <button className="quiet danger" disabled={!allowed} title={allowed ? undefined : why} onClick={() => setAsking(true)}>Delete…</button>
   return (
     <span className="confirm" role="alertdialog" aria-label={`Delete ${name}?`}>
       <span>Delete {name}? It goes to Snipe-IT's deleted items and leaves every List.</span>

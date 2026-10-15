@@ -268,7 +268,11 @@ Object.assign(lists, {
 })
 lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
 lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department?.id === d.id) }))
-lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
+// As in Snipe-IT, a label any Asset is on can't be deleted.
+lists.statuslabels.rows = () => statuses.map((s) => {
+  const assets_count = tally(assets, (a) => a.status_label.id === s.id)
+  return { ...s, type: s.status_meta, assets_count, available_actions: { ...s.available_actions, delete: s.available_actions.delete && !assets_count } }
+})
 Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
 // A User made in the app may have no Location or department.
 Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
@@ -304,7 +308,7 @@ for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fi
 const store = { hardware: assets, users, locations, models, categories, manufacturers, suppliers, departments, companies, statuslabels: statuses, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
 const required = { hardware: ['asset_tag', 'model_id', 'status_id'], users: ['first_name', 'username'], locations: ['name'], licenses: ['name', 'seats', 'category_id'],
-  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'] }
+  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'], statuslabels: ['name', 'type'] }
 const refs = { model_id: ['model', models], status_id: ['status_label', statuses], location_id: ['location', locations], rtd_location_id: ['rtd_location', locations], parent_id: ['parent', locations],
   category_id: ['category', categories], manufacturer_id: ['manufacturer', manufacturers], supplier_id: ['supplier', suppliers], company_id: ['company', companies], department_id: ['department', departments] }
 function saveRecord(kind, body, row) {
@@ -328,6 +332,7 @@ function saveRecord(kind, body, row) {
   }
   if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
   if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? target.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
+  if (kind === 'statuslabels') Object.assign(target, { status_type: target.type, status_meta: target.type, available_actions: target.available_actions ?? actions })
   if (!row) store[kind].push(target)
   return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
 }
@@ -516,6 +521,7 @@ createServer(async (req, res) => {
     if (!row) return send({ status: 'error', messages: 'Not found' }, 404)
     if (req.method === 'PATCH' || req.method === 'PUT') return send(saveRecord(m[1], body, row))
     if (m[1] === 'hardware' && row.assigned_to) return fail('This asset is currently checked out, and cannot be deleted. Check it in first.')
+    if (m[1] === 'statuslabels' && assets.some((x) => x.status_label.id === row.id)) return fail('Status label is in use and cannot be deleted.')
     if (m[1] === 'users' && assets.some((x) => x.assigned_to?.type === 'user' && x.assigned_to.id === row.id)) return fail('This user has items assigned and could not be deleted.')
     store[m[1]].splice(store[m[1]].indexOf(row), 1)
     return send({ status: 'success', messages: 'Deleted.', payload: null })

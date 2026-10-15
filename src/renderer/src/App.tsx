@@ -347,6 +347,8 @@ export function App() {
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
   const editRecord = (kind: EditKind, id: number | null) => (setShowSettings(false), setView({ page: 'edit', kind, id, n: cancel() }))
   const shown = (kind: EditKind, id: number) => (kind === 'assets' ? pick(id) : openRecord(kind, id))
+  // A Status Label added, edited or deleted: every Status choice offers the new set.
+  const reloadLabels = (kind: EditKind) => kind === 'statuslabels' && window.snipeIt.statusLabels().then(setStatusLabels, () => {})
   // A deleted Asset leaves the rail.
   function forget(id: number) {
     setRecent((r) => r.filter((a) => a.id !== id))
@@ -354,6 +356,7 @@ export function App() {
   }
   function deleted(kind: EditKind, id: number, name: string) {
     if (kind === 'assets') forget(id)
+    reloadLabels(kind)
     go(kind)
     setMessage({ text: `Deleted ${name}` })
   }
@@ -470,7 +473,7 @@ export function App() {
           </div>
         </div>}
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} onStatusLabels={() => go('statuslabels')} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
@@ -479,7 +482,7 @@ export function App() {
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
-        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => shown(view.kind, id)} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
+        : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => (reloadLabels(view.kind), shown(view.kind, id))} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
         : view ? <ListView key={view.n} kind={view.page} drill={view.drill} report={view.report} assetView={view.assetView} baseUrl={settings?.baseUrl ?? ''} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} onOpenRecord={openRecord} onNew={(k) => editRecord(k, null)}
           panel={panel && { n: panel.n, form: panel.form, sheet: sheetProps(panel.asset, () => panelDeleted(panel.asset)) }} onClosePanel={() => (cancel(), setPanel(null))} panelLoading={busy !== 0} onRefreshPanel={refreshPanel} onDropPanel={dropPanel}
           bulk={bulk} onBulk={runBulk} onStopBulk={() => { bulkStop.current = true; setBulk((b) => b && { ...b, stopping: true }) }} onCloseBulk={() => setBulk(null)} />
