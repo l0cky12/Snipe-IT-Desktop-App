@@ -14,7 +14,8 @@ export function unencryptedRemote(baseUrl: string) {
 /** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the Temp checkout rules, and this PC alone. */
 const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
 
-export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
+// onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
+export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void; onStatusLabels: () => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -106,6 +107,10 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'repairs' && notes}
+    {settings.hasToken && <section className="settings-section">
+      <h2>Status Labels</h2><p className="dim">Kept in Snipe-IT, so a change is every Operator's.</p>
+      <button type="button" onClick={onStatusLabels}>Manage Status Labels →</button>
+    </section>}
   </div>
   <div className="settings-page" role="tabpanel" hidden={tab !== 'mail'}>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {

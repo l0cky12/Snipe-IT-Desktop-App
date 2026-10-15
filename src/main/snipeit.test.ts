@@ -2429,6 +2429,20 @@ describe('create, edit and delete', () => {
     expect(requests.at(-1)?.body).toEqual({ min_amt: '0' })
   })
 
+  it("editing a Status Label sends back its type, color and Snipe-IT-only flags, which Snipe-IT's edit would otherwise clear", async () => {
+    const { fetch, requests } = fakeFetch({
+      '/statuslabels/4': { body: { id: 4, name: 'Broken', type: 'undeployable', color: '#ff0000', notes: null, show_in_nav: true, default_label: true, assets_count: 3 } },
+      'PATCH /statuslabels/4': { body: { status: 'success' } },
+    })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.form('statuslabels', 4)).values).toMatchObject({ name: 'Broken', type: 'undeployable', color: '#ff0000', notes: '' })
+    expect((await snipeIt.record('statuslabels', 4)).assets).toBe(3)
+    await snipeIt.save('statuslabels', 4, { name: 'Cracked' })
+    expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Cracked', type: 'undeployable', color: '#ff0000', show_in_nav: true, default_label: true } })
+    await snipeIt.save('statuslabels', 4, { type: 'archived', color: '' })
+    expect(requests.at(-1)?.body).toEqual({ type: 'archived', color: null, show_in_nav: true, default_label: true })
+  })
+
   it('a new User starts with Enable login off, before the passwords that need it; editing one shows neither, so its login stays as it is', async () => {
     const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes', activated: true } } }).fetch)
     const blank = await snipeIt.form('users')

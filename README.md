@@ -92,6 +92,8 @@ Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and th
 
 **New …** on the Assets, Users, Locations, Licenses, Accessories, Consumables and Components Lists creates one; **Edit** and **Delete…** on its page (or the Asset sheet) change or remove it, and Delete asks first. Snipe-IT checks every save, and its reasons show beside the field they're about. An Asset's form includes its Asset Model's custom fields.
 
+Status Labels work the same way, from **Settings → Manage Status Labels** or **All records → Status Labels**: add one, or edit any (Snipe-IT's own "Ready to Deploy" and the rest included) by name, type, color and notes. They're kept in Snipe-IT, so a change is every Operator's. A label any Asset is on can't be deleted until those Assets move to another; its page counts them and lists them in one click.
+
 Opening any other row shows every field Snipe-IT has for it; a related record (its Location, Department, Manager…) links to its own page, and buttons open what belongs to it, such as a User's checked-out Assets or a Location's Assets and Users. An Asset's sheet has the same under **All fields**, custom fields included.
 
 Ticking rows makes a Selection, across pages. On the Assets List, **Checkout…** (to a User or a Location) and **Checkin…** act on every selected Asset, one at a time, with a result for each; failed ones can be retried. Each is off when Snipe-IT says your account may not check one of them out or in.
