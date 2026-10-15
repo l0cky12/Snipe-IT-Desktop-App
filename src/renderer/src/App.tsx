@@ -585,7 +585,10 @@ export const createdUser = (id: number, v: Record<string, string>): CheckoutTarg
 // Checking out to a User who isn't in Snipe-IT yet: Create User… opens the New User form under it, and the User it creates is
 // chosen here, with the typed Expected Checkin and note kept. Checkout is still the Operator's click, and a failed one keeps the User.
 // onUnfinished: Assets the new User's form didn't check out because it closed while sending.
-export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onCheckout: (o: CheckoutOptions) => Promise<void>; onUnfinished: (text: string) => void; autoFocus?: boolean }) {
+// available: an Accessory or Consumable's checkout, which goes to a User only, a Quantity at a time, with no Expected Checkin.
+export function CheckoutForm(props: { defaultLocation: StatusLabel | null; available?: number; onCheckout: (o: CheckoutOptions & { qty: number }) => Promise<void>; onUnfinished: (text: string) => void; autoFocus?: boolean }) {
+  const stock = props.available !== undefined
+  const [qty, setQty] = useState('1')
   // The New User form's starting values while it's open.
   const [creating, setCreating] = useState<Record<string, string> | null>(null)
   const [targetType, setTargetType] = useState<CheckoutOptions['targetType']>('user')
@@ -617,7 +620,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
     e.preventDefault()
     if (!target) return
     setBusy(true)
-    await props.onCheckout({ targetType, targetId: target.id, expectedCheckin: expectedCheckin || undefined, note })
+    await props.onCheckout({ targetType, targetId: target.id, expectedCheckin: expectedCheckin || undefined, note, qty: Number(qty) })
     setBusy(false)
   }
 
@@ -625,7 +628,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
     <>
     <form className="checkout" onSubmit={onSubmit}>
       <div className="actions">
-        <select
+        {!stock && <select
           value={targetType}
           // Drop the other kind's results so a User id is never sent as a Location (or vice versa).
           onChange={(e) => (setTargetType(e.target.value as CheckoutOptions['targetType']), setCreating(null), setTarget(e.target.value === 'location' && props.defaultLocation ? { ...props.defaultLocation, detail: '' } : null), setText(e.target.value === 'location' ? props.defaultLocation?.name ?? '' : ''), setFound([]))}
@@ -633,7 +636,7 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
         >
           <option value="user">User</option>
           <option value="location">Location</option>
-        </select>
+        </select>}
         <input
           autoFocus={props.autoFocus ?? true}
           value={text}
@@ -641,7 +644,9 @@ export function CheckoutForm(props: { defaultLocation: StatusLabel | null; onChe
           placeholder={`Search ${kind[targetType]}s by name…`}
           aria-label={`Search ${kind[targetType]}s`}
         />
-        <input type="date" value={expectedCheckin} onChange={(e) => setExpectedCheckin(e.target.value)} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />
+        {stock
+          ? <label className="dim">Quantity <input type="number" required min={1} max={props.available} step={1} value={qty} onChange={(e) => setQty(e.target.value)} aria-label="Quantity" /> of {props.available} available</label>
+          : <input type="date" value={expectedCheckin} onChange={(e) => setExpectedCheckin(e.target.value)} aria-label="Expected Checkin (optional)" title="Expected Checkin (optional)" />}
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Checkout note" />
         <button disabled={!target || busy}>{busy ? 'Checking out…' : target ? `Checkout to ${target.name}` : 'Checkout'}</button>
       </div>

@@ -112,6 +112,14 @@ export type MaintenanceChange = { supplierId?: number | null; cost?: string | nu
 export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; fromStatusId?: number; fromLocationId?: number | null; expectedCheckin?: string; note?: string }
 const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
+/** Accessories and Consumables go to a User only, qty at a time (see CONTEXT.md). */
+export type StockKind = 'accessories' | 'consumables'
+export type StockCheckout = { userId: number; qty: number; note?: string }
+/** One checked-out unit of an Accessory: rowId is Snipe-IT's checkout row, which a Checkin names; since is when it went out. */
+export type AccessoryCheckout = { rowId: number; assignee: Assignee; since: string; note: string }
+/** An Accessory a User holds, and how many of it. */
+export type HeldAccessory = { id: number; name: string; count: number; can: Can }
+
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
 
@@ -157,7 +165,8 @@ export type RecordKind = Exclude<ListKind, 'activity'>
 /** One field of a record as the Operator reads it; link is the related record it names, when the app can open it. */
 export type Field = { label: string; value: string; link?: { kind: RecordKind; id: number } }
 /** categoryType: what a Category holds (asset, license, accessory, consumable, component), so it links to the right List. */
-export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; can: Can }
+/** remaining: how many an Accessory or Consumable has left to check out. */
+export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; can: Can }
 /** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
 export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
 /** A permission group and what it grants (key → '1' granted, '0' not). */
@@ -1257,6 +1266,20 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     return body
   }
 
+  // Who holds each checked-out unit of an Accessory, oldest first.
+  async function accessoryHolders(id: number): Promise<AccessoryCheckout[]> {
+    checkId(id, 'Accessory')
+    const rows = await allRows<{ id: number; assigned_to: Assignee | null; note: string | null; created_at: { datetime: string } | null }>(`/accessories/${id}/checkedout`)
+    return rows.flatMap((r) => (r.assigned_to ? [{ rowId: r.id, assignee: { id: r.assigned_to.id, name: r.assigned_to.name, type: r.assigned_to.type ?? 'user' }, since: r.created_at?.datetime ?? '', note: plainText(r.note ?? '') }] : [])).sort((a, b) => a.rowId - b.rowId)
+  }
+
+  // Checks in one unit of an Accessory: rowId is its checkout row (an AccessoryCheckout's), not the Accessory.
+  async function checkinAccessory(rowId: number, note?: string): Promise<void> {
+    checkId(rowId, 'checkout')
+    const result = await request(`/accessories/${rowId}/checkin`, note?.trim() ? { note: note.trim() } : {})
+    if (isError(result)) throw new Error(reason(result.messages))
+  }
+
   // The custom fields an Asset Model's Assets have (its fieldset's), as form fields; none when it has no fieldset.
   async function customFields(modelId: number): Promise<FormField[]> {
     checkId(modelId, 'Asset Model')
@@ -1614,7 +1637,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       checkId(id, 'record')
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
-      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }) }
+      return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }),
+        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -2047,6 +2071,45 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const result = await request<{ payload?: { next_audit_date?: RawAsset['next_audit_date'] } }>(`/hardware/${id}/audit`, { note: text, ...(nextAudit && { next_audit_date: nextAudit }) })
       if (isError(result)) throw new Error(reason(result.messages))
       return { was, next: dayOf(result.payload?.next_audit_date) }
+    },
+
+    // Snipe-IT refuses more than it has left, with its reason. An Accessory goes as checkout_to_type user, which newer
+    // Snipe-ITs need and older ones ignore; a Consumable names its User as assigned_to.
+    async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<void> {
+      if (kind !== 'accessories' && kind !== 'consumables') throw new Error(`Unknown record: ${kind}`)
+      checkId(id, 'record')
+      checkId(userId, 'User')
+      if (!Number.isInteger(qty) || qty < 1) throw new Error(`Invalid quantity: ${qty}`)
+      const to = kind === 'accessories' ? { checkout_to_type: 'user', assigned_user: userId } : { assigned_to: userId }
+      const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(note?.trim() && { note: note.trim() }) })
+      if (isError(result)) throw new Error(reason(result.messages))
+    },
+
+    accessoryHolders,
+    checkinAccessory,
+
+    // What a User holds; Snipe-IT lists an Accessory once per unit, so they're counted here.
+    async userAccessories(userId: number): Promise<HeldAccessory[]> {
+      checkId(userId, 'User')
+      const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      const held = new Map<number, HeldAccessory>()
+      for (const r of body.rows) {
+        const h = held.get(r.id)
+        if (h) h.count++
+        else held.set(r.id, { id: r.id, name: r.name, count: 1, can: canFrom(r.available_actions) })
+      }
+      return [...held.values()]
+    },
+
+    // A User hands back qty of an Accessory: their checkout rows are checked in oldest first. Short, it checks in what
+    // they have and says so.
+    async returnAccessory(accessoryId: number, userId: number, qty: number, note?: string): Promise<void> {
+      checkId(userId, 'User')
+      if (!Number.isInteger(qty) || qty < 1) throw new Error(`Invalid quantity: ${qty}`)
+      const theirs = (await accessoryHolders(accessoryId)).filter((h) => h.assignee.type === 'user' && h.assignee.id === userId)
+      for (const h of theirs.slice(0, qty)) await checkinAccessory(h.rowId, note)
+      if (theirs.length < qty) throw new Error(theirs.length ? `${theirs[0].assignee.name} only had ${theirs.length}` : 'Not checked out to that User')
     },
 
     // Fetches only what the requested pieces need; one piece failing (e.g. a permission error) leaves the others.
