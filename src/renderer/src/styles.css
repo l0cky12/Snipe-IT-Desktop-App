@@ -328,6 +328,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 
 /* Settings: one column at most 640px wide, each section a card. */
 .settings-page { max-width: calc(640px + 32px); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.settings-page[hidden] { display: none; }
 .settings-page h2 { font: 600 14px var(--sans); color: var(--text); margin: 0 0 4px; }
 .settings-page p { margin: 4px 0 12px; }
 .settings-page fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
