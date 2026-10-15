@@ -95,6 +95,20 @@ it('re-saving or renaming keeps what a later ticket stores beside a Saved Report
   expect(store.saveReport({ ...report, id: saved.id })).toMatchObject({ schedule: { every: 'week' } })
 })
 
+it('a Custom Asset Report saves as a template with its columns and filters, never with a sort, a View or no columns', () => {
+  const { store } = setup()
+  const template = { name: 'Chromebooks by room', kind: 'custom' as const, search: '' as const, filters: { category_id: '3', purchase_from: '', assignment: 'assigned' }, sort: null, columns: ['asset_tag', 'location', '_snipeit_mac_address_1'] }
+  const saved = store.saveReport(template)
+  expect(saved).toEqual({ id: saved.id, ...template, filters: { category_id: '3', assignment: 'assigned' } })
+  expect(store.savedReports()).toEqual([saved])
+  expect(() => store.saveReport({ ...template, columns: [] })).toThrow('at least one column')
+  expect(() => store.saveReport({ ...template, sort: { key: 'assetTag', order: 'asc' } } as never)).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...template, view: 'overdue' } as never)).toThrow('Invalid report')
+  // The Custom Asset Report itself has no columns to send on a schedule; its templates do.
+  expect(() => store.setSchedule({ builtIn: 'custom' }, { every: 'day', time: '07:00' }, new Date())).toThrow('template')
+  expect(store.setSchedule({ saved: saved.id }, { every: 'day', time: '07:00' }, new Date())).toMatchObject([{ report: { saved: saved.id } }])
+})
+
 it('refuses a Saved Report it could not open again', () => {
   const { store } = setup()
   expect(() => store.saveReport({ ...report, name: '  ' })).toThrow('Name the report')
@@ -206,7 +220,8 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
 
 it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
   const { store } = setup()
-  for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
+  // Every built-in Report but the Custom Asset Report, which is scheduled as a template.
+  for (const builtIn of REPORTS.filter((k) => k !== 'custom')) store.setSchedule({ builtIn }, weekly, since)
   const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
   expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory'])
   expect(ranged).toEqual(RANGED_REPORTS)

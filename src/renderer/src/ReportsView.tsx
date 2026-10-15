@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
+import type { KeptSchedule, LastSend, SavedListReport, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
 import { choices as filterChoices, listName } from './ListView'
 import { csvName, rowCount, toCsv } from '../../main/export'
-import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, ASSET_VIEWS, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
+import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, ASSET_VIEWS, CUSTOM_COLUMN_GROUPS, CUSTOM_DATE_LABELS, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange,
+  type CustomColumn, type NamesKind, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report; a snapshot Report has none.
 const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started', tempHistory: 'Checked out' }
@@ -132,7 +133,8 @@ export function ScheduledReports() {
     return () => clearInterval(timer)
   }, [])
   const rows: { report: ScheduleKey; name: string }[] = [
-    ...REPORTS.map((k) => ({ report: { builtIn: k }, name: REPORT_NAMES[k] })),
+    // The Custom Asset Report is scheduled as a template (a Saved Report), which has columns to send.
+    ...REPORTS.filter((k) => k !== 'custom').map((k) => ({ report: { builtIn: k }, name: REPORT_NAMES[k] })),
     ...saved.map((r) => ({ report: { saved: r.id }, name: r.name })),
   ]
   return (
@@ -187,16 +189,87 @@ export function weekCheckouts(monday: string): ReportStart {
   sunday.setUTCDate(sunday.getUTCDate() + 6)
   return { kind: 'activity', query: { from: monday, to: sunday.toISOString().slice(0, 10), itemType: 'asset', actionType: 'checkout' } }
 }
-/** The filters the Report has: only the Activity Report narrows by record type, action and search, only LOCATION_CATEGORY_REPORTS by Location and Category. */
+/** The Custom Asset Report's columns until the Operator changes them: every standard one, as Snipe-IT's form starts. */
+export const DEFAULT_CUSTOM_COLUMNS = CUSTOM_COLUMN_GROUPS.flatMap((g) => g.columns.map((c) => c.key))
+/** The filters the Report has: only the Activity Report narrows by record type, action and search, only LOCATION_CATEGORY_REPORTS by Location and Category,
+ * and only the Custom Asset Report has columns and filters of its own. */
 export const reportFilters = (kind: ReportKind, query: ReportQuery): ReportQuery => ({
   ...(rangeName[kind] && { from: query.from, to: query.to }),
   ...(kind === 'activity' && { itemType: query.itemType, actionType: query.actionType, search: query.search }),
   ...(LOCATION_CATEGORY_REPORTS.includes(kind) && { locationId: query.locationId, categoryId: query.categoryId }),
+  ...(kind === 'custom' && { columns: query.columns ?? DEFAULT_CUSTOM_COLUMNS, filters: query.filters ?? {} }),
 })
 
+// The Custom Asset Report's form: its columns, grouped as Snipe-IT's form groups them (the Custom Fields from Snipe-IT),
+// and its filters (see CUSTOM_FILTERS). The choice lists load once; one that doesn't load just leaves fewer choices.
+const PICKS: [key: string, label: string, names: NamesKind][] = [
+  ['company_id', 'Company', 'companies'], ['location_id', 'Location', 'locations'], ['rtd_location_id', 'Default Location', 'locations'], ['supplier_id', 'Supplier', 'suppliers'],
+  ['model_id', 'Asset Model', 'models'], ['manufacturer_id', 'Manufacturer', 'manufacturers'], ['category_id', 'Category', 'categories'], ['status_id', 'Status Label', 'statuslabels'],
+]
+function CustomReportForm({ columns, filters, onColumns, onFilter }: { columns: string[]; filters: Record<string, string>; onColumns: (columns: string[]) => void; onFilter: (key: string, value: string) => void }) {
+  const [names, setNames] = useState<Partial<Record<NamesKind, StatusLabel[]>>>({})
+  const [fields, setFields] = useState<CustomColumn[] | null>(null)
+  useEffect(() => {
+    let stale = false
+    for (const n of new Set(PICKS.map(([, , names]) => names))) window.snipeIt.names(n).then((v) => !stale && setNames((all) => ({ ...all, [n]: v })), () => {})
+    window.snipeIt.customFieldList().then((v) => !stale && setFields(v), () => !stale && setFields([]))
+    return () => { stale = true }
+  }, [])
+  const groups = [...CUSTOM_COLUMN_GROUPS, { name: 'Custom Fields', columns: fields ?? [] }]
+  const all = groups.flatMap((g) => g.columns.map((c) => c.key))
+  // Columns stay in the form's order, whatever order they were ticked in; a template's column the form doesn't show stays too.
+  const toggle = (key: string) => {
+    const next = new Set(columns.includes(key) ? columns.filter((k) => k !== key) : [...columns, key])
+    onColumns([...all.filter((k) => next.has(k)), ...[...next].filter((k) => !all.includes(k))])
+  }
+  const range = (label: string, type: 'date' | 'number', fromKey: string, toKey: string) => (
+    <label key={fromKey}>{label}<span className="range">
+      <input type={type} {...(type === 'number' && { min: 0, step: 0.01 })} value={filters[fromKey] ?? ''} onChange={(e) => onFilter(fromKey, e.target.value)} aria-label={`${label} from`} /> to
+      <input type={type} {...(type === 'number' && { min: 0, step: 0.01 })} value={filters[toKey] ?? ''} onChange={(e) => onFilter(toKey, e.target.value)} aria-label={`${label} to`} />
+    </span></label>
+  )
+  return (
+    <div className="customize custom-report" aria-label="Custom Asset Report">
+      {groups.map((g) => (
+        <ol key={g.name} aria-label={`${g.name} columns`}>
+          <li className="k">{g.name}{g.name === 'Asset' && <span className="actions"><button type="button" onClick={() => onColumns(all)}>All</button><button type="button" onClick={() => onColumns([])}>None</button></span>}</li>
+          {g.columns.map((c) => (
+            <li key={c.key}><label><input type="checkbox" checked={columns.includes(c.key)} onChange={() => toggle(c.key)} />{c.label}</label></li>
+          ))}
+          {g.name === 'Custom Fields' && !g.columns.length && <li className="dim">{fields ? 'None' : 'Loading…'}</li>}
+        </ol>
+      ))}
+      <div className="ranges">
+        <span className="k">Filters</span>
+        {PICKS.map(([key, label, n]) => (
+          <label key={key}>{label}<select value={filters[key] ?? ''} onChange={(e) => onFilter(key, e.target.value)}>
+            <option value="">Any</option>
+            {pickerOptions(`Any ${label}`, names[n]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select></label>
+        ))}
+        <label>Order number<input value={filters.order_number ?? ''} onChange={(e) => onFilter('order_number', e.target.value)} /></label>
+        {range('Purchase cost', 'number', 'purchase_cost_min', 'purchase_cost_max')}
+        {Object.entries(CUSTOM_DATE_LABELS).map(([key, label]) => range(label, 'date', `${key}_from`, `${key}_to`))}
+        <label>Checked out<select value={filters.assignment ?? ''} onChange={(e) => onFilter('assignment', e.target.value)}>
+          <option value="">Either</option><option value="assigned">Checked out</option><option value="unassigned">Not checked out</option>
+        </select></label>
+        <label>Deleted Assets<select value={filters.deleted ?? ''} onChange={(e) => onFilter('deleted', e.target.value)}>
+          <option value="">Left out</option><option value="include">Included</option><option value="only">Only deleted</option>
+        </select></label>
+        <label className="check"><input type="checkbox" checked={filters.exclude_archived === '1'} onChange={(e) => onFilter('exclude_archived', e.target.checked ? '1' : '')} />Leave out Archived Assets</label>
+      </div>
+    </div>
+  )
+}
+
 // start: opened on that Report and its filters, run at once.
-export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpenSaved: (report: SavedReport) => void }) {
+export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpenSaved: (report: SavedListReport) => void }) {
   const [kind, setKind] = useState<ReportKind>(start?.kind ?? 'activity')
+  // The template (a Custom Asset Report saved under a name) opened, if any, so Save updates it; the name being typed to
+  // save under; and a count of saves, so the Saved Reports list reads again.
+  const [template, setTemplate] = useState<{ id: string; name: string } | null>(null)
+  const [naming, setNaming] = useState<string | null>(null)
+  const [savedVersion, setSavedVersion] = useState(0)
   const [query, setQuery] = useState<ReportQuery>(start?.query ?? {})
   const [report, setReport] = useState<Report | null>(null)
   const [ran, setRan] = useState<{ kind: ReportKind; query: ReportQuery } | null>(null)
@@ -221,17 +294,18 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   const stale = () => (latest.current++, setReport(null), setRan(null), setExporting(false), setBusy(false), setError(''))
   const set = (change: ReportQuery) => (setQuery((q) => ({ ...q, ...change })), stale())
 
-  async function run(e?: React.FormEvent) {
+  // what, filters: the Report to run when not the one on screen (a template just opened, before the screen catches up).
+  async function run(e?: React.FormEvent, what: ReportKind = kind, filters: ReportQuery = sent) {
     e?.preventDefault()
     const mine = ++latest.current
     setBusy(true)
     setError('')
     setExporting(false)
     try {
-      const r = await window.snipeIt.report(kind, sent)
+      const r = await window.snipeIt.report(what, filters)
       if (mine !== latest.current) return
       setReport(r)
-      setRan({ kind, query })
+      setRan({ kind: what, query: filters })
     } catch (err) {
       if (mine !== latest.current) return
       setReport(null)
@@ -245,21 +319,44 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   useEffect(() => { if (start) run() }, [])
 
   function download(r: Report, what: ReportKind) {
-    saveCsv(REPORT_NAMES[what], r.columns, r.rows)
+    saveCsv(what === 'custom' && template ? template.name : REPORT_NAMES[what], r.columns, r.rows)
     setExporting(false)
+  }
+  // A template opens as the Custom Asset Report with its columns and filters, run at once.
+  function openTemplate(r: SavedReport & { kind: 'custom' }) {
+    const opened = { columns: r.columns, filters: r.filters }
+    setKind('custom')
+    setQuery(opened)
+    setTemplate({ id: r.id, name: r.name })
+    setNaming(null)
+    stale()
+    run(undefined, 'custom', opened)
+  }
+  // The Custom Asset Report as it is now, under the typed name: over the template it was opened from, or as a new one.
+  async function saveTemplate(asNew: boolean) {
+    try {
+      const r = await window.settings.saveReport({ id: asNew ? undefined : template?.id, name: naming ?? '', kind: 'custom', search: '', filters: sent.filters ?? {}, sort: null, columns: sent.columns ?? [] })
+      setTemplate({ id: r.id, name: r.name })
+      setNaming(null)
+      setSavedVersion((v) => v + 1)
+      setNotice({ text: `Saved report "${r.name}"` })
+    } catch (e) {
+      setNotice({ text: (e as Error).message, error: true })
+    }
   }
 
   return (
     <>
       <header className="head">
-        <h1>Reports</h1>
+        <h1>Reports{kind === 'custom' && template && <span className="sub">{template.name}</span>}</h1>
         <span className="dim">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
+          {kind === 'custom' && <button className="quiet" onClick={() => setNaming(template?.name ?? '')} aria-expanded={naming !== null}>Save report…</button>}
           <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
-          <EmailNow report={{ builtIn: kind, query: sent }} name={REPORT_NAMES[kind]} onDone={setNotice} />
+          <EmailNow report={{ builtIn: kind, query: sent }} name={kind === 'custom' && template ? template.name : REPORT_NAMES[kind]} onDone={setNotice} />
         </div>
         <form className="actions" onSubmit={run}>
-          <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), stale())} aria-label="Report">
+          <select value={kind} onChange={(e) => (setKind(e.target.value as ReportKind), setTemplate(null), setNaming(null), stale())} aria-label="Report">
             {(Object.keys(REPORT_NAMES) as ReportKind[]).map((k) => <option key={k} value={k}>{REPORT_NAMES[k]}</option>)}
           </select>
           {rangeName[kind] && (
@@ -297,13 +394,23 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
           <button disabled={busy}>{busy ? 'Running…' : 'Run report'}</button>
         </form>
       </header>
+      {kind === 'custom' && naming !== null && (
+        <form className="toolbar actions" onSubmit={(e) => (e.preventDefault(), saveTemplate(false))}>
+          <input autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setNaming(null)} placeholder="Report name" aria-label="Report name" />
+          <button disabled={!naming.trim()}>{template ? 'Save' : 'Save report'}</button>
+          {template && <button type="button" className="quiet" disabled={!naming.trim()} onClick={() => saveTemplate(true)}>Save as new</button>}
+          <button type="button" className="quiet" onClick={() => setNaming(null)}>Cancel</button>
+          <span className="dim">Saves its columns and filters as a Saved Report, to open, email or schedule.</span>
+        </form>
+      )}
+      {kind === 'custom' && <CustomReportForm columns={sent.columns ?? []} filters={sent.filters ?? {}} onColumns={(columns) => set({ columns })} onFilter={(key, value) => set({ filters: { ...sent.filters, [key]: value } })} />}
       {exporting && report && ran && (
         <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
-      <SavedReports onOpen={onOpenSaved} onEmailed={setNotice} />
-      {report?.capped && <p className="message notice" role="status">Only the newest {report.rows.length.toLocaleString()} rows are shown; narrow the dates for the rest.</p>}
+      <SavedReports onOpen={onOpenSaved} onOpenCustom={openTemplate} version={savedVersion} onEmailed={setNotice} />
+      {report?.capped && <p className="message notice" role="status">Only the {ran?.kind === 'custom' ? 'first' : 'newest'} {report.rows.length.toLocaleString()} rows are shown; narrow the {ran?.kind === 'custom' ? 'filters' : 'dates'} for the rest.</p>}
       {report && (
         <table className="history list-table">
           <thead><tr>{report.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
@@ -316,13 +423,14 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   )
 }
 
-// The Operator's Saved Reports, each opening as its List, emailed now, renamed in place, or deleted after asking. Schedules are in Settings.
-function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => void; onEmailed: (notice: Notice) => void }) {
+// The Operator's Saved Reports, each opening as its List (a template as the Custom Asset Report), emailed now, renamed in
+// place, or deleted after asking. Schedules are in Settings. version: bumped when one is saved here, to read them again.
+function SavedReports({ onOpen, onOpenCustom, version, onEmailed }: { onOpen: (report: SavedListReport) => void; onOpenCustom: (report: SavedReport & { kind: 'custom' }) => void; version: number; onEmailed: (notice: Notice) => void }) {
   const [reports, setReports] = useState<SavedReport[] | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [error, setError] = useState('')
-  useEffect(() => { window.settings.savedReports().then(setReports, (e: Error) => setError(e.message)) }, [])
+  useEffect(() => { window.settings.savedReports().then(setReports, (e: Error) => setError(e.message)) }, [version])
   const change = async (work: Promise<SavedReport[]>) => {
     try {
       setReports(await work)
@@ -337,7 +445,7 @@ function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => 
     <section className="saved-reports" aria-label="Saved Reports">
       <h2>Saved Reports</h2>
       {error && <p className="message error" role="alert">{error}</p>}
-      {reports?.length === 0 && <p className="dim">None yet. Save any List as a report with its Save report button.</p>}
+      {reports?.length === 0 && <p className="dim">None yet. Save any List, or the Custom Asset Report, with its Save report button.</p>}
       {!!reports?.length && (
         <table className="history">
           <tbody>
@@ -351,9 +459,9 @@ function SavedReports({ onOpen, onEmailed }: { onOpen: (report: SavedReport) => 
                       <button disabled={!renaming.name.trim()}>Rename</button>
                       <button type="button" className="quiet" onClick={() => setRenaming(null)}>Cancel</button>
                     </form>
-                  ) : <button className="link" onClick={() => onOpen(r)}>{r.name}</button>}
+                  ) : <button className="link" onClick={() => (r.kind === 'custom' ? onOpenCustom(r) : onOpen(r))}>{r.name}</button>}
                 </td>
-                <td className="dim">{listName[r.kind]}{r.view && `, ${ASSET_VIEWS[r.view].name}`}</td>
+                <td className="dim">{r.kind === 'custom' ? REPORT_NAMES.custom : <>{listName[r.kind]}{r.view && `, ${ASSET_VIEWS[r.view].name}`}</>}</td>
                 <td><div className="actions">
                   {deleting === r.id ? (
                     <span className="confirm" role="alertdialog" aria-label={`Delete ${r.name}?`}>

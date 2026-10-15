@@ -90,6 +90,8 @@ const assets = Array.from({ length: 240 * scale }, (_, i) => {
     purchase_cost: i % 8 === 6 ? null : prices[model.id - 1].toLocaleString('en-US', { minimumFractionDigits: 2 }),
     // When the current Checkout was made: the same moment as its Checkout in the Activity Report below.
     last_checkout: holder ? { datetime: local(new Date(Date.now() - (i + 1) * 36e5)), formatted: day(-(i + 1) / 24) } : null,
+    last_checkin: holder || i % 3 ? null : { datetime: local(new Date(Date.now() - (i + 2) * 36e5)) }, created_at: { datetime: `${day(-420 - i)} 09:00:00` },
+    updated_at: { datetime: local(new Date(Date.now() - i * 36e5)) }, deleted_at: null,
     notes: i % 13 === 4 ? 'Cracked screen, waiting on a part' : null,
     custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: `00:1A:2B:${[i >> 8, i & 255, 7].map((n) => n.toString(16).padStart(2, '0')).join(':')}`.toUpperCase() } },
   }
@@ -269,7 +271,8 @@ Object.assign(lists, {
 lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
 lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department?.id === d.id) }))
 lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
-Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
+Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v,
+  rtd_location_id: (a, v) => a.rtd_location?.id === +v, order_number: (a, v) => a.order_number === v })
 // A User made in the app may have no Location or department.
 Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
@@ -300,6 +303,8 @@ maintenances.push(...Array.from({ length: 24 }, (_, i) => {
 // Chromebook Asset Models have a custom fieldset with a MAC Address.
 const fieldset = { id: 1, name: 'Chromebooks', fields: [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1', type: 'text', format: 'MAC', required: 0, field_values_array: null }] }
 for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fieldset.id, name: fieldset.name } : null
+// Every Custom Field (GET /fields), for the Custom Asset Report's column picker.
+lists.fields = { rows: () => fieldset.fields }
 // The kinds the app only deletes are kept here too, so a delete takes them out of their List.
 const store = { hardware: assets, users, locations, models, categories, manufacturers, suppliers, departments, companies, statuslabels: statuses, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
