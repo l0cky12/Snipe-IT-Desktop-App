@@ -552,3 +552,7 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .list-panel > .audit { padding: 8px 16px; }
 .audit > p { margin: 6px 0 0; font-size: 12px; }
 .audit label input { margin-left: 6px; }
+
+/* Bulk checkout's Handouts: the picks as buttons, then the Also hand out box, which gets the room. */
+.handouts { margin: 8px 0 12px; }
+.handouts .actions > input { flex: 1; min-width: 14em; }

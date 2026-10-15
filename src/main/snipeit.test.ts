@@ -2982,15 +2982,21 @@ describe('Accessory and Consumable checkout', () => {
   const ok = { body: { status: 'success', messages: 'Checked out.', payload: null } }
   const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
 
-  it('an Accessory goes to a User with its quantity and note', async () => {
-    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': ok })
-    await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 2, note: ' spare ' })
+  it("an Accessory goes to a User with its quantity and note, and the User's newest rows are read back as the ones written", async () => {
+    const row = (id: number, user: number) => ({ id, assigned_to: { id: user, name: 'x', type: 'user' }, note: null, created_at: null })
+    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': ok, '/accessories/7/checkedout': { body: { total: 4, rows: [row(9, 311), row(4, 311), row(8, 40), row(7, 311)] } } })
+    expect(await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 2, note: ' spare ' })).toEqual({ rowIds: [7, 9] })
     expect(posted(requests)).toEqual([{ method: 'POST', path: '/accessories/7/checkout', body: { checkout_to_type: 'user', assigned_user: 311, checkout_qty: 2, note: 'spare' } }])
   })
 
-  it('a Consumable names its User as assigned_to', async () => {
+  it("rows that can't be read back are no rows, not a failure: the Checkout went through", async () => {
+    const { fetch } = fakeFetch({ 'POST /accessories/7/checkout': ok })
+    expect(await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 1 })).toEqual({ rowIds: [] })
+  })
+
+  it('a Consumable names its User as assigned_to, and has no rows to come back', async () => {
     const { fetch, requests } = fakeFetch({ 'POST /consumables/3/checkout': ok })
-    await createSnipeIt(config, fetch).checkoutStock('consumables', 3, { userId: 311, qty: 1 })
+    expect(await createSnipeIt(config, fetch).checkoutStock('consumables', 3, { userId: 311, qty: 1 })).toEqual({ rowIds: [] })
     expect(posted(requests)).toEqual([{ method: 'POST', path: '/consumables/3/checkout', body: { assigned_to: 311, checkout_qty: 1 } }])
   })
 
@@ -3044,7 +3050,7 @@ describe('License seats', () => {
 
   it('a seat goes to a User per Checkout, qty times, with the note as "notes"', async () => {
     const { fetch, requests } = fakeFetch({ 'POST /licenses/4/checkout': ok })
-    await createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 2, note: ' lab ' })
+    expect(await createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 2, note: ' lab ' })).toEqual({ rowIds: [77, 77] })
     expect(posted(requests)).toEqual([1, 2].map(() => ({ method: 'POST', path: '/licenses/4/checkout', body: { target_type: 'user', assigned_to: 311, notes: 'lab' } })))
   })
 

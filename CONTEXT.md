@@ -155,8 +155,12 @@ The note a Workflow writes in Snipe-IT, starting with the Workflow's name in squ
 _Avoid_: tag (alone; an Asset Tag is the identifier), marker
 
 **Bulk checkout**:
-The Workflow for handing Assets to one User, never a Location: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. An Asset already checked out to someone else is moved to this User only if the Operator chooses Move to this User; otherwise it's stopped. Its Running list shows what was checked out this session.
+The Workflow for handing Assets to one User, never a Location: find the User by name, email or employee number, then scan Assets one at a time, confirming each, and Check each out to that User until Done, then find the next User. An Asset already checked out to someone else is moved to this User only if the Operator chooses Move to this User; otherwise it's stopped. Beside the scans, a Handout gives the User an Accessory, Consumable or License seat. Its Running list shows what was checked out this session.
 _Avoid_: bulk issue, issue (say Checkout)
+
+**Handout**:
+An Accessory, Consumable or License seat given to the User from Bulk checkout, with a quantity, without scanning (stock has no Asset Tag): found by name under "Also hand out", and sent at once with the Workflow note. Each one found stays as a button for the next Users until forgotten, so the same charger goes to thirty students in thirty clicks. It's a row in the Running list and can be undone like a scan, except a Consumable, which is never checked in.
+_Avoid_: stock checkout, kit (Snipe-IT's predefined kits aren't used)
 
 **Bulk return**:
 The Workflow for taking many Assets back: pick the one Location returns go to, then scan Assets one at a time. Each checked-out one is checked in at once, with no confirm, set to Ready to Deploy and sent to that Location. Assets that aren't checked out are reported and left alone. Its Running list shows what came back this session and from whom.
