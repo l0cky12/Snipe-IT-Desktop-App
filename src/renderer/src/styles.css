@@ -38,43 +38,44 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 var(--sans); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
 button, input, select { font-family: inherit; }
-/* Important: the all: unset buttons (.find, .nav, .panel-close, .row, .link, .sort) would otherwise wipe it. */
+/* Important: the all: unset buttons (.grp, .nav, .panel-close, .row, .link, .sort) would otherwise wipe it. */
 :focus-visible { outline: 2px solid var(--mark) !important; outline-offset: 2px !important; }
 .mono { font-family: var(--mono); font-size: .93em; }
 .dim { color: var(--dim); font-weight: 400; }
 
-/* Shell: the labelled sidebar, the scan panel, and the sheet. */
-/* The panel can be closed (the sidebar stays), giving the sheet the full width. */
+/* Shell: the sidebar (the scan box and what it found, then the pages in groups that open and close) and the sheet. */
 .layout { display: grid; grid-template-columns: auto 1fr; height: 100%; }
 .rail { display: flex; min-height: 0; }
-.sidebar { width: 212px; flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 8px; overflow-y: auto; background: var(--side); border-right: 1px solid var(--line); }
+.sidebar { width: 300px; flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 8px; background: var(--side); border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 10px; font-weight: 700; font-size: 13.5px; }
 .logo { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--navy); color: var(--gold); font: 800 12px var(--sans); }
-.find, .nav { all: unset; box-sizing: border-box; display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
-.find { gap: 8px; flex: none; margin-bottom: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--dim); }
-.find:hover { border-color: var(--dim); }
-.nav { position: relative; flex: none; gap: 9px; white-space: nowrap; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
+.sidebar form { position: relative; display: flex; align-items: center; margin-bottom: 8px; }
+.sidebar form > svg { position: absolute; left: 12px; top: 13px; color: var(--dim); pointer-events: none; }
+/* What the scan box found takes what room the groups leave, and scrolls. */
+.sidebar .list { flex: 0 1 auto; min-height: 0; margin: 0 -8px; padding-bottom: 4px; }
+.grp, .nav { all: unset; box-sizing: border-box; flex: none; display: flex; align-items: center; height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
+.grp { position: relative; gap: 6px; margin-top: 8px; color: var(--text); font-weight: 600; }
+.grp:hover, .grp:focus-visible { background: var(--hover); }
+.grp.sel { background: var(--hover); }
+.nav { position: relative; gap: 9px; padding-left: 28px; white-space: nowrap; color: var(--dim); font-weight: 500; transition: background var(--fast), color var(--fast); }
 .nav svg { flex: none; }
 .nav:hover:not(:disabled), .nav:focus-visible { background: var(--hover); color: var(--text); }
 .nav.sel { background: var(--hover); color: var(--text); font-weight: 600; }
-.nav.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
+.nav.sel::before, .grp.sel::before { content: ''; position: absolute; left: -8px; top: 5px; bottom: 5px; width: 3px; border-radius: 0 3px 3px 0; background: var(--mark); }
 .nav:disabled { opacity: .45; cursor: default; }
 /* Key hints. */
-.find kbd, .nav kbd { margin-left: auto; }
+.nav kbd { margin-left: auto; }
 /* The Workflows item, and its button that shows or hides the Workflows under it. */
 .nav-row { display: flex; flex: none; gap: 1px; }
 .nav-row > .nav:first-child { flex: 1; min-width: 0; }
 .nav.toggle { width: 28px; padding: 0; justify-content: center; }
 /* A Workflow, listed under the Workflows item. */
-.nav.sub { padding-left: 20px; }
+.nav.sub { padding-left: 44px; }
 kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 4px; background: var(--bg); }
 .badge { min-width: 16px; height: 16px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--primary); color: var(--on-primary); font: 700 11px/16px var(--sans); text-align: center; }
 /* Red, nudged toward the text colour so the page colour reads on it at 4.5:1 in either theme. */
 .badge.paused { background: color-mix(in srgb, var(--red), var(--text) 10%); color: var(--bg); }
-.settings-nav { margin-top: auto; }
-.panel { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); }
-.panel form { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px; }
-.panel form > svg { position: absolute; left: 22px; top: 23px; color: var(--dim); pointer-events: none; }
+.settings-nav { margin-top: auto; padding-left: 8px; }
 .search { flex: 1; min-width: 0; height: 44px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
           font: 15px var(--mono); padding: 0 12px 0 40px; border-radius: 8px; outline: none; transition: border-color var(--fast); }
 /* A scan field's ring is its --mark border and gold glow. */
@@ -84,7 +85,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .search:disabled { opacity: .5; }
 .panel-close { all: unset; box-sizing: border-box; display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 6px; color: var(--dim); cursor: pointer; }
 .panel-close:hover, .panel-close:focus-visible { background: var(--hover); color: var(--text); }
-.rail .message { margin: 0 14px 8px; }
+.rail .message { margin: 0 2px 8px; }
 .rail .section { padding: 14px 22px 6px; }
 .list { overflow: auto; flex: 1; padding-bottom: 12px; }
 .row { all: unset; box-sizing: border-box; margin: 2px 14px; width: calc(100% - 28px); padding: 10px 12px; border-radius: 12px; cursor: pointer;
@@ -195,7 +196,6 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .history .note { display: block; color: var(--dim); }
 .history .late { font-weight: 700; }
 .sheet .message.error { margin: 10px 16px; }
-.sheet-status .message { margin: 10px 16px; }
 
 /* Inventory Chart: a ledger of thick rounded bars, label | bar | total, segment counts underneath. */
 .chart { display: grid; grid-template-columns: var(--bar-name-w) 1fr auto; column-gap: 14px; align-items: center; padding-top: 6px; font-size: 13.5px; }
@@ -312,6 +312,10 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .link:hover, .link:focus-visible { text-decoration: underline; }
 /* 24px tall to click where it stands alone (a table cell, a field's value), not inside a sentence. */
 :is(td, dd) > .link { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; }
+/* A fact's Copy button: quiet until its row is pointed at or it has focus. */
+.facts .copy { justify-content: center; color: var(--dim); opacity: .5; }
+.facts dd:hover .copy, .facts .copy:focus-visible { opacity: 1; }
+.facts .copy:hover { color: var(--text); }
 
 /* Status: a colored dot and the name in the text color, so the words carry the meaning. Late: a red dot. */
 .chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; }
@@ -328,6 +332,7 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 
 /* Settings: one column at most 640px wide, each section a card. */
 .settings-page { max-width: calc(640px + 32px); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.settings-page[hidden] { display: none; }
 .settings-page h2 { font: 600 14px var(--sans); color: var(--text); margin: 0 0 4px; }
 .settings-page p { margin: 4px 0 12px; }
 .settings-page fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }

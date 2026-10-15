@@ -73,6 +73,8 @@ A User's page shows their permission groups and any permissions of their own. Ma
 
 Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
 
+Settings has four tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server and each Report's Schedule), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+
 Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
 
 Credentials use Electron safeStorage: macOS Keychain, Windows DPAPI, or the Linux system password store. Only encrypted token bytes are written to `settings.json` in Electron's per-user app data directory. With no usable password store (including Linux's `basic_text` fallback), the token is saved unencrypted in `settings.json` with owner-only (0600) permissions, and Settings says so. The saved token is never returned to the renderer. Log out / clear token removes the encrypted token.

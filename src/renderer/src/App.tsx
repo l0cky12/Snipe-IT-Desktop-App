@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, ChevronDown, ChevronRight, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, Check, ChevronDown, ChevronRight, Copy, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { END_OF_DAY } from '../../main/calendar'
@@ -88,14 +88,14 @@ export const reloadPanel = <P extends { asset: { id: number }; n: number }>(p: P
 /** Whether the docked Asset panel takes focus as it opens: not from a field holding text (the next scan, half typed), which would lose it. */
 export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'field' || !text
 
-// Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
-const PANEL_KEY = 'scanPanelOpen'
+// Stored per computer, like the Dashboard layout: which groups of pages in the sidebar are open. Browse starts open, the rest closed.
+const GROUPS_KEY = 'sidebarGroups'
 // Likewise whether the sidebar lists each Workflow under the Workflows item; hidden until opened.
 const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the sidebar; every List (these and the rest) is on the All records page.
+// The Lists in the sidebar's Browse group; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
@@ -166,13 +166,12 @@ export function App() {
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
-  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== 'false')
-  useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen])
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{"Browse":true}'))
+  useEffect(() => localStorage.setItem(GROUPS_KEY, JSON.stringify(openGroups)), [openGroups])
   const [workflowsOpen, setWorkflowsOpen] = useState(() => localStorage.getItem(WORKFLOWS_OPEN_KEY) === 'true')
   useEffect(() => localStorage.setItem(WORKFLOWS_OPEN_KEY, String(workflowsOpen)), [workflowsOpen])
-  // Rendered now, so the box can take focus (and the keystroke being handled) straight away; what was in it is selected, so a scan replaces it.
+  // What was in the box is selected, so a scan replaces it.
   function openPanel() {
-    flushSync(() => setPanelOpen(true))
     search.current?.focus()
     search.current?.select()
   }
@@ -345,7 +344,7 @@ export function App() {
   }
 
   const selected = view ? (opensAt(view, showSettings).docked ? panel?.asset.id : undefined) : asset?.id
-  const onAuditDay = (d: AuditDay) => showAuditDay(d, cancel, (m) => (setPanelOpen(true), setMatches(m), setOthers([]), setMessage({ text: '' })))
+  const onAuditDay = (d: AuditDay) => showAuditDay(d, cancel, (m) => (setMatches(m), setOthers([]), setMessage({ text: '' })))
   const go = (page: ListKind, drill?: Drill, report?: SavedReport, assetView?: AssetView) => (setShowSettings(false), setPanel(null), setView({ page, drill, report, assetView, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -379,7 +378,6 @@ export function App() {
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
   // The All records item stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
-
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
   const workflowsBusy = Object.values(runners).reduce((n, r) => n + r!.pending, 0)
   // The badge turns red while any Workflow is Paused, for an Operator who left it.
@@ -388,8 +386,23 @@ export function App() {
   const unsent = Object.values(runners).reduce((n, r) => n + r!.unsent, 0)
   useEffect(() => void window.workflows.unsent(unsent), [unsent])
   const openSettings = () => (cancel(), setShowSettings(true))
+  const show = (p: 'dashboard' | 'workflows' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
+  // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
+  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string; toggle?: { open: boolean; flip: () => void } }
+  const pages: Page[][] = [
+    [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
+    [
+      // With the Workflows hidden, the Workflows item stands for whichever is open.
+      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+        toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
+        aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
+      ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
+      ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
+    ],
+    [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
+  ]
 
-  // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
+  // What the sidebar says, under the scan box.
   const railMessage = <>
     {busy > 0 && <p className="message" role="status">Loading…</p>}
     {message.text && (
@@ -404,43 +417,6 @@ export function App() {
       <aside className="rail">
         <nav className="sidebar" aria-label="Pages">
           <div className="brand"><span className="logo" aria-hidden="true">S</span>Snipe-IT Desktop</div>
-          <button aria-label="Search or scan" aria-controls={panelOpen ? 'scan-panel' : undefined} className="find" onClick={openPanel}>
-            <Search size={14} />Search or scan<kbd>Ctrl K</kbd>
-          </button>
-          <button aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
-            <LayoutGrid size={18} />Dashboard
-          </button>
-          {LISTS.map((k) => {
-            const Icon = listIcon[k]
-            return <button key={k} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={18} />{listName[k]}</button>
-          })}
-          <button aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
-            <FileSpreadsheet size={18} />Reports
-          </button>
-          {canImport && (
-            <button aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
-              <FileUp size={18} />Import
-            </button>
-          )}
-          <button aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
-            <Boxes size={18} />All records
-          </button>
-          <div className="nav-row">
-            <button aria-label={`Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' || (!workflowsOpen && page === 'workflow') ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
-              <WorkflowsIcon size={18} />Workflows
-              {workflowsBusy > 0 && <span className={`badge${workflowsPaused ? ' paused' : ''}`}>{workflowsBusy}</span>}
-            </button>
-            <button aria-label={workflowsOpen ? 'Hide Workflows' : 'Show Workflows'} aria-expanded={workflowsOpen} className="nav toggle" onClick={() => setWorkflowsOpen((o) => !o)}>
-              {workflowsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            </button>
-          </div>
-          {workflowsOpen && BUILT.map((w) => {
-            const Icon = workflowIcon[w]!
-            return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
-          })}
-          <button aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
-        </nav>
-        {panelOpen && <div className="panel" id="scan-panel">
           <form onSubmit={onSubmit}>
             <ScanBarcode size={18} />
             <input
@@ -450,9 +426,9 @@ export function App() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Scan / search…"
+              title="Ctrl+K"
               aria-label="Scan an Asset Tag, or search everything"
             />
-            <button type="button" className="panel-close" aria-label="Close Scan/Search" onClick={() => setPanelOpen(false)}><X size={16} /></button>
           </form>
           {railMessage}
           <div className="list">
@@ -477,9 +453,32 @@ export function App() {
               ))}
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={(a) => pick(a.id)} />}
           </div>
-        </div>}
+          {['Browse', 'Act', 'Admin'].map((name, i) => {
+            const open = !!openGroups[name]
+            const badge = pages[i].reduce((n, p) => n + (p.badge ?? 0), 0)
+            const paused = pages[i].some((p) => p.paused)
+            // A closed group holding the current page shows as selected, so the Operator can still see where they are.
+            return <Fragment key={name}>
+              <button className={`grp${!open && pages[i].some((p) => p.sel) ? ' sel' : ''}`} aria-expanded={open} onClick={() => setOpenGroups((g) => ({ ...g, [name]: !open }))}>
+                {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{name}{!open && badge > 0 && <span className={`badge${paused ? ' paused' : ''}`}>{badge}</span>}
+              </button>
+              {open && pages[i].map((p) => {
+                const item = <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
+                  <p.Icon size={18} />{p.label}{!!p.badge && <span className={`badge${p.paused ? ' paused' : ''}`}>{p.badge}</span>}{p.kbd && <kbd>{p.kbd}</kbd>}
+                </button>
+                return p.toggle ? <div key={p.label} className="nav-row">
+                  {item}
+                  <button aria-label={`${p.toggle.open ? 'Hide' : 'Show'} ${p.label}`} aria-expanded={p.toggle.open} className="nav toggle" onClick={p.toggle.flip}>
+                    {p.toggle.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+                </div> : item
+              })}
+            </Fragment>
+          })}
+          <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
+        </nav>
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} onAppearance={setSettings} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView key={view.reminderClick} tempOnly={!!view.reminderClick} onPick={pick} onDrill={go} onAuditDay={onAuditDay} onReport={openReport} onAssetView={(v) => go('assets', undefined, undefined, v)} onSettings={() => (cancel(), setShowSettings(true))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} /> : view?.page === 'reports' ? <ReportsView key={view.start?.click} start={view.start} onOpenSaved={(r) => go(r.kind, reportDrill(r), r)} /> : view?.page === 'import' ? <ImportView />
         : view?.page === 'workflows' ? <WorkflowsPage doneCount={(w) => runners[w]?.rows.filter((r) => r.result.state === 'done').length ?? 0} onOpen={openWorkflow} />
         : view?.page === 'workflow' && (view.workflow === 'Bulk checkout' || view.workflow === 'Temp checkout') ? <BulkCheckoutView key={view.workflow} flow={view.workflow === 'Bulk checkout' ? bulkCheckout : tempCheckout} field={workflowField} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
@@ -769,6 +768,41 @@ export type SheetProps = {
 /** The Asset panel's extras: Tick (the Asset in the List's Selection or not), Close, and whether the Asset is outside the open View. */
 export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void; notInView: boolean }
 
+// The Asset panel's facts: label, what shows, and what its Copy button copies (nothing when the Asset has no value).
+// Overdue and Warranty flag the fact they're about.
+export const assetFacts = (a: Asset): [label: string, shown: React.ReactNode, copy: string | null][] => [
+  ['Name', a.name || 'Unnamed Asset', a.name],
+  ['Asset Model', a.model, a.model],
+  ['Status', <StatusChip asset={a} />, a.status],
+  ['Assignee', a.assignee?.name ?? 'Unassigned', a.assignee?.name ?? null],
+  ['Type', a.assignee && kind[a.assignee.type], a.assignee && kind[a.assignee.type]],
+  ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>, a.expectedCheckin],
+  ['Location', a.location, a.location],
+  ['Last audited', a.lastAudited ?? 'Never', a.lastAudited],
+  ['Next audit', a.nextAudit, a.nextAudit],
+  ['Category', a.category, a.category],
+  ['Serial', a.serial && <span className="mono">{a.serial}</span>, a.serial],
+  ['Purchased', a.purchaseDate, a.purchaseDate],
+  ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
+    ? <span className="flag c-grey">Warranty expired</span>
+    : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>, a.warrantyEnd],
+]
+
+// Copies one fact to the clipboard; the icon turns to a tick for a moment once it has.
+export function CopyButton({ label, text }: { label: string; text: string }) {
+  const [done, setDone] = useState<'Copied' | "Couldn't copy" | null>(null)
+  useEffect(() => {
+    if (!done) return
+    const t = setTimeout(() => setDone(null), 1500)
+    return () => clearTimeout(t)
+  }, [done])
+  return (
+    <button className="link copy" aria-label={`Copy ${label}`} title={done ?? `Copy ${label}`} onClick={() => navigator.clipboard.writeText(text).then(() => setDone('Copied'), () => setDone("Couldn't copy"))}>
+      {done === 'Copied' ? <Check size={14} /> : <Copy size={14} />}
+    </button>
+  )
+}
+
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
 export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, onUnfinished, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
@@ -791,24 +825,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     setForm(null)
     root.current?.focus()
   }
-  // Overdue and Warranty flag the fact they're about.
-  const facts: [string, React.ReactNode][] = [
-    ['Name', a.name || 'Unnamed Asset'],
-    ['Asset Model', a.model],
-    ['Status', <StatusChip asset={a} />],
-    ['Assignee', a.assignee?.name ?? 'Unassigned'],
-    ['Type', a.assignee && kind[a.assignee.type]],
-    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>],
-    ['Location', a.location],
-    ['Last audited', a.lastAudited ?? 'Never'],
-    ['Next audit', a.nextAudit],
-    ['Category', a.category],
-    ['Serial', a.serial && <span className="mono">{a.serial}</span>],
-    ['Purchased', a.purchaseDate],
-    ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
-      ? <span className="flag c-grey">Warranty expired</span>
-      : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>],
-  ]
+  const facts = assetFacts(a)
   const canCheckout = !checkoutReason(a)
   return (
     <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
@@ -838,7 +855,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
       )}
       <div className="asset-top">
         <dl className="facts">
-          {facts.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}</dd></Fragment>)}
+          {facts.map(([k, v, copy]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}{copy && <CopyButton label={k} text={copy} />}</dd></Fragment>)}
         </dl>
         <AssetCodes baseUrl={baseUrl} asset={a} />
       </div>
