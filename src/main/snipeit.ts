@@ -170,8 +170,10 @@ export type Field = { label: string; value: string; link?: { kind: RecordKind; i
 export type RecordDetail = { kind: RecordKind; id: number; name: string; fields: Field[]; categoryType?: string; remaining?: number; assets?: number; can: Can }
 /** A User's permissions of their own (key → granted '1', denied '-1') and their permission groups. */
 export type UserAccess = { permissions: Record<string, string>; groups: StatusLabel[] }
-/** A permission group and what it grants (key → '1' granted, '0' not). */
-export type Group = { id: number; name: string; permissions: Record<string, string> }
+/** A permission group, how many Users are in it, and what it grants (key → '1' granted, '0' not). */
+export type Group = { id: number; name: string; members: number; permissions: Record<string, string> }
+/** A permission group in the list of them. */
+export type GroupSummary = { id: number; name: string; members: number }
 
 // Snipe-IT's permission keys (config/permissions.php), by area, as its group editor shows them.
 export const PERMISSIONS: [area: string, keys: string[]][] = [
@@ -1049,6 +1051,13 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   const isError = (body: unknown): body is SnipeItError => (body as SnipeItError)?.status === 'error'
 
+  // A User's own permissions (granted or denied; inherited ones aren't sent) and groups, from Snipe-IT's User.
+  const accessOf = (user: { permissions?: unknown; groups?: { rows?: Named[] } | null } | SnipeItError): UserAccess => {
+    if (isError(user)) throw new Error(reason(user.messages))
+    const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
+    return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+  }
+
   // The Asset with exactly this Asset Tag, or null; no search fallback, so a Workflow scan never acts on a near match.
   async function assetByTag(tag: string): Promise<Asset | null> {
     if (typeof tag !== 'string' || !tag) throw new Error('Invalid Asset Tag')
@@ -1778,22 +1787,26 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // A User's own permissions and groups; anyone who may view the User may see them.
     async userAccess(id: number): Promise<UserAccess> {
       checkId(id, 'User')
-      const user = await request<{ permissions?: unknown; groups?: { rows?: Named[] } | null }>(`/users/${id}`)
-      if (isError(user)) throw new Error(reason(user.messages))
-      const permissions = Object.fromEntries(Object.entries(permissionsOf(user.permissions)).map(([k, v]) => [k, String(v)]).filter(([, v]) => v === '1' || v === '-1'))
-      return { permissions, groups: (user.groups?.rows ?? []).flatMap((g) => (g ? [{ id: g.id, name: g.name }] : [])) }
+      return accessOf(await request(`/users/${id}`))
+    },
+    // The Operator's own account and groups, so a change that could take away their own access asks first.
+    async operatorAccess(): Promise<UserAccess & { id: number }> {
+      const me = await request<{ id: number; permissions?: unknown; groups?: { rows?: Named[] } | null }>('/users/me')
+      return { ...accessOf(me), id: (me as { id: number }).id }
     },
 
-    // Every permission group (superuser only).
-    async groups(): Promise<StatusLabel[]> {
-      return (await allRows<StatusLabel>('/groups')).map(({ id, name }) => ({ id, name }))
+    // Every permission group (superuser only), with how many Users are in each.
+    async groups(): Promise<GroupSummary[]> {
+      return (await allRows<GroupSummary & { users_count?: number | null }>('/groups')).map(({ id, name, users_count }) => ({ id, name, members: count(users_count) }))
     },
 
+    // Snipe-IT's single group doesn't count its Users (users_count is always 0 there), so the Users List filtered to it does.
     async group(id: number): Promise<Group> {
       checkId(id, 'group')
-      const g = await request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`)
+      const [g, users] = await Promise.all([request<{ id: number; name: string; permissions?: unknown }>(`/groups/${id}`), request<{ total?: number }>(`/users?group_id=${id}&limit=1`)])
       if (isError(g)) throw new Error(reason(g.messages))
-      return { id: g.id, name: g.name, permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
+      if (isError(users)) throw new Error(reason(users.messages))
+      return { id: g.id, name: g.name, members: count(users.total), permissions: Object.fromEntries(Object.entries(permissionsOf(g.permissions)).map(([k, v]) => [k, String(v) === '1' ? '1' : '0'])) }
     },
 
     // A User's groups, all at once: the ones listed are kept or added, the rest removed.
@@ -1805,17 +1818,25 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
-    // A group's name and what it grants. Only permission keys and grant/not reach Snipe-IT, which drops keys it doesn't know.
-    async saveGroup(id: number, name: string, permissions: Record<string, string>): Promise<SaveResult> {
-      checkId(id, 'group')
+    // A group's name and what it grants; id null makes a new group. Only permission keys and grant/not reach Snipe-IT, which
+    // drops keys it doesn't know (and grants every permission to a new group sent none, so the screen always sends them).
+    async saveGroup(id: number | null, name: string, permissions: Record<string, string>): Promise<SaveResult> {
+      if (id !== null) checkId(id, 'group')
       if (typeof name !== 'string' || typeof permissions !== 'object' || permissions === null) throw new Error('Invalid group')
       for (const [k, v] of Object.entries(permissions)) if (!/^[a-z_]+(\.[a-z_]+)*$/.test(k) || (v !== '1' && v !== '0')) throw new Error(`Invalid permission: ${k}`)
-      const result = await request(`/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, 'PATCH')
-      if (!isError(result)) return { ok: true, id }
+      const result = await request<{ payload?: { id?: number } | null }>(id === null ? '/groups' : `/groups/${id}`, { name, permissions: JSON.stringify(permissions) }, id === null ? 'POST' : 'PATCH')
+      if (!isError(result)) return { ok: true, id: id ?? Number(result.payload?.id) }
       const fieldMessages = result.messages && typeof result.messages === 'object' ? (result.messages as Record<string, unknown>) : null
       return fieldMessages
         ? { ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: Object.fromEntries(Object.entries(fieldMessages).map(([k, m]) => [k, reason(m)])) }
         : { ok: false, message: reason(result.messages) || "Snipe-IT didn't save it.", errors: {} }
+    },
+
+    // Deletes a group; Snipe-IT (v8.4.1+) refuses one that still has Users in it, with its reason.
+    async deleteGroup(id: number): Promise<void> {
+      checkId(id, 'group')
+      const result = await request(`/groups/${id}`, {}, 'DELETE')
+      if (isError(result)) throw new Error(reason(result.messages))
     },
 
     // Names for filter dropdowns. ponytail: every row, via allRows; fine at a school's few hundred models.
