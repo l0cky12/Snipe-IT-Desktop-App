@@ -271,7 +271,7 @@ lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus,
 lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
 Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
 // A User made in the app may have no Location or department.
-Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
+Object.assign(lists.users.filters, { group_id: (u, v) => u.groups.rows.some((g) => g.id === +v), company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
 // Snipe-IT's audit routes: next audit within its Audit warning setting (30 days here), or past; never Archived Assets.
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
@@ -404,7 +404,7 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' }, groups: groupsOf(limited ? [] : [1]) })
   if (path === 'maintenance-types') return limited ? send(refused, 403) : send(listPage({ rows: () => maintenanceTypeRows, search: (t) => text(t.name) }, url.searchParams))
   if (path === 'maintenances' && req.method === 'POST') {
     const item = assets.find((a) => a.id === body.asset_id)
@@ -450,16 +450,30 @@ createServer(async (req, res) => {
   }
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
-    if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
+    // Like Snipe-IT: the list counts each group's Users, a single group doesn't (users_count 0), and one with Users won't delete.
+    const members = (g) => users.filter((u) => u.groups.rows.some((x) => x.id === g.id)).length
+    if (path === 'groups' && req.method === 'POST') {
+      if (!body.name) return fail({ name: ['The name field is required.'] })
+      if (groups.some((x) => x.name === body.name)) return fail({ name: ['The name has already been taken.'] })
+      const g = { id: Math.max(0, ...groups.map((x) => x.id)) + 1, name: body.name, permissions: JSON.parse(body.permissions ?? '{}') }
+      groups.push(g)
+      return send({ status: 'success', messages: 'Created.', payload: { ...g, users_count: 0 } })
+    }
+    if (path === 'groups') return send(listPage({ rows: () => groups.map((g) => ({ ...g, users_count: members(g) })) }, url.searchParams))
     const g = groups.find((x) => x.id === Number(path.split('/')[1]))
     if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
+    if (req.method === 'DELETE') {
+      if (members(g)) return send({ status: 'error', messages: 'This group has users associated with it and cannot be deleted.', payload: null })
+      groups.splice(groups.indexOf(g), 1)
+      return send({ status: 'success', messages: 'Deleted.', payload: null })
+    }
     if (req.method === 'PATCH') {
       if (!body.name) return fail({ name: ['The name field is required.'] })
       let permissions
       try { permissions = body.permissions && JSON.parse(body.permissions) } catch { return fail({ permissions: ['The permissions must be JSON.'] }) }
       Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
     }
-    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
+    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : { ...g, users_count: 0 })
   }
   if (path === 'imports' || path.startsWith('imports/')) {
     if (limited) return send(refused, 403)
