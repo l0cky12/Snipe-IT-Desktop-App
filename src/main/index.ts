@@ -1,9 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type BrandingInput, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
@@ -108,7 +108,8 @@ app.whenReady().then(() => {
   handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()
-    await sendMail(server, { to, subject: 'Snipe-IT Desktop test email', text: 'This is a test email from Snipe-IT Desktop. Your email settings work, so Reports can be emailed to you here.' })
+    const { name } = store.get().branding
+    await sendMail(server, { to, subject: `${name} test email`, text: `This is a test email from ${name}. Your email settings work, so Reports can be emailed to you here.` })
     return to
   })
   // Kept here, not in the window's storage, so the Report scheduler can read them with the window closed.
@@ -254,12 +255,39 @@ app.whenReady().then(() => {
     win.getChildWindows().forEach((w) => w.close())
     win.hide()
   })
+  // The organisation's name and icon on the window, taskbar and tray (ADR 0003). The app's own tray image stands in for
+  // a window icon until one is chosen, and again once it's removed; the launcher's icon is the installer's.
+  function applyBrand() {
+    const { branding } = store.get()
+    const icon = nativeImage.createFromPath(store.iconPath() ?? trayIcon)
+    win.setIcon(icon)
+    if (!tray) return
+    tray.setImage(icon)
+    tray.setToolTip(branding.name)
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: `Open ${branding.name}`, click: show }, { label: 'Quit', click: () => app.quit() }]))
+  }
+  handle('settings:saveBranding', (_e, input: BrandingInput) => {
+    const saved = store.saveBranding(input)
+    applyBrand()
+    return saved
+  })
+  handle('settings:pickIcon', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'PNG image', extensions: ['png'] }] })
+    if (canceled || !filePaths[0]) return store.get()
+    const saved = store.saveIcon(await readFile(filePaths[0]))
+    applyBrand()
+    return saved
+  })
+  handle('settings:removeIcon', () => {
+    const saved = store.removeIcon()
+    applyBrand()
+    return saved
+  })
   function applyBackground({ tray: inTray, startAtLogin }: Background) {
     if (inTray && !tray) {
       tray = new Tray(nativeImage.createFromPath(trayIcon))
-      tray.setToolTip('Snipe-IT Desktop')
-      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => app.quit() }]))
       tray.on('click', show)
+      applyBrand()
     } else if (!inTray && tray) {
       tray.destroy()
       tray = null
@@ -271,6 +299,7 @@ app.whenReady().then(() => {
     else app.setLoginItemSettings({ openAtLogin: startAtLogin, args: [HIDDEN_ARG] })
   }
   try { applyBackground(background) } catch (e) { console.error('Tray and Start at login:', (e as Error).message) }
+  try { applyBrand() } catch (e) { console.error('Branding:', (e as Error).message) }
 })
 
 app.on('window-all-closed', () => app.quit())

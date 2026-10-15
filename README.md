@@ -73,7 +73,9 @@ A User's page shows their permission groups and any permissions of their own. Ma
 
 Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
 
-Settings has four tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server and each Report's Schedule), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+Settings has five tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server and each Report's Schedule), **Branding** (your organisation's name, icon and colours), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+
+Branding puts your organisation's name in the sidebar, the window title, the tray and emails, its square PNG icon in the sidebar, on the window and taskbar and in the tray, and its two colours (primary: the logo tile and buttons; accent: the selection marker and focus ring) on the page as you type them. The Start menu or launcher keeps the installed icon and name, and About keeps the app's own. Reset colours puts NOMMA's navy and gold back.
 
 Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
 

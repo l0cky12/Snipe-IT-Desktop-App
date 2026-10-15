@@ -3,15 +3,16 @@
 @font-face { font-family: 'Space Mono'; font-weight: 400; font-display: block; src: url(./fonts/space-mono-latin.woff2) format('woff2'); }
 @font-face { font-family: 'Space Mono'; font-weight: 700; font-display: block; src: url(./fonts/space-mono-bold-latin.woff2) format('woff2'); }
 
-/* Tokens (look B). Neutral greys; NOMMA navy and gold are accents only: the logo, the primary button, the marker.
+/* Tokens (look B). Neutral greys; the two brand colours (NOMMA navy and gold until Branding in Settings changes them, see
+   applyColors) are accents only: the logo, the primary button, the marker. --on-navy and --on-gold: text that reads on each.
    The theme comes from prefers-color-scheme, which the Appearance setting switches. */
 :root {
   color-scheme: light dark;
-  --navy: #14285a; --gold: #f5b301;
+  --navy: #14285a; --gold: #f5b301; --on-navy: #ffffff; --on-gold: var(--navy);
   --bg: #ffffff; --side: #f3f4f7; --hover: #e9ebf1; --selrow: #f4f6fb; --line: #e4e7ee; --line2: #eef0f4;
   --text: #171b26; --dim: #616a7d;
-  /* --mark: the selection marker and focus ring, 3:1 or more on --bg, --side and --hover (gold is 1.9:1 on white). */
-  --primary: var(--navy); --on-primary: #ffffff; --mark: #b97a00;
+  /* --mark: the selection marker and focus ring, darkened to 3:1 or more on --bg, --side and --hover (gold is 1.9:1 on white). */
+  --primary: var(--navy); --on-primary: var(--on-navy); --mark: color-mix(in srgb, var(--gold), black 25%);
   /* Status colors (deployed, deployable, pending, undeployable, archived) mark with dots, outlines and edges, never text. */
   --blue: #2e7fd9; --green: #1f9e63; --amber: #d9731f; --red: #d9432c; --grey: #8a93a5;
   --series-1: #2a78d6; --series-1-track: #cde2fb;
@@ -27,7 +28,7 @@
   :root {
     --bg: #16181d; --side: #111216; --hover: #1f2229; --selrow: #1c1f26; --line: #272a33; --line2: #1f2229;
     --text: #e3e5ea; --dim: #8d94a3;
-    --primary: var(--gold); --on-primary: var(--navy); --mark: #f5b301;
+    --primary: var(--gold); --on-primary: var(--on-gold); --mark: var(--gold);
     --blue: #5aa2f0; --green: #3cc884; --amber: #f2964a; --red: #f2705c;
     --series-1: #3987e5; --series-1-track: #184f95;
     --shadow: 0 8px 24px -8px #00000099;
@@ -49,6 +50,8 @@ button, input, select { font-family: inherit; }
 .sidebar { width: 300px; flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 8px; background: var(--side); border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 10px; font-weight: 700; font-size: 13.5px; }
 .logo { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--navy); color: var(--gold); font: 800 12px var(--sans); }
+/* The organisation's icon in the tile's place. */
+img.logo { background: none; object-fit: contain; }
 .sidebar form { position: relative; display: flex; align-items: center; margin-bottom: 8px; }
 .sidebar form > svg { position: absolute; left: 12px; top: 13px; color: var(--dim); pointer-events: none; }
 /* What the scan box found takes what room the groups leave, and scrolls. */
@@ -351,6 +354,11 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .settings-page .check .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .settings-page .check .inline-time { display: inline-block; width: auto; height: auto; min-height: 28px; margin: -6px 0 0 6px; padding: 0 10px; cursor: text; }
 .settings-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+/* Branding: the icon beside its buttons, and each colour's picker beside its hex box. */
+.brand-icon, .color-row { display: flex; align-items: center; gap: 10px; }
+.brand-icon .logo { width: 44px; height: 44px; font-size: 20px; }
+.settings-page input[type=color] { flex: none; width: 44px; padding: 2px; cursor: pointer; }
+.color-row input[type=text] { width: 110px; font-family: var(--mono); }
 .settings-page .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .settings-page .primary:hover:not(:disabled) { filter: brightness(1.08); }
 /* The Reports page's compact table and Schedule form, inside a Settings card. */

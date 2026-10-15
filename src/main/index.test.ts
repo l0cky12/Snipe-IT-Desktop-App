@@ -53,6 +53,7 @@ beforeEach(async () => {
     app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: (name: string, handler: (e: { preventDefault(): void }) => void) => appEvents.set(name, handler), setAppUserModelId: () => {}, quit, isPackaged: false },
     BrowserWindow: class {
       setMenuBarVisibility() {}
+      setIcon() {}
       loadFile() {}
       loadURL() {}
       on(name: string, handler: (e: { preventDefault(): void }) => void) { windowEvents.set(name, handler) }
@@ -61,7 +62,7 @@ beforeEach(async () => {
       hide() {}
     },
     dialog: { showMessageBoxSync: ask },
-    Tray: class { setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
+    Tray: class { setImage() {} setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
     Menu: { buildFromTemplate: (template: typeof trayMenu) => template },
     nativeImage: { createFromPath: () => ({}) },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },

@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { BRAND_DEFAULTS, HEX, type BrandingInput } from '../../main/branding'
 import type { Appearance, Background, MailInput, Settings, SettingsInput, TempCheckout } from '../../main/config'
+import { applyColors } from './branding'
 import { formatCalendar } from '../../main/calendar'
 import { ScheduledReports } from './ReportsView'
 
@@ -11,8 +13,8 @@ export function unencryptedRemote(baseUrl: string) {
   return url.protocol === 'http:' && !['localhost', '[::1]'].includes(url.hostname) && !/^127(\.\d+){3}$/.test(url.hostname)
 }
 
-/** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the Temp checkout rules, and this PC alone. */
-const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
+/** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the organisation's look, the Temp checkout rules, and this PC alone. */
+const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['branding', 'Branding'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
 
 export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
@@ -22,7 +24,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
-  const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
+  const [place, setPlace] = useState<'connection' | 'mail' | 'branding' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
   // Every tab stays mounted, so what's typed on one survives a look at another.
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('snipeit')
   const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
@@ -31,6 +33,13 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
   const [repairType, setRepairType] = useState(settings.repairTypeId?.toString() ?? '')
+  const [brand, setBrand] = useState<BrandingInput>(() => { const { icon: _, ...b } = settings.branding; return b })
+  const setBrandField = (change: Partial<BrandingInput>) => { setBrand((b) => ({ ...b, ...change })); setMessage('') }
+  // The colours show on the page as typed; leaving the page puts the saved ones (as of then, hence the ref) back.
+  const savedBrand = useRef(settings.branding)
+  savedBrand.current = settings.branding
+  useEffect(() => applyColors(brand), [brand.primary, brand.accent])
+  useEffect(() => () => applyColors(savedBrand.current), [])
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
   // Default Location is no longer offered; saving clears any previously stored one.
@@ -143,6 +152,42 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
     </form>
     {place === 'mail' && notes}
     {settings.hasToken ? <ScheduledReports /> : <section className="settings-section"><h2>Scheduled Reports</h2><p className="dim">Connect to Snipe-IT first.</p></section>}
+  </div>
+  <div className="settings-page" role="tabpanel" hidden={tab !== 'branding'}>
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
+      const saved = await window.settings.saveBranding(brand)
+      const { icon: _, ...b } = saved.branding
+      setBrand(b); onSaved(saved); setMessage('Branding saved.')
+    }, 'branding') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>Branding</h2><p className="dim">Your organisation's name, icon and colours, in the app and on exported Reports.</p>
+          <label htmlFor="brand-name">Organisation name</label>
+          <input id="brand-name" required maxLength={80} value={brand.name} onChange={(e) => setBrandField({ name: e.target.value })} />
+          <label htmlFor="brand-icon">Icon</label>
+          <div className="brand-icon">
+            {settings.branding.icon ? <img className="logo" src={settings.branding.icon} alt="Your icon" /> : <span className="logo" aria-hidden="true">{brand.name.trim()[0] ?? ''}</span>}
+            <button id="brand-icon" type="button" onClick={() => run(async () => { onSaved(await window.settings.pickIcon()) }, 'branding')}>Choose PNG…</button>
+            {settings.branding.icon && <button type="button" onClick={() => run(async () => { onSaved(await window.settings.removeIcon()); setMessage('Icon removed.') }, 'branding')}>Remove</button>}
+          </div>
+          <p className="hint">A square PNG, 256 px or larger. Shown in the sidebar, the window and taskbar, the tray, and on exported Reports. The Start menu or launcher keeps the installed icon.</p>
+          {([['primary', 'Primary colour', 'The logo tile and buttons.'], ['accent', 'Accent colour', 'The selection marker and focus ring, and buttons in the dark theme.']] as const).map(([key, name, hint]) => <div key={key}>
+            <label htmlFor={`brand-${key}`}>{name}</label>
+            <div className="color-row">
+              <input type="color" aria-label={`${name} picker`} value={HEX.test(brand[key]) ? brand[key] : '#000000'} onChange={(e) => setBrandField({ [key]: e.target.value })} />
+              <input id={`brand-${key}`} type="text" required pattern="#[0-9a-fA-F]{6}" spellCheck={false} value={brand[key]} onChange={(e) => setBrandField({ [key]: e.target.value })} />
+              <span className="hint" style={{ margin: 0 }}>{hint}</span>
+            </div>
+          </div>)}
+          <label htmlFor="brand-footer">Report footer line</label>
+          <input id="brand-footer" maxLength={200} placeholder="Blank: none" value={brand.footer} onChange={(e) => setBrandField({ footer: e.target.value })} />
+          <p className="hint">On exported HTML and PDF Reports, under the table on every page. The app's own name stays only on About and the installer.</p>
+          <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save branding'}</button>
+            <button type="button" onClick={() => setBrandField({ primary: BRAND_DEFAULTS.primary, accent: BRAND_DEFAULTS.accent })}>Reset colours</button></div>
+        </section>
+      </fieldset>
+    </form>
+    {place === 'branding' && notes}
   </div>
   <div className="settings-page" role="tabpanel" hidden={tab !== 'checkouts'}>
     {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
