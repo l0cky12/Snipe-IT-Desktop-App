@@ -48,20 +48,23 @@ describe('the Settings tabs', () => {
 })
 
 describe('the Sidebar checkboxes', () => {
-  it('two quick ticks both stick, the second saved on top of the first before it answers', () => {
+  it('two quick ticks both stick, the second saved on top of the first', async () => {
     const saved: string[][] = []
-    const tick = sidebarTicks(['assets', 'users'], (s) => (saved.push(s), new Promise(() => {})))
+    const tick = sidebarTicks(['assets', 'users'], async (s) => { saved.push(s) })
     tick('licenses', true)
     tick('accessories', true)
-    tick('users', false)
+    await tick('users', false)
     expect(saved).toEqual([['assets', 'users', 'licenses'], ['assets', 'users', 'licenses', 'accessories'], ['assets', 'licenses', 'accessories']])
   })
 
-  it("a tick that fails to save is left out of the next one", async () => {
+  it('a tick that fails to save is left out of the ones after it, even those clicked before it failed', async () => {
     const saved: string[][] = []
-    const tick = sidebarTicks(['assets'], async (s) => { saved.push(s); if (s.includes('licenses')) throw new Error('disk full') })
-    await expect(tick('licenses', true)).rejects.toThrow('disk full')
+    const tick = sidebarTicks(['assets'], async (s) => { if (s.includes('licenses')) throw new Error('disk full'); saved.push(s) })
+    const failed = expect(tick('licenses', true)).rejects.toThrow('disk full')
+    const pending = tick('accessories', true)
+    await failed
+    await pending
     await tick('reports', true)
-    expect(saved.at(-1)).toEqual(['assets', 'reports'])
+    expect(saved).toEqual([['assets', 'accessories'], ['assets', 'accessories', 'reports']])
   })
 })

@@ -18,11 +18,17 @@ export function unencryptedRemote(baseUrl: string) {
 /** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the Temp checkout rules, and this PC alone. */
 const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
 
-// Each Sidebar tick saves on top of the one before it, answered or not, so two quick ticks both stick. One that fails is undone.
+// Sidebar ticks save one at a time, each on top of the one before it, so two quick ticks both stick. One that fails is
+// undone before the next is saved.
 export function sidebarTicks<T>(start: SidebarPage[], save: (sidebar: SidebarPage[]) => Promise<T>) {
   let current = start
+  let queue: Promise<unknown> = Promise.resolve()
   const flip = (page: SidebarPage, on: boolean) => (current = on ? [...current, page] : current.filter((s) => s !== page))
-  return (page: SidebarPage, on: boolean) => save(flip(page, on)).catch((err: unknown) => { flip(page, !on); throw err })
+  return (page: SidebarPage, on: boolean) => {
+    const run = queue.then(() => save(flip(page, on)).catch((err: unknown) => { flip(page, !on); throw err }))
+    queue = run.catch(() => {})
+    return run
+  }
 }
 
 // onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
