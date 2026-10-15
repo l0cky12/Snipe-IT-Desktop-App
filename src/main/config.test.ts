@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BRAND_DEFAULTS, textOn } from './branding'
-import { createSettingsStore } from './config'
+import { createSettingsStore, reportDomain } from './config'
 import { RANGED_REPORTS, REPORTS, takesRange } from './snipeit'
 
 const dirs: string[] = []
@@ -370,4 +370,22 @@ describe('Branding', () => {
     expect(textOn('#808080')).toBe('#000000')
     expect(textOn('#707070')).toBe('#ffffff')
   })
+})
+
+it('a Schedule keeps the format it sends as, CSV being none, and refuses another', () => {
+  const { store } = setup()
+  const since = new Date(2026, 9, 1, 6)
+  expect(store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'pdf' }, since)[0].schedule).toMatchObject({ format: 'pdf' })
+  expect(store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'csv' }, since)[0].schedule).not.toHaveProperty('format')
+  expect(() => store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'docx' as never }, since)).toThrow('Choose CSV, HTML or PDF.')
+})
+
+it("Reports are emailed only to the Email settings' domain: the sender address's unless set; set, lowercased and checked", () => {
+  const { store } = setup()
+  expect(reportDomain(store.saveMail(mail).mail)).toBe('nomma.net')
+  expect(reportDomain({ ...mail, sender: 'IT@Example.ORG' })).toBe('example.org')
+  expect(store.saveMail({ ...mail, domain: ' Schools.Example.org ' }).mail.domain).toBe('schools.example.org')
+  expect(reportDomain(store.get().mail)).toBe('schools.example.org')
+  expect(store.saveMail({ ...mail, domain: '' }).mail).not.toHaveProperty('domain')
+  for (const domain of ['not a domain', 'nomma', '@nomma.net', 'x@nomma.net']) expect(() => store.saveMail({ ...mail, domain })).toThrow('Enter the email domain')
 })
