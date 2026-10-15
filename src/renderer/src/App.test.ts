@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { auditedLine, auditedResult, CheckinForm, CheckoutForm, defaultLocationChoice, createdUser, ifShowing, layoutFrom, newUserFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
+import { assetFacts, auditedLine, auditedResult, CheckinForm, CopyButton, CheckoutForm, defaultLocationChoice, createdUser, ifShowing, layoutFrom, newUserFrom, reloadPanel, opensAt, panelTakesFocus, routeKey, showAuditDay, startsOver, StatusForm } from './App'
 
 const key = (name: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => ({ key: name, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -216,5 +216,26 @@ describe('Create User… from Checkout', () => {
   it('chooses the created User by the id Snipe-IT returned, named as Snipe-IT names Users', () => {
     expect(createdUser(42, { first_name: 'Pat', last_name: 'Example', username: 'pexample', password: 'x' })).toEqual({ id: 42, name: 'Pat Example', detail: 'pexample' })
     expect(createdUser(43, { first_name: ' Pat ', last_name: '' })).toEqual({ id: 43, name: 'Pat', detail: '' })
+  })
+})
+
+describe('copying a fact from the Asset panel', () => {
+  const asset = {
+    name: '', model: 'Fake Book 14', status: 'Ready to Deploy', statusMeta: 'deployable', assignee: { id: 2, name: 'Fake Person', type: 'user' },
+    expectedCheckin: null, overdue: null, location: '', lastAudited: null, nextAudit: null, category: 'Laptops', serial: 'FAKE-SERIAL-1',
+    purchaseDate: '2026-01-01', warrantyEnd: null, warranty: null,
+  } as unknown as Parameters<typeof assetFacts>[0]
+  const copies = Object.fromEntries(assetFacts(asset).map(([label, , copy]) => [label, copy]))
+
+  it('copies the value itself, not how it is shown', () => {
+    expect(copies).toMatchObject({ 'Asset Model': 'Fake Book 14', Status: 'Ready to Deploy', Assignee: 'Fake Person', Type: 'User', Serial: 'FAKE-SERIAL-1', Purchased: '2026-01-01' })
+  })
+
+  it('offers nothing to copy for a fact the Asset has no value for', () => {
+    for (const label of ['Name', 'Expected Checkin', 'Location', 'Last audited', 'Next audit', 'Warranty ends']) expect(copies[label]).toBeFalsy()
+  })
+
+  it('names the fact on its Copy button', () => {
+    expect(renderToStaticMarkup(createElement(CopyButton, { label: 'Serial', text: 'FAKE-SERIAL-1' }))).toContain('aria-label="Copy Serial"')
   })
 })
