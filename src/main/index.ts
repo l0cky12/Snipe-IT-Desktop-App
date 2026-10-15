@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
 import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type BrandingInput, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import { fileName, toCsv } from './export'
 import { sendMail } from './mail'
+import { checkExport, FORMATS, pdfFooter, reportHtml, type ExportInput } from './report'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
@@ -32,20 +34,22 @@ async function showLabel(parent: BrowserWindow | null, dir: string, name: string
   await win.loadFile(file, { hash: 'navpanes=0' })
 }
 
-// The app's own Labels (a page of HTML from the screen, see labelHtml) as a PDF of Label-sized pages. From a file, as a
-// data: URL of many Labels would pass Chromium's 2 MB URL limit.
-async function ownLabelPdf(dir: string, html: string): Promise<Buffer> {
-  if (typeof html !== 'string') throw new Error('Invalid Label')
-  const file = join(dir, 'labels.html')
+// A page of HTML as a PDF, from a file in dir: as a data: URL, many Labels or rows would pass Chromium's 2 MB URL limit.
+async function htmlToPdf(dir: string, html: string, options: Electron.PrintToPDFOptions): Promise<Buffer> {
+  if (typeof html !== 'string') throw new Error('Invalid page')
+  const file = join(dir, 'page.html')
   await writeFile(file, html)
   const win = new BrowserWindow({ show: false, webPreferences: { javascript: false } })
   try {
     await win.loadFile(file)
-    return await win.webContents.printToPDF({ pageSize: { width: 2.25, height: 1.25 }, margins: { top: 0, bottom: 0, left: 0, right: 0 }, printBackground: true })
+    return await win.webContents.printToPDF(options)
   } finally {
     win.destroy()
   }
 }
+// The app's own Labels (a page of HTML from the screen, see labelHtml) as a PDF of Label-sized pages.
+const ownLabelPdf = (dir: string, html: string) =>
+  htmlToPdf(dir, html, { pageSize: { width: 2.25, height: 1.25 }, margins: { top: 0, bottom: 0, left: 0, right: 0 }, printBackground: true })
 
 // One app at a time: launching it again (say, while it's in the tray) shows this one's window, and no Report sends twice.
 if (!app.requestSingleInstanceLock()) app.exit()
@@ -214,6 +218,31 @@ app.whenReady().then(() => {
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
   for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'checkoutStock', 'accessoryHolders', 'checkinAccessory', 'userAccessories', 'returnAccessory', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
+  // A List or Report as a file where the Operator chooses; nothing is written without that. HTML and PDF carry the
+  // Branding; the PDF is landscape Letter with the footer line and page numbers on every page.
+  handle('export:save', async (_e, input: ExportInput) => {
+    const { format, name, columns, rows } = checkExport(input)
+    const when = new Date()
+    const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: join(app.getPath('documents'), fileName(name, when, format)), filters: [{ name: FORMATS[format], extensions: [format] }] })
+    if (canceled || !filePath) return false
+    if (format === 'csv') {
+      await writeFile(filePath, toCsv(columns, rows))
+      return true
+    }
+    const { branding } = store.get()
+    const html = reportHtml({ name, columns, rows }, when, branding, { paged: format === 'pdf' })
+    if (format === 'html') {
+      await writeFile(filePath, html)
+      return true
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'snipe-it-report-'))
+    try {
+      await writeFile(filePath, await htmlToPdf(dir, html, { pageSize: 'Letter', landscape: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: pdfFooter(branding), margins: { top: 0.5, bottom: 0.7, left: 0.5, right: 0.5 } }))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+    return true
+  })
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
     const pdf = await client().labelPdf(assetTags)

@@ -2,30 +2,27 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
 import { choices as filterChoices, listName } from './ListView'
-import { csvName, rowCount, toCsv } from '../../main/export'
+import { rowCount } from '../../main/export'
+import { FORMATS, type ExportFormat } from '../../main/report'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, ASSET_VIEWS, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report; a snapshot Report has none.
 const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started', tempHistory: 'Checked out' }
 
-// Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
-export function saveCsv(name: string, columns: string[], rows: string[][]) {
-  const url = URL.createObjectURL(new Blob([toCsv(columns, rows)], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = csvName(name, new Date())
-  a.click()
-  URL.revokeObjectURL(url)
-}
+/** Saves a List or Report as a CSV, HTML or PDF file where the Operator chooses; false when they cancel. name: what it holds, e.g. "Activity Report". */
+export const saveExport = (format: ExportFormat, name: string, columns: string[], rows: string[][]) => window.exporter.save({ format, name, columns, rows })
 
-// Asked before saving rows that hold Users or Assignees.
-export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExport: () => void; onCancel: () => void }) {
+// Asked before saving: which file to make and, for rows that hold Users or Assignees (ferpa), that it stays in the district.
+export function ExportConfirm({ rows, ferpa, onExport, onCancel }: { rows: number; ferpa: boolean; onExport: (format: ExportFormat) => void; onCancel: () => void }) {
   return (
-    <div className="ferpa" role="alertdialog" aria-labelledby="ferpa-heading">
-      <p><b id="ferpa-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
-        post it, or save it to a shared or personal drive, and delete it when you're done.</p>
+    <div className="ferpa" role={ferpa ? 'alertdialog' : 'dialog'} aria-labelledby="export-heading">
+      {ferpa
+        ? <p><b id="export-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
+          post it, or save it to a shared or personal drive, and delete it when you're done.</p>
+        : <p><b id="export-heading">Export {rows.toLocaleString()} rows.</b> HTML and PDF carry your organisation's name and icon.</p>}
       <div className="actions">
-        <button onClick={onExport}>I understand, export {rows.toLocaleString()} rows</button>
+        <span>{ferpa ? `I understand, export ${rows.toLocaleString()} rows as` : 'Save as'}</span>
+        {(Object.keys(FORMATS) as ExportFormat[]).map((f) => <button key={f} onClick={() => onExport(f)}>{f.toUpperCase()}</button>)}
         <button className="quiet" onClick={onCancel}>Cancel</button>
       </div>
     </div>
@@ -244,9 +241,9 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   // Opened on a starting query: run it once.
   useEffect(() => { if (start) run() }, [])
 
-  function download(r: Report, what: ReportKind) {
-    saveCsv(REPORT_NAMES[what], r.columns, r.rows)
+  async function download(r: Report, what: ReportKind, format: ExportFormat) {
     setExporting(false)
+    if (await saveExport(format, REPORT_NAMES[what], r.columns, r.rows)) setNotice({ text: `Exported ${rowCount(r.rows.length)}.` })
   }
 
   return (
@@ -255,7 +252,7 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
         <h1>Reports</h1>
         <span className="dim">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
-          <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
+          <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export…</button>
           <EmailNow report={{ builtIn: kind, query: sent }} name={REPORT_NAMES[kind]} onDone={setNotice} />
         </div>
         <form className="actions" onSubmit={run}>
@@ -298,7 +295,7 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
         </form>
       </header>
       {exporting && report && ran && (
-        <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
+        <ExportConfirm ferpa rows={report.rows.length} onExport={(f) => download(report, ran.kind, f)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
