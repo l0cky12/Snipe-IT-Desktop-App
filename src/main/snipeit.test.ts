@@ -2977,3 +2977,60 @@ describe('Import', () => {
     expect(await createSnipeIt(config, operator.fetch).canImport()).toBe(false)
   })
 })
+
+describe('Accessory and Consumable checkout', () => {
+  const ok = { body: { status: 'success', messages: 'Checked out.', payload: null } }
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
+
+  it('an Accessory goes to a User with its quantity and note', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': ok })
+    await createSnipeIt(config, fetch).checkoutStock('accessories', 7, { userId: 311, qty: 2, note: ' spare ' })
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/accessories/7/checkout', body: { checkout_to_type: 'user', assigned_user: 311, checkout_qty: 2, note: 'spare' } }])
+  })
+
+  it('a Consumable names its User as assigned_to', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /consumables/3/checkout': ok })
+    await createSnipeIt(config, fetch).checkoutStock('consumables', 3, { userId: 311, qty: 1 })
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/consumables/3/checkout', body: { assigned_to: 311, checkout_qty: 1 } }])
+  })
+
+  it("a refusal is thrown as Snipe-IT's reason; a bad quantity never reaches Snipe-IT", async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /accessories/7/checkout': { body: { status: 'error', messages: 'Not enough remaining.', payload: null } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    await expect(snipeIt.checkoutStock('accessories', 7, { userId: 311, qty: 9 })).rejects.toThrow('Not enough remaining.')
+    await expect(snipeIt.checkoutStock('accessories', 7, { userId: 311, qty: 0 })).rejects.toThrow(/Invalid quantity/)
+    expect(posted(requests)).toHaveLength(1)
+  })
+})
+
+describe('Accessory checkin', () => {
+  const row = (id: number, user: number, name: string) => ({ id, assigned_to: { id: user, name, type: 'user' }, note: null, created_at: { datetime: `2026-09-0${id} 10:00:00` } })
+  const holders = { body: { total: 3, rows: [row(5, 311, 'Jordan Reyes'), row(2, 311, 'Jordan Reyes'), row(3, 40, 'Kai Mockford')] } }
+  const checkedIn = { body: { status: 'success', messages: 'Checked in.', payload: null } }
+  const routes = { '/accessories/7/checkedout': holders, 'POST /accessories/2/checkin': checkedIn, 'POST /accessories/5/checkin': checkedIn, 'POST /accessories/3/checkin': checkedIn }
+  const checkins = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST').map((r) => r.path)
+
+  it('lists who holds each unit, oldest first, by checkout row', async () => {
+    const { fetch } = fakeFetch(routes)
+    expect((await createSnipeIt(config, fetch).accessoryHolders(7)).map((h) => [h.rowId, h.assignee.name])).toEqual([[2, 'Jordan Reyes'], [3, 'Kai Mockford'], [5, 'Jordan Reyes']])
+  })
+
+  it("returning checks in that User's rows oldest first", async () => {
+    const { fetch, requests } = fakeFetch(routes)
+    await createSnipeIt(config, fetch).returnAccessory(7, 311, 1, 'fine')
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([{ method: 'POST', path: '/accessories/2/checkin', body: { note: 'fine' } }])
+  })
+
+  it('returning more than the User holds checks in what they have and says so', async () => {
+    const { fetch, requests } = fakeFetch(routes)
+    await expect(createSnipeIt(config, fetch).returnAccessory(7, 311, 3)).rejects.toThrow('Jordan Reyes only had 2')
+    expect(checkins(requests)).toEqual(['/accessories/2/checkin', '/accessories/5/checkin'])
+    await expect(createSnipeIt(config, fetch).returnAccessory(7, 999, 1)).rejects.toThrow('Not checked out to that User')
+  })
+
+  it("a User's Accessories are counted per Accessory", async () => {
+    const acc = (id: number, name: string) => ({ id, name, available_actions: { checkin: true } })
+    const { fetch } = fakeFetch({ '/users/311/accessories': { body: { total: 3, rows: [acc(7, 'Charger'), acc(7, 'Charger'), acc(8, 'Mouse')] } } })
+    expect((await createSnipeIt(config, fetch).userAccessories(311)).map(({ name, count }) => [name, count])).toEqual([['Charger', 2], ['Mouse', 1]])
+  })
+})

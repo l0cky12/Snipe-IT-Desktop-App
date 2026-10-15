@@ -110,10 +110,14 @@ const maintenanceTypeRows = named(['Repair', 'Upgrade', 'Software Support'])
 const typeDetails = (name) => ({ ...maintenanceTypeRows.find((t) => t.name === name), tag_color: null })
 // A Maintenance's cost as Snipe-IT sends it: formatted, with thousands separators.
 const money = (v) => (v === null || v === undefined || v === '' ? null : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+// One row per checked-out unit of an Accessory, as Snipe-IT keeps them; a Checkin names the row.
+const accessoryCheckouts = [[1, 3], [1, 5], [1, 5], [2, 8]].map(([accessory, user], i) =>
+  ({ id: i + 1, accessory, assigned_to: { id: users[user].id, name: users[user].name, type: 'user' }, note: null, created_at: { datetime: local(new Date(Date.now() - (9 - i) * 864e5)) } }))
 const log = []
-const act = (action_type, asset, target, note = null, when = new Date(), operator = 'Demo Operator') =>
+// item is an Asset, or an Accessory or Consumable given as { id, name, type }.
+const act = (action_type, item, target, note = null, when = new Date(), operator = 'Demo Operator') =>
   log.unshift({ id: log.length + 1, action_type, created_at: { datetime: local(when) }, created_by: { id: 900, name: operator },
-    item: { id: asset.id, name: `${asset.asset_tag} (${asset.name})`, type: 'asset' }, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
+    item: item.asset_tag ? { id: item.id, name: `${item.asset_tag} (${item.name})`, type: 'asset' } : item, target: target && { id: target.id, name: target.name, type: target.type ?? 'user' }, note })
 // A checked-out Asset due at a time of day is a Temp checkout: its current Checkout carries the tag. Except NOMMA-001055,
 // checked in and out again in the web UI since its tagged Checkout; and NOMMA-001037's tag was put back by an undo.
 for (const a of assets.slice(0, 90).reverse()) {
@@ -369,7 +373,8 @@ const routes = [
   [/^(users\/me|users\/selectlist|suppliers\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store)$/, ['POST']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store|(accessories|consumables)\/\d+\/checkout|accessories\/\d+\/checkin)$/, ['POST']],
+  [/^(accessories\/\d+\/checkedout|users\/\d+\/accessories)$/, ['GET']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -552,6 +557,35 @@ createServer(async (req, res) => {
       act('update', a, null, `Status changed to ${status.name}`)
     }
     return send(req.method === 'GET' ? a : { status: 'success', messages: 'Done.', payload: a })
+  }
+  // Accessories and Consumables: checked out to a User qty at a time; an Accessory comes back one checkout row at a time.
+  if ((m = path.match(/^(accessories|consumables)\/(\d+)\/checkout$/))) {
+    const item = store[m[1]].find((r) => r.id === +m[2])
+    const user = users.find((u) => u.id === (m[1] === 'accessories' ? body.assigned_user : body.assigned_to))
+    const qty = body.checkout_qty ?? 1
+    const left = m[1] === 'accessories' ? 'remaining_qty' : 'remaining'
+    if (!item) return send({ status: 'error', messages: 'Not found' }, 404)
+    if (!user) return fail('Checkout target does not exist.')
+    if (qty > item[left]) return fail(`There are not enough items remaining to check out ${qty}. Only ${item[left]} left.`)
+    item[left] -= qty
+    if (m[1] === 'accessories') for (let i = 0; i < qty; i++)
+      accessoryCheckouts.push({ id: Math.max(0, ...accessoryCheckouts.map((c) => c.id)) + 1, accessory: item.id, assigned_to: { id: user.id, name: user.name, type: 'user' }, note: body.note ?? null, created_at: { datetime: local(new Date()) } })
+    act('checkout', { id: item.id, name: item.name, type: m[1] === 'accessories' ? 'accessory' : 'consumable' }, user, body.note)
+    return send({ status: 'success', messages: 'Checked out.', payload: null })
+  }
+  if ((m = path.match(/^accessories\/(\d+)\/checkin$/))) {
+    const row = accessoryCheckouts.find((c) => c.id === +m[1])
+    if (!row) return fail('Accessory checkout not found.')
+    const item = accessories.find((a) => a.id === row.accessory)
+    accessoryCheckouts.splice(accessoryCheckouts.indexOf(row), 1)
+    item.remaining_qty++
+    act('checkin from', { id: item.id, name: item.name, type: 'accessory' }, row.assigned_to, body.note)
+    return send({ status: 'success', messages: 'Checked in.', payload: null })
+  }
+  if ((m = path.match(/^accessories\/(\d+)\/checkedout$/))) return send(listPage({ rows: () => accessoryCheckouts.filter((c) => c.accessory === +m[1]) }, url.searchParams))
+  if ((m = path.match(/^users\/(\d+)\/accessories$/))) {
+    const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => accessories.find((a) => a.id === c.accessory))
+    return send({ total: rows.length, rows })
   }
   // One record of any other kind by id.
   if ((m = path.match(/^([a-z]+)\/(\d+)$/)) && lists[m[1]]) {

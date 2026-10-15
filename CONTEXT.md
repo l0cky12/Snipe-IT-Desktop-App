@@ -16,10 +16,10 @@ _Avoid_: ID, barcode (the barcode *encodes* the Asset Tag)
 The manufacturer's serial number of an Asset. Not guaranteed unique across manufacturers.
 
 **Checkout**:
-Assigning an Asset to an Assignee, recorded in Snipe-IT.
+Assigning an Asset to an Assignee, or handing a quantity of an Accessory or Consumable to a User, recorded in Snipe-IT.
 
 **Checkin**:
-Returning a checked-out Asset to inventory, clearing its Assignee.
+Returning a checked-out Asset to inventory, clearing its Assignee; or taking back units of an Accessory from the User who has them. A Consumable is never checked in.
 
 **Assignee**:
 Whoever an Asset is currently checked out to: a **User** or a **Location**.
@@ -239,10 +239,10 @@ When a Saved Report or built-in Report emails itself to the Operator: daily, wee
 A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise. Its **Minimum quantity** is the fewest Free seats it should have. A License is **Running out** when its Free seats drop below its Minimum quantity, or reach 0 when none is set; a Minimum quantity of 0 silences it.
 
 **Accessory**:
-A stocked item tracked by quantity, not individually (a charger, a keyboard). Each unit is **Checked out** or **Available**.
+A stocked item tracked by quantity, not individually (a charger, a keyboard). Each unit is **Checked out** or **Available**. Checked out to a User a quantity at a time; each unit comes back on its own Checkin.
 
 **Consumable**:
-A stocked item that is handed out and never returns (toner, paper). Each unit is **Used** or **Remaining**.
+A stocked item that is handed out and never returns (toner, paper). Each unit is **Used** or **Remaining**. Checked out to a User a quantity at a time, and never checked in.
 
 **Component**:
 A stocked part installed into Assets (RAM, a drive). Each unit is **In use** or **Available**.

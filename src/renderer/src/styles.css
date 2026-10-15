@@ -462,6 +462,8 @@ fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
 .access-body { padding: 4px 16px 16px; display: grid; gap: 10px; }
 .access-body .k { font: 600 12px var(--sans); color: var(--dim); }
 .access .message { margin: 6px 16px; }
+.stock-note { padding: 4px 16px 8px; }
+.stock-note input { width: 320px; }
 /* 24×24 to click, without making the outline taller. */
 .flag .chip-x { all: unset; display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -2px -6px -2px 0; border-radius: 4px; cursor: pointer; font-weight: 700; }
 .flag .chip-x:hover:not(:disabled) { background: var(--hover); }
