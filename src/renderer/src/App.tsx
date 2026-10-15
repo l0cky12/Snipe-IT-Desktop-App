@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, ChevronDown, ChevronRight, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { END_OF_DAY } from '../../main/calendar'
@@ -90,6 +90,8 @@ export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'fie
 
 // Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
 const PANEL_KEY = 'scanPanelOpen'
+// Likewise whether the sidebar lists each Workflow under the Workflows item; hidden until opened.
+const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
@@ -166,6 +168,8 @@ export function App() {
   const search = useRef<HTMLInputElement>(null)
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== 'false')
   useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen])
+  const [workflowsOpen, setWorkflowsOpen] = useState(() => localStorage.getItem(WORKFLOWS_OPEN_KEY) === 'true')
+  useEffect(() => localStorage.setItem(WORKFLOWS_OPEN_KEY, String(workflowsOpen)), [workflowsOpen])
   // Rendered now, so the box can take focus (and the keystroke being handled) straight away; what was in it is selected, so a scan replaces it.
   function openPanel() {
     flushSync(() => setPanelOpen(true))
@@ -421,11 +425,16 @@ export function App() {
           <button aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
             <Boxes size={18} />All records
           </button>
-          <button aria-label={`Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
-            <WorkflowsIcon size={18} />Workflows
-            {workflowsBusy > 0 && <span className={`badge${workflowsPaused ? ' paused' : ''}`}>{workflowsBusy}</span>}
-          </button>
-          {BUILT.map((w) => {
+          <div className="nav-row">
+            <button aria-label={`Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}`} disabled={!settings?.hasToken} className={`nav${page === 'workflows' || (!workflowsOpen && page === 'workflow') ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'workflows' }))}>
+              <WorkflowsIcon size={18} />Workflows
+              {workflowsBusy > 0 && <span className={`badge${workflowsPaused ? ' paused' : ''}`}>{workflowsBusy}</span>}
+            </button>
+            <button aria-label={workflowsOpen ? 'Hide Workflows' : 'Show Workflows'} aria-expanded={workflowsOpen} className="nav toggle" onClick={() => setWorkflowsOpen((o) => !o)}>
+              {workflowsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </button>
+          </div>
+          {workflowsOpen && BUILT.map((w) => {
             const Icon = workflowIcon[w]!
             return <button key={w} aria-label={w} disabled={!settings?.hasToken} className={`nav sub${page === 'workflow' && view?.page === 'workflow' && view.workflow === w ? ' sel' : ''}`} onClick={() => openWorkflow(w)}><Icon size={18} />{w}<kbd>{shortcut(w)}</kbd></button>
           })}
