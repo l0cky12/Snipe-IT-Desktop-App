@@ -68,6 +68,8 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
       setMessage({ text: (e as Error).message, error: true })
     }
   }
+  // Snipe-IT won't delete a Status Label any Asset is on.
+  const inUse = kind === 'statuslabels' && !!record.assets
   const checkoutOff = !record.can.checkout ? NOT_ALLOWED : record.remaining === 0 ? 'None left' : undefined
   return (
     <>
@@ -77,14 +79,15 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
           {(kind === 'categories' ? CATEGORY_LISTS[record.categoryType ?? ''] ?? [] : RELATED[kind] ?? []).map(([label, list, filter]) => (
             <button key={label} className="quiet"
               onClick={() => onDrill(list, { filters: { [filter]: String(id) }, label: drillLabel(kind, record.name) })}>
-              {label}
+              {inUse && list === 'assets' ? `${label} (${record.assets})` : label}
             </button>
           ))}
           {stock && <button disabled={!!checkoutOff} title={checkoutOff} onClick={() => (setCheckingOut((o) => !o), setMessage({ text: '', error: false }))}>{checkingOut ? 'Cancel' : 'Checkout…'}</button>}
           {editable(kind) && (
             <>
               <button className="quiet" onClick={() => onEdit(kind, id)} disabled={!record.can.update} title={record.can.update ? undefined : NOT_ALLOWED}>Edit</button>
-              <DeleteButton kind={kind} id={id} name={record.name} onDeleted={() => onDeleted(kind, id, record.name)} allowed={record.can.delete} />
+              <DeleteButton kind={kind} id={id} name={record.name} onDeleted={() => onDeleted(kind, id, record.name)} allowed={record.can.delete}
+                why={inUse ? `Used by ${record.assets} Assets — move them first` : undefined} />
             </>
           )}
         </div>

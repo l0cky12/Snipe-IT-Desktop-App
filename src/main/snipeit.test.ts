@@ -2429,6 +2429,20 @@ describe('create, edit and delete', () => {
     expect(requests.at(-1)?.body).toEqual({ min_amt: '0' })
   })
 
+  it("editing a Status Label sends back its type, color and Snipe-IT-only flags, which Snipe-IT's edit would otherwise clear", async () => {
+    const { fetch, requests } = fakeFetch({
+      '/statuslabels/4': { body: { id: 4, name: 'Broken', type: 'undeployable', color: '#ff0000', notes: null, show_in_nav: true, default_label: true, assets_count: 3 } },
+      'PATCH /statuslabels/4': { body: { status: 'success' } },
+    })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect((await snipeIt.form('statuslabels', 4)).values).toMatchObject({ name: 'Broken', type: 'undeployable', color: '#ff0000', notes: '' })
+    expect((await snipeIt.record('statuslabels', 4)).assets).toBe(3)
+    await snipeIt.save('statuslabels', 4, { name: 'Cracked' })
+    expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Cracked', type: 'undeployable', color: '#ff0000', show_in_nav: true, default_label: true } })
+    await snipeIt.save('statuslabels', 4, { type: 'archived', color: '' })
+    expect(requests.at(-1)?.body).toEqual({ type: 'archived', color: null, show_in_nav: true, default_label: true })
+  })
+
   it('a new User starts with Enable login off, before the passwords that need it; editing one shows neither, so its login stays as it is', async () => {
     const snipeIt = createSnipeIt(config, fakeFetch({ '/users/311': { body: { id: 311, first_name: 'Jordan', username: 'jreyes', activated: true } } }).fetch)
     const blank = await snipeIt.form('users')
@@ -2588,7 +2602,7 @@ describe('permissions', () => {
     expect(await createSnipeIt(config, fetch).userAccess(311)).toEqual({ permissions: { 'reports.view': '1', 'assets.delete': '-1' }, groups: [{ id: 2, name: 'Library Aides' }] })
     const none = fakeFetch({ '/users/5': { body: { id: 5, name: 'New', permissions: null, groups: null } } })
     expect(await createSnipeIt(config, none.fetch).userAccess(5)).toEqual({ permissions: {}, groups: [] })
-    const text = fakeFetch({ '/users/6': { body: { id: 6, name: 'Old', permissions: '{"admin":"1"}', groups: null } }, '/groups/3': { body: { id: 3, name: 'G', permissions: '{"assets.view":"1"}' } } })
+    const text = fakeFetch({ '/users/6': { body: { id: 6, name: 'Old', permissions: '{"admin":"1"}', groups: null } }, '/groups/3': { body: { id: 3, name: 'G', permissions: '{"assets.view":"1"}' } }, '/users': { body: { total: 0, rows: [] } } })
     expect((await createSnipeIt(config, text.fetch).userAccess(6)).permissions).toEqual({ admin: '1' })
     expect((await createSnipeIt(config, text.fetch).group(3)).permissions).toEqual({ 'assets.view': '1' })
   })
@@ -2605,10 +2619,11 @@ describe('permissions', () => {
   it("a group's permissions are read as granted or not, and saved as Snipe-IT's JSON; only permission keys are sent", async () => {
     const { fetch, requests } = fakeFetch({
       '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': 1, 'assets.delete': '0' } } },
+      '/users': { body: { total: 0, rows: [] } },
       'PATCH /groups/2': { body: { status: 'success' } },
     })
     const snipeIt = createSnipeIt(config, fetch)
-    expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
+    expect(await snipeIt.group(2)).toEqual({ id: 2, name: 'Library Aides', members: 0, permissions: { 'assets.view': '1', 'assets.checkout': '1', 'assets.delete': '0' } })
     await snipeIt.saveGroup(2, 'Library Aides', { 'assets.view': '1', 'assets.checkin': '1' })
     expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/groups/2', body: { name: 'Library Aides', permissions: '{"assets.view":"1","assets.checkin":"1"}' } })
     await expect(snipeIt.saveGroup(2, 'x', { 'assets.view"}': '1' })).rejects.toThrow('Invalid permission')
@@ -2618,6 +2633,54 @@ describe('permissions', () => {
   it("a group Snipe-IT refuses to save says why, beside the field", async () => {
     const { fetch } = fakeFetch({ 'PATCH /groups/2': { body: { status: 'error', messages: { name: ['The name field is required.'] } } } })
     expect(await createSnipeIt(config, fetch).saveGroup(2, '', {})).toEqual({ ok: false, message: "Snipe-IT didn't save it: see the fields marked below.", errors: { name: 'The name field is required.' } })
+  })
+
+  it("a group's member count is the Users List filtered to it, since Snipe-IT's single group always says 0", async () => {
+    const { fetch, queries } = fakeFetch({ '/groups/2': { body: { id: 2, name: 'Library Aides', permissions: {}, users_count: 0 } }, '/users': { body: { total: 7, rows: [] } } })
+    expect((await createSnipeIt(config, fetch).group(2)).members).toBe(7)
+    expect(queries).toContainEqual({ group_id: '2', limit: '1' })
+  })
+
+  it('every group comes with how many Users are in it', async () => {
+    const { fetch } = fakeFetch({ '/groups': { body: { total: 2, rows: [{ id: 1, name: 'IT Staff', users_count: 3 }, { id: 2, name: 'Empty', users_count: null }] } } })
+    expect(await createSnipeIt(config, fetch).groups()).toEqual([{ id: 1, name: 'IT Staff', members: 3 }, { id: 2, name: 'Empty', members: 0 }])
+  })
+
+  it('a new group is POSTed with its permissions and opens as the id Snipe-IT gave it', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /groups': { body: { status: 'success', payload: { id: 9, name: 'Aides' } } } })
+    expect(await createSnipeIt(config, fetch).saveGroup(null, 'Aides', { 'assets.view': '0' })).toEqual({ ok: true, id: 9 })
+    expect(requests.at(-1)).toEqual({ method: 'POST', path: '/groups', body: { name: 'Aides', permissions: '{"assets.view":"0"}' } })
+  })
+
+  it("deleting a group Snipe-IT refuses (it still has Users) throws Snipe-IT's reason", async () => {
+    const { fetch, requests } = fakeFetch({ 'DELETE /groups/2': { body: { status: 'success' } } })
+    await createSnipeIt(config, fetch).deleteGroup(2)
+    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: '/groups/2' })
+    const refused = fakeFetch({ 'DELETE /groups/3': { body: { status: 'error', messages: 'This group has users associated with it.' } } })
+    await expect(createSnipeIt(config, refused.fetch).deleteGroup(3)).rejects.toThrow('This group has users associated with it.')
+  })
+
+  it("a User is put in or taken out of one group, keeping their others; already so, nothing is sent", async () => {
+    const user = { id: 311, name: 'Jordan Reyes', permissions: {}, groups: { total: 2, rows: [{ id: 1, name: 'IT Staff' }, { id: 2, name: 'Library Aides' }] } }
+    const { fetch, requests } = fakeFetch({ '/users/311': { body: user }, 'PATCH /users/311': { body: { status: 'success' } } })
+    const snipeIt = createSnipeIt(config, fetch)
+    expect(await snipeIt.setGroupMember(311, 3, true)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [1, 2, 3] } })
+    expect(await snipeIt.setGroupMember(311, 1, false)).toBe(true)
+    expect(requests.at(-1)).toEqual({ method: 'PATCH', path: '/users/311', body: { groups: [2] } })
+    expect(await snipeIt.setGroupMember(311, 2, true)).toBe(false)
+    expect(requests.at(-1)?.method).toBe('GET')
+  })
+
+  it('the Users List can be filtered to one group', async () => {
+    const { fetch, queries } = fakeFetch({ '/users': { body: { total: 0, rows: [] } } })
+    await createSnipeIt(config, fetch).list('users', { filters: { group_id: '2' } })
+    expect(queries.at(-1)).toMatchObject({ group_id: '2' })
+  })
+
+  it("the Operator's own account and groups come from /users/me", async () => {
+    const { fetch } = fakeFetch({ '/users/me': { body: { id: 5, permissions: { superuser: '1' }, groups: { total: 1, rows: [{ id: 1, name: 'IT Staff' }] } } } })
+    expect(await createSnipeIt(config, fetch).operatorAccess()).toEqual({ id: 5, permissions: { superuser: '1' }, groups: [{ id: 1, name: 'IT Staff' }] })
   })
 })
 

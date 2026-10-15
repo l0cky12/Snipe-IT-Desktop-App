@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { PERMISSIONS, type Group, type StatusLabel, type UserAccess } from '../../main/snipeit'
+import { LIST_PAGE, PERMISSIONS, type CheckoutTarget, type Group, type GroupSummary, type ListKind, type StatusLabel, type UserAccess } from '../../main/snipeit'
+import type { Drill } from './ListView'
 
 /** Whether the Operator's account may manage permissions: null until Snipe-IT says; error when it couldn't be asked. */
 export type CanManage = boolean | null | { error: string }
@@ -28,15 +29,22 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
   const [all, setAll] = useState<StatusLabel[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Whether this User is the Operator, whose removal from a group asks first: it may be where their superuser comes from.
+  const [isMe, setIsMe] = useState(false)
+  const [asking, setAsking] = useState<StatusLabel | null>(null)
 
   useEffect(() => {
     let stale = false
     window.snipeIt.userAccess(userId).then((a) => !stale && setAccess(a), (e: Error) => !stale && setError(e.message))
-    if (canManage) window.snipeIt.groups().then((g) => !stale && setAll(g), (e: Error) => !stale && setError(e.message))
+    if (canManage) {
+      window.snipeIt.groups().then((g) => !stale && setAll(g), (e: Error) => !stale && setError(e.message))
+      window.snipeIt.operatorAccess().then((me) => !stale && setIsMe(me.id === userId), () => !stale && setIsMe(true))
+    }
     return () => { stale = true }
   }, [userId, canManage])
 
   async function change(groups: StatusLabel[]) {
+    setAsking(null)
     setBusy(true)
     setError('')
     try {
@@ -63,7 +71,7 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
             {access.groups.map((g) => (
               <span key={g.id} className="flag c-blue">
                 {g.name}
-                {canManage && <button className="chip-x" disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== g.id))} aria-label={`Remove from ${g.name}`}>×</button>}
+                {canManage && <button className="chip-x" disabled={busy} onClick={() => (isMe ? setAsking(g) : change(access.groups.filter((x) => x.id !== g.id)))} aria-label={`Remove from ${g.name}`}>×</button>}
               </span>
             ))}
             {canManage && (
@@ -74,6 +82,15 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
               </select>
             )}
           </div>
+          {asking && (
+            <div className="actions">
+              <span className="confirm" role="alertdialog" aria-label={`Remove yourself from ${asking.name}?`}>
+                <span>Remove yourself from {asking.name}? If your superuser comes from it, you can't manage groups from here any more.</span>
+                <button className="danger" autoFocus disabled={busy} onClick={() => change(access.groups.filter((x) => x.id !== asking.id))}>Remove</button>
+                <button className="quiet" disabled={busy} onClick={() => setAsking(null)}>Cancel</button>
+              </span>
+            </div>
+          )}
           <div className="k">Permissions of their own</div>
           <p className="dim">What each group grants is under All records → Permission groups.</p>
           {own.length === 0
@@ -85,29 +102,37 @@ export function UserAccessSection({ userId, canManage: check }: { userId: number
   )
 }
 
-// Every permission group, and one group's permissions to edit (Snipe-IT lets only a superuser do either).
-export function GroupsView({ canManage: check }: { canManage: CanManage }) {
+// Every permission group, and one group to make, edit or delete (Snipe-IT lets only a superuser do any of it).
+export function GroupsView({ canManage: check, onDrill }: { canManage: CanManage; onDrill: (list: ListKind, drill: Drill) => void }) {
   const canManage = check === true
-  const [groups, setGroups] = useState<StatusLabel[] | null>(null)
-  const [open, setOpen] = useState<number | null>(null)
+  const [groups, setGroups] = useState<GroupSummary[] | null>(null)
+  const [open, setOpen] = useState<number | 'new' | null>(null)
   const [error, setError] = useState('')
+  // Read again on coming back from a group, so a new, renamed or deleted one shows.
   useEffect(() => {
-    if (!canManage) return
+    if (!canManage || open !== null) return
     let stale = false
     window.snipeIt.groups().then((g) => !stale && setGroups(g), (e: Error) => !stale && setError(e.message))
     return () => { stale = true }
-  }, [canManage])
+  }, [canManage, open])
 
-  if (open !== null) return <GroupEditor id={open} onDone={(renamed) => (setOpen(null), renamed && setGroups((g) => g?.map((x) => (x.id === renamed.id ? renamed : x)) ?? g))} />
+  if (open !== null) return <GroupEditor key={open} id={open === 'new' ? null : open} onCreated={setOpen} onBack={() => setOpen(null)} onDrill={onDrill} />
   return (
     <>
-      <header className="head"><h1>Permission groups</h1></header>
+      <header className="head">
+        <h1>Permission groups</h1>
+        {canManage && <div className="actions"><button onClick={() => setOpen('new')}>New group</button></div>}
+      </header>
       {check === null && <p className="empty">Checking your account…</p>}
       <AccessNotice canManage={check} />
       {error && <p className="message error" role="alert">{error}</p>}
       {groups && (
         <div className="records">
-          {groups.map((g) => <button key={g.id} className="record-kind" onClick={() => setOpen(g.id)}>{g.name}</button>)}
+          {groups.map((g) => (
+            <button key={g.id} className="record-kind" onClick={() => setOpen(g.id)}>
+              {g.name}<span className="dim" aria-label={`${g.members} Users`}>{g.members}</span>
+            </button>
+          ))}
           {groups.length === 0 && <p className="empty">No groups</p>}
         </div>
       )}
@@ -115,16 +140,27 @@ export function GroupsView({ canManage: check }: { canManage: CanManage }) {
   )
 }
 
-function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel | null) => void }) {
-  const [group, setGroup] = useState<Group | null>(null)
+const ELEVATED = ['superuser', 'admin']
+const NEW_GROUP: Group = { id: 0, name: '', members: 0, permissions: {} }
+
+// id null: a new group, every permission unticked; once saved it stays open as that group.
+function GroupEditor({ id, onCreated, onBack, onDrill }: { id: number | null; onCreated: (id: number) => void; onBack: () => void; onDrill: (list: ListKind, drill: Drill) => void }) {
+  const [group, setGroup] = useState<Group | null>(id === null ? NEW_GROUP : null)
   const [name, setName] = useState('')
   const [granted, setGranted] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  // Whether the Operator is in this group; null when it couldn't be checked, which counts as maybe.
+  const [mine, setMine] = useState<boolean | null>(false)
+  const [meId, setMeId] = useState<number | null>(null)
+  // Why the save or delete waits on a confirm: the lines it shows.
+  const [asking, setAsking] = useState<{ save: true; why: string[] } | { save: false } | null>(null)
   useEffect(() => {
+    if (id === null) return
     let stale = false
     window.snipeIt.group(id).then((g) => !stale && (setGroup(g), setName(g.name), setGranted(g.permissions)), (e: Error) => !stale && setMessage(e.message))
+    window.snipeIt.operatorAccess().then((me) => !stale && (setMine(me.groups.some((g) => g.id === id)), setMeId(me.id)), () => !stale && setMine(null))
     return () => { stale = true }
   }, [id])
 
@@ -132,15 +168,30 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
   const known = new Set(PERMISSIONS.flatMap(([, keys]) => keys))
   const areas: [string, string[]][] = [...PERMISSIONS, ['Other', Object.keys(granted).filter((k) => !known.has(k))]]
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault()
+  // A change that could lock someone out asks first: superuser or admin changing, or a group the Operator is (maybe) in.
+  function risks(g: Group): string[] {
+    const changed = ELEVATED.filter((k) => (g.permissions[k] === '1') !== (granted[k] === '1'))
+    const people = id === null ? '' : ` (${g.members === 1 ? '1 User' : `${g.members} Users`})`
+    return [
+      ...changed.map((k) => `This ${granted[k] === '1' ? 'grants' : 'takes away'} ${k} for everyone in the group${people}.`),
+      ...(mine === true ? ["You're in this group, so this changes what your own account may do. If it takes away your superuser, you can't manage groups from here any more."] : []),
+      ...(mine === null && id !== null ? ["Couldn't check whether you're in this group, so this may change what your own account may do."] : []),
+    ]
+  }
+
+  async function save(e?: React.FormEvent, confirmed = false) {
+    e?.preventDefault()
+    if (!group) return
+    const why = risks(group)
+    if (why.length && !confirmed) return setAsking({ save: true, why })
+    setAsking(null)
     setBusy(true)
     setMessage('')
     try {
-      // Every key shown goes back, granted or not, so unticking one takes it away.
+      // Every key shown goes back, granted or not, so unticking one takes it away (and a new group isn't granted everything).
       const permissions = Object.fromEntries(areas.flatMap(([, keys]) => keys).map((k) => [k, granted[k] === '1' ? '1' : '0']))
       const result = await window.snipeIt.saveGroup(id, name, permissions)
-      if (result.ok) return onDone({ id, name })
+      if (result.ok) return id === null ? onCreated(result.id) : onBack()
       setErrors(result.errors)
       setMessage(result.message)
     } catch (err) {
@@ -150,13 +201,53 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
     }
   }
 
+  async function remove() {
+    setBusy(true)
+    setMessage('')
+    try {
+      await window.snipeIt.deleteGroup(id!)
+      onBack()
+    } catch (err) {
+      setMessage((err as Error).message)
+      setBusy(false)
+    }
+  }
+
+  const title = id === null ? 'New group' : group?.name
   return (
     <form onSubmit={save}>
       <header className="head">
-        <h1><span className="dim">Permission groups{group && ' / '}</span>{group?.name}</h1>
+        <h1><span className="dim">Permission groups{title && ' / '}</span>{title}</h1>
         <div className="actions">
-          <button type="button" className="quiet" onClick={() => onDone(null)}>Back</button>
-          <button disabled={busy || !group}>{busy ? 'Saving…' : 'Save'}</button>
+          {asking?.save === true && (
+            <span className="confirm" role="alertdialog" aria-label="Save this group?">
+              <span>{asking.why.join(' ')} Save anyway?</span>
+              <button type="button" className="danger" autoFocus disabled={busy} onClick={() => save(undefined, true)}>Save anyway</button>
+              <button type="button" className="quiet" disabled={busy} onClick={() => setAsking(null)}>Cancel</button>
+            </span>
+          )}
+          {/* Snipe-IT (v8.4.1+) deletes only a group with nobody in it, so one with Users says so instead of asking. */}
+          {asking?.save === false && group && (
+            group.members > 0 ? (
+              <span className="confirm" role="alert">
+                <span>Snipe-IT deletes only an empty group, and {group.members === 1 ? '1 User is' : `${group.members} Users are`} in {group.name}. Remove them first.</span>
+                <button type="button" className="quiet" autoFocus onClick={() => setAsking(null)}>OK</button>
+              </span>
+            ) : (
+              <span className="confirm" role="alertdialog" aria-label={`Delete ${group.name}?`}>
+                <span>Delete {group.name}? This can't be undone.</span>
+                <button type="button" className="danger" autoFocus disabled={busy} onClick={remove}>{busy ? 'Deleting…' : 'Delete'}</button>
+                <button type="button" className="quiet" disabled={busy} onClick={() => setAsking(null)}>Cancel</button>
+              </span>
+            )
+          )}
+          {!asking && (
+            <>
+              <button type="button" className="quiet" onClick={onBack}>Back</button>
+              {id !== null && <button type="button" className="quiet danger" disabled={busy || !group} onClick={() => setAsking({ save: false })}>Delete…</button>}
+              <button disabled={busy || !group}>{busy ? 'Saving…' : 'Save'}</button>
+            </>
+          )}
         </div>
       </header>
       {message && <p className="message error" role="alert">{message}</p>}
@@ -169,6 +260,10 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
               {errors.name && <p className="field-error">{errors.name}</p>}
             </div>
           </div>
+          {id !== null && (
+            <Members group={group} me={meId} onDrill={onDrill}
+              onChanged={(by, wasMe) => (setGroup((g) => g && { ...g, members: g.members + by }), wasMe && setMine(by > 0))} />
+          )}
           {errors.permissions && <p className="field-error access-body">{errors.permissions}</p>}
           <div className="permission-areas">
             {areas.filter(([, keys]) => keys.length).map(([area, keys]) => (
@@ -186,5 +281,96 @@ function GroupEditor({ id, onDone }: { id: number; onDone: (saved: StatusLabel |
         </>
       )}
     </form>
+  )
+}
+
+// Who's in a group: every one of them as a List, and (up to a List page of them) here, each removable. A User is found by
+// name, email or employee number to add. me: the Operator, whose own removal asks first.
+function Members({ group, me, onDrill, onChanged }: {
+  group: Group; me: number | null; onDrill: (list: ListKind, drill: Drill) => void; onChanged: (by: 1 | -1, wasMe: boolean) => void
+}) {
+  const shown = group.members <= LIST_PAGE
+  const [members, setMembers] = useState<StatusLabel[] | null>(null)
+  const [text, setText] = useState('')
+  const [found, setFound] = useState<CheckoutTarget[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [asking, setAsking] = useState(false)
+
+  useEffect(() => {
+    if (!shown) return
+    let stale = false
+    window.snipeIt.list('users', { filters: { group_id: String(group.id) } }).then((p) => !stale && setMembers(p.rows.map(({ id, name }) => ({ id, name }))), (e: Error) => !stale && setError(e.message))
+    return () => { stale = true }
+  }, [group.id, shown])
+
+  // Search as the Operator types, after a short pause; an answer for older text is discarded.
+  useEffect(() => {
+    if (!text.trim()) return setFound([])
+    let stale = false
+    const timer = setTimeout(() => window.snipeIt.searchUsers(text).then((t) => !stale && setFound(t), (e: Error) => !stale && setError(e.message)), 250)
+    return () => { stale = true; clearTimeout(timer) }
+  }, [text])
+
+  async function change(user: StatusLabel, member: boolean) {
+    setAsking(false)
+    setBusy(true)
+    setError('')
+    try {
+      if (await window.snipeIt.setGroupMember(user.id, group.id, member)) onChanged(member ? 1 : -1, user.id === me)
+      setMembers((m) => m && (member ? [...m.filter((x) => x.id !== user.id), user].sort((a, b) => a.name.localeCompare(b.name)) : m.filter((x) => x.id !== user.id)))
+      if (member) setText('')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const self = members?.find((m) => m.id === me)
+  return (
+    <section className="access">
+      <div className="section">Members</div>
+      {error && <p className="message error" role="alert">{error}</p>}
+      <div className="access-body">
+        <div className="actions">
+          <button type="button" className="quiet" onClick={() => onDrill('users', { filters: { group_id: String(group.id) }, label: `Permission group: ${group.name}` })}>
+            Users in this group ({group.members})
+          </button>
+        </div>
+        {shown && members && (
+          <div className="actions">
+            {members.length === 0 && <span className="dim">Nobody yet</span>}
+            {members.map((m) => (
+              <span key={m.id} className="flag c-blue">
+                {m.name}
+                <button type="button" className="chip-x" disabled={busy} onClick={() => (m.id === me ? setAsking(true) : change(m, false))} aria-label={`Remove ${m.name}`}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {asking && self && (
+          <div className="actions">
+            <span className="confirm" role="alertdialog" aria-label={`Remove yourself from ${group.name}?`}>
+              <span>Remove yourself from {group.name}? If your superuser comes from it, you can't manage groups from here any more.</span>
+              <button type="button" className="danger" autoFocus disabled={busy} onClick={() => change(self, false)}>Remove</button>
+              <button type="button" className="quiet" disabled={busy} onClick={() => setAsking(false)}>Cancel</button>
+            </span>
+          </div>
+        )}
+        <input className="add-member" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
+          placeholder="Add a member: name, email or employee number…" aria-label="Add a member" />
+        {text.trim() && (
+          <div className="targets">
+            {found.filter((u) => !members?.some((m) => m.id === u.id)).map((u) => (
+              <button type="button" key={u.id} disabled={busy} onClick={() => change(u, true)}>
+                {u.name} {u.detail && <span className="dim">{u.detail}</span>}
+              </button>
+            ))}
+            {found.length === 0 && <span className="dim">No User matches "{text.trim()}"</span>}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }

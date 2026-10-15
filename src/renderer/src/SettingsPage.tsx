@@ -11,7 +11,11 @@ export function unencryptedRemote(baseUrl: string) {
   return url.protocol === 'http:' && !['localhost', '[::1]'].includes(url.hostname) && !/^127(\.\d+){3}$/.test(url.hostname)
 }
 
-export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
+/** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the Temp checkout rules, and this PC alone. */
+const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
+
+// onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
+export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void; onStatusLabels: () => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [version, setVersion] = useState('Not connected')
@@ -20,6 +24,8 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   const [busy, setBusy] = useState(false)
   // Which section's Save or test the message is about, so it shows there.
   const [place, setPlace] = useState<'connection' | 'mail' | 'background' | 'temp' | 'calendar' | 'repairs'>('connection')
+  // Every tab stays mounted, so what's typed on one survives a look at another.
+  const [tab, setTab] = useState<(typeof TABS)[number][0]>('snipeit')
   const [endOfDay, setEndOfDay] = useState(settings.tempCheckout.endOfDay)
   const [automaticAt, setAutomaticAt] = useState(settings.tempCheckout.automaticAt)
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
@@ -57,7 +63,10 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
   </>
   return <>
   <header className="head"><h1>Settings</h1></header>
-  <div className="settings-page">
+  <div className="view-tabs" role="tablist" aria-label="Settings">
+    {TABS.map(([key, name]) => <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? 'on' : undefined} onClick={() => setTab(key)}>{name}</button>)}
+  </div>
+  <div className="settings-page" role="tabpanel" hidden={tab !== 'snipeit'}>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.save(input)
       setApiKey(''); onSaved(saved); setConnectionSaves((n) => n + 1); setMessage(saved.plaintext ? 'Settings saved. No OS password store was found, so the API token is stored unencrypted in a file only your user account can read.' : 'Settings saved.')
@@ -80,6 +89,30 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'connection' && notes}
+    <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
+      <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
+    </section>
+    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
+      const saved = await window.settings.saveRepairs(repairType)
+      setRepairType(saved.repairTypeId?.toString() ?? ''); onSaved(saved); setMessage('Repair settings saved.')
+    }, 'repairs') }}>
+      <fieldset disabled={busy}>
+        <section className="settings-section">
+          <h2>Repairs</h2><p className="dim">How Repair intake opens a repair Maintenance.</p>
+          <label htmlFor="repair-type">Maintenance type for repairs</label>
+          <input id="repair-type" inputMode="numeric" placeholder="Blank: found in Snipe-IT" value={repairType} onChange={(e) => { setRepairType(e.target.value); setMessage('') }} />
+          <p className="hint">Only needed if your API key can't read Maintenance types and Snipe-IT has no Repair Maintenance yet. A whole number above 0, or blank.</p>
+        </section>
+        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save repair settings'}</button></div>
+      </fieldset>
+    </form>
+    {place === 'repairs' && notes}
+    {settings.hasToken && <section className="settings-section">
+      <h2>Status Labels</h2><p className="dim">Kept in Snipe-IT, so a change is every Operator's.</p>
+      <button type="button" onClick={onStatusLabels}>Manage Status Labels →</button>
+    </section>}
+  </div>
+  <div className="settings-page" role="tabpanel" hidden={tab !== 'mail'}>
     <form onSubmit={(e) => { e.preventDefault(); run(async () => {
       const saved = await window.settings.saveMail(mail)
       setMailField({ password: '' }); onSaved(saved); setMessage(!saved.mail.hasPassword ? 'Email settings saved. Enter the password to send email.' : saved.mail.plaintext ? 'Email settings saved. No OS password store was found, so the email password is stored unencrypted in a file only your user account can read.' : 'Email settings saved.')
@@ -114,19 +147,9 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'mail' && notes}
-    <fieldset disabled={busy}>
-      <section className="settings-section">
-        <h2>Running in the background</h2><p className="dim">So scheduled Reports and the End-of-day reminder still happen with the window closed.</p>
-        {([['tray', 'Keep running in the tray', 'Closing the window hides it. Open it again from the tray icon, or by starting the app again; quit from the tray icon.'],
-          ['startAtLogin', 'Start at login', 'With Keep running in the tray on too, it starts hidden in the tray.']] as const).map(([key, name, hint]) =>
-          <label key={key} className="check"><input type="checkbox" checked={settings.background[key]} onChange={(e) => {
-            const background: Background = { ...settings.background, [key]: e.target.checked }
-            run(async () => { onSaved(await window.settings.saveBackground(background)); setMessage('Saved.') }, 'background')
-          }} /><span>{name}<span className="hint">{hint}</span></span></label>)}
-      </section>
-    </fieldset>
-    {place === 'background' && notes}
-    {settings.hasToken && <ScheduledReports />}
+    {settings.hasToken ? <ScheduledReports /> : <section className="settings-section"><h2>Scheduled Reports</h2><p className="dim">Connect to Snipe-IT first.</p></section>}
+  </div>
+  <div className="settings-page" role="tabpanel" hidden={tab !== 'checkouts'}>
     {/* Temp checkout and School calendar: read on this PC at each Temp checkout, so saving them never clears a Workflow. */}
     <form onSubmit={(e) => { e.preventDefault(); run(async () => { onSaved(await window.settings.saveTempCheckout({ ...settings.tempCheckout, endOfDay, automaticAt })); setMessage('Temp checkout settings saved.') }, 'temp') }}>
       <fieldset disabled={busy}>
@@ -163,21 +186,20 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       </fieldset>
     </form>
     {place === 'calendar' && notes}
-    <form onSubmit={(e) => { e.preventDefault(); run(async () => {
-      const saved = await window.settings.saveRepairs(repairType)
-      setRepairType(saved.repairTypeId?.toString() ?? ''); onSaved(saved); setMessage('Repair settings saved.')
-    }, 'repairs') }}>
-      <fieldset disabled={busy}>
-        <section className="settings-section">
-          <h2>Repairs</h2><p className="dim">How Repair intake opens a repair Maintenance.</p>
-          <label htmlFor="repair-type">Maintenance type for repairs</label>
-          <input id="repair-type" inputMode="numeric" placeholder="Blank: found in Snipe-IT" value={repairType} onChange={(e) => { setRepairType(e.target.value); setMessage('') }} />
-          <p className="hint">Only needed if your API key can't read Maintenance types and Snipe-IT has no Repair Maintenance yet. A whole number above 0, or blank.</p>
-        </section>
-        <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save repair settings'}</button></div>
-      </fieldset>
-    </form>
-    {place === 'repairs' && notes}
+  </div>
+  <div className="settings-page" role="tabpanel" hidden={tab !== 'pc'}>
+    <fieldset disabled={busy}>
+      <section className="settings-section">
+        <h2>Running in the background</h2><p className="dim">So scheduled Reports and the End-of-day reminder still happen with the window closed.</p>
+        {([['tray', 'Keep running in the tray', 'Closing the window hides it. Open it again from the tray icon, or by starting the app again; quit from the tray icon.'],
+          ['startAtLogin', 'Start at login', 'With Keep running in the tray on too, it starts hidden in the tray.']] as const).map(([key, name, hint]) =>
+          <label key={key} className="check"><input type="checkbox" checked={settings.background[key]} onChange={(e) => {
+            const background: Background = { ...settings.background, [key]: e.target.checked }
+            run(async () => { onSaved(await window.settings.saveBackground(background)); setMessage('Saved.') }, 'background')
+          }} /><span>{name}<span className="hint">{hint}</span></span></label>)}
+      </section>
+    </fieldset>
+    {place === 'background' && notes}
     <section className="settings-section">
       <h2>Appearance</h2><p className="dim">On this PC only. System follows your computer's light or dark setting.</p>
       <label htmlFor="appearance">Theme</label>
@@ -189,9 +211,6 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
       }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </section>
     {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}
-    <section className="settings-about"><h2>About</h2><dl><div><dt>Snipe-IT Desktop</dt><dd>{settings.appVersion}</dd></div><div><dt>Snipe-IT server</dt><dd>{version}</dd></div></dl>
-      <button className="clear-token" disabled={busy || !settings.hasToken} onClick={() => run(async () => { const saved = await window.settings.clearToken(); setApiKey(''); setVersion('Not connected'); onSaved(saved); setMessage('API token cleared. You are logged out.') })}>Log out / clear token</button>
-    </section>
   </div>
   </>
 }
