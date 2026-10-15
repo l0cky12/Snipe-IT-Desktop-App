@@ -9,6 +9,20 @@ npm install
 npm run dev
 ```
 
+## Arch Linux
+
+Build and install it as a pacman package, so it shows in your app menu and `pacman -R snipe-it-desktop` removes it:
+
+```sh
+sudo pacman -S --needed git nodejs npm libxcrypt-compat
+git clone https://github.com/l0cky12/Snipe-IT-Desktop-App.git && cd Snipe-IT-Desktop-App
+npm ci
+npm run dist:arch
+sudo pacman -U dist/snipe-it-desktop-*.pacman
+```
+
+`libxcrypt-compat` is only for building (electron-builder's packager needs `libcrypt.so.1`). To keep your API token encrypted, run a password store such as GNOME Keyring or KWallet (see [Settings](#settings)). To update, `git pull` and run the last three commands again.
+
 ## Try it with made-up data
 
 ```sh
@@ -23,7 +37,7 @@ Then in Settings use `http://127.0.0.1:8765` and any API token. The mock holds f
 npm run dist
 ```
 
-Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, a `.deb` for Debian/Ubuntu, and a `.pacman` package for Arch (install it with `sudo pacman -U snipe-it-desktop-*.pacman`). In `package.json`, `deb.depends` is electron-builder's default list plus `libasound2`; `pacman.depends` replaces the default because Arch dropped `http-parser` and `libappindicator-gtk3`. The Arch package needs `bsdtar` on the build machine (`sudo apt-get install libarchive-tools` on Debian/Ubuntu). Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
+Packages land in `dist/`: a Windows NSIS installer (`.exe`), a Linux AppImage, a `.deb` for Debian/Ubuntu, and a `.pacman` package for Arch (install it with `sudo pacman -U snipe-it-desktop-*.pacman`; on Arch itself, build only that one with `npm run dist:arch`, see [Arch Linux](#arch-linux)). In `package.json`, `deb.depends` is electron-builder's default list plus `libasound2`; `pacman.depends` replaces the default because Arch dropped `http-parser` and `libappindicator-gtk3`. The Arch package needs `bsdtar` on the build machine (`sudo apt-get install libarchive-tools` on Debian/Ubuntu). Building the Windows installer on Linux needs Wine and a UTF-8 locale; without Wine, build it in Docker:
 
 ```sh
 docker run --rm -v "$PWD":/project -w /project electronuserland/builder:wine npx electron-builder --win
@@ -72,12 +86,12 @@ Legacy `config.json` is no longer read. Enter those credentials in Settings, the
 
 ## Lists
 
-Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report; **All records** (the boxes icon) lists every kind, adding Licenses, Accessories, Consumables, Components, Categories, Manufacturers, Suppliers, Departments, Companies and Status Labels. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Asset rows have Quick Actions: Checkin, Checkout, Status, and Batch.
+Under Dashboard in the left rail: Assets, Users, Locations, Asset Models, and the Activity Report; **All records** (the boxes icon) lists every kind, adding Licenses, Accessories, Consumables, Components, Categories, Manufacturers, Suppliers, Departments, Companies and Status Labels. Each List pages through Snipe-IT 50 rows at a time, with a search box, simple filters, sortable column headers, and a **Columns** button to show or hide columns (remembered per computer). Asset rows have Quick Actions: Checkin, Checkout and Status.
 
 **New …** on the Assets, Users, Locations, Licenses, Accessories, Consumables and Components Lists creates one; **Edit** and **Delete…** on its page (or the Asset sheet) change or remove it, and Delete asks first. Snipe-IT checks every save, and its reasons show beside the field they're about. An Asset's form includes its Asset Model's custom fields.
 
 Opening any other row shows every field Snipe-IT has for it; a related record (its Location, Department, Manager…) links to its own page, and buttons open what belongs to it, such as a User's checked-out Assets or a Location's Assets and Users. An Asset's sheet has the same under **All fields**, custom fields included.
 
-The **Batch** page (in the rail, with a count badge) gathers Assets for one Checkout or Checkin of all of them. While it is open, scanning or picking an Asset adds it instead of opening it. The result of each Asset is shown in the row; failed ones can be retried and successful ones removed. The Batch is not saved between sessions.
+Ticking rows makes a Selection, across pages. On the Assets List, **Checkout…** (to a User or a Location) and **Checkin…** act on every selected Asset, one at a time, with a result for each; failed ones can be retried. Each is off when Snipe-IT says your account may not check one of them out or in.
 
 The scan/search box still opens an exact Asset Tag straight away; anything else lists matching Assets, Users, Locations, Asset Models, Licenses, Accessories, Consumables, and Components in the rail, grouped by kind, with the field each matched on (custom fields and notes included).

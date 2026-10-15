@@ -1,28 +1,55 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { SettingsApi } from '../main/config'
-import type { SnipeItBridge } from '../main/snipeit'
-import type { LabelApi } from '../main/index'
+import { fromWire, type SnipeItBridge } from '../main/snipeit'
+import type { LabelApi, WorkflowsApi } from '../main/index'
+import type { ReleaseApi } from '../main/release'
+import type { ReminderApi } from '../main/reminder'
 import type { ReportsApi } from '../main/scheduler'
 
-// Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message.
+// Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
+// failure's kind the main process wrote into it (fromWire).
 // ponytail: matches Electron's current wording; if it changes, the Operator sees the wrapper text too, nothing is lost.
 const call = (name: string) => (...args: unknown[]) =>
   ipcRenderer.invoke(name, ...args).catch((e: Error) => {
-    throw new Error(e.message.replace(/^Error invoking remote method '[^']*': (\w*Error: )?/, ''))
+    throw fromWire(e.message.replace(/^Error invoking remote method '[^']*': (\w*Error: )?/, ''))
   })
 
 const snipeIt: SnipeItBridge = {
   testConnection: call('snipeit:testConnection'),
+  keyRefused: call('snipeit:keyRefused'),
   operatorEmail: call('snipeit:operatorEmail'),
   locations: call('snipeit:locations'),
+  assetByTag: call('snipeit:assetByTag'),
   lookup: call('snipeit:lookup'),
   getAsset: call('snipeit:getAsset'),
   statusLabels: call('snipeit:statusLabels'),
   searchUsers: call('snipeit:searchUsers'),
+  exactUsers: call('snipeit:exactUsers'),
+  userSelectlist: call('snipeit:userSelectlist'),
+  userCard: call('snipeit:userCard'),
+  supplierSelectlist: call('snipeit:supplierSelectlist'),
+  operatorName: call('snipeit:operatorName'),
+  repairTypeId: call('snipeit:repairTypeId'),
+  openMaintenances: call('snipeit:openMaintenances'),
+  maintenance: call('snipeit:maintenance'),
+  createMaintenance: call('snipeit:createMaintenance'),
+  updateMaintenance: call('snipeit:updateMaintenance'),
+  completeMaintenance: call('snipeit:completeMaintenance'),
+  deleteMaintenance: call('snipeit:deleteMaintenance'),
+  addAssetNote: call('snipeit:addAssetNote'),
+  appendUserNotes: call('snipeit:appendUserNotes'),
+  removeUserNotesLine: call('snipeit:removeUserNotesLine'),
   searchLocations: call('snipeit:searchLocations'),
   checkout: call('snipeit:checkout'),
   checkin: call('snipeit:checkin'),
+  audit: call('snipeit:audit'),
+  checkoutStock: call('snipeit:checkoutStock'),
+  accessoryHolders: call('snipeit:accessoryHolders'),
+  checkinAccessory: call('snipeit:checkinAccessory'),
+  userAccessories: call('snipeit:userAccessories'),
+  returnAccessory: call('snipeit:returnAccessory'),
   dashboard: call('snipeit:dashboard'),
+  health: call('snipeit:health'),
   list: call('snipeit:list'),
   exportList: call('snipeit:exportList'),
   names: call('snipeit:names'),
@@ -52,10 +79,31 @@ const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
-  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'),
+  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveRepairs: call('settings:saveRepairs'),
+  saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }
 contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
+contextBridge.exposeInMainWorld('releases', releases)
+
+const workflows: WorkflowsApi = { unsent: call('workflows:unsent') }
+contextBridge.exposeInMainWorld('workflows', workflows)
+
+const reminder: ReminderApi = {
+  onOpen(listener) {
+    const opened = () => listener()
+    ipcRenderer.on('reminder:open', opened)
+    return () => void ipcRenderer.removeListener('reminder:open', opened)
+  },
+  onAutomatic(listener) {
+    const opened = (_e: unknown, day: string) => listener(day)
+    ipcRenderer.on('automatic:open', opened)
+    return () => void ipcRenderer.removeListener('automatic:open', opened)
+  },
+}
+contextBridge.exposeInMainWorld('reminder', reminder)

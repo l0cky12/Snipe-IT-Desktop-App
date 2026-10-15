@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createSettingsStore } from './config'
+import { RANGED_REPORTS, REPORTS, takesRange } from './snipeit'
 
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
@@ -106,6 +107,16 @@ it('refuses a Saved Report it could not open again', () => {
   expect(store.savedReports()).toEqual([])
 })
 
+it("keeps an Assets Saved Report's View; re-saving without one drops it, and a View it doesn't know is refused", () => {
+  const { store } = setup()
+  const late = store.saveReport({ ...report, view: 'auditLate' })
+  expect(store.savedReports()).toEqual([{ ...late, view: 'auditLate' }])
+  expect(store.saveReport({ ...report, id: late.id })).not.toHaveProperty('view')
+  expect(() => store.saveReport({ ...report, view: 'nope' as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, view: ['auditLate'] as unknown as 'all' })).toThrow('Invalid report')
+  expect(() => store.saveReport({ ...report, kind: 'users', sort: null, view: 'overdue' })).toThrow('Invalid report')
+})
+
 const mail = { host: 'smtp.gmail.com', port: 465, security: 'ssl' as const, username: 'operator@nomma.net', sender: 'operator@nomma.net', password: 'app-password' }
 
 it("fills in Gmail's mail server, keeps the email password encrypted across a restart, and keeps it when left blank", () => {
@@ -193,6 +204,19 @@ it('keeps built-in and Saved Report schedules across a restart; changing one kee
   expect(relaunched.schedules()).toEqual([])
 })
 
+it('keeps a date range only on the Schedules of ranged Reports: Audit due and Audit late always send what Snipe-IT counts, End of life its whole window', () => {
+  const { store } = setup()
+  for (const builtIn of REPORTS) store.setSchedule({ builtIn }, weekly, since)
+  const ranged = store.schedules().filter((s) => s.schedule.range !== undefined).map((s) => 'builtIn' in s.report && s.report.builtIn)
+  expect(ranged).toEqual(['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory'])
+  expect(ranged).toEqual(RANGED_REPORTS)
+  // The Schedule form shows the range choice by the same rule.
+  expect(REPORTS.filter((builtIn) => takesRange({ builtIn }))).toEqual(RANGED_REPORTS)
+  expect(takesRange({ saved: 'x' })).toBe(false)
+  // The snapshot Reports send what's true at the time.
+  for (const builtIn of ['statusLocation', 'checkedOut'] as const) expect(store.schedules().find((s) => 'builtIn' in s.report && s.report.builtIn === builtIn)?.schedule).not.toHaveProperty('range')
+})
+
 it('refuses a schedule it could not keep', () => {
   const { store } = setup()
   for (const [schedule, message] of [
@@ -218,4 +242,91 @@ it('keeps running in the tray and starting at login off until turned on, and kee
   expect(relaunched.get()).toMatchObject({ hasToken: true, background: { tray: true, startAtLogin: true } })
   expect(relaunched.saveBackground({ tray: false, startAtLogin: true }).background).toEqual({ tray: false, startAtLogin: true })
   expect(() => store.saveBackground({ tray: 'yes', startAtLogin: false } as never)).toThrow('Invalid')
+})
+
+it('follows the system appearance until one is chosen, and keeps the choice across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().appearance).toBe('system')
+  store.save(input)
+  expect(store.saveAppearance('dark').appearance).toBe('dark')
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, appearance: 'dark' })
+  expect(relaunched.saveAppearance('light').appearance).toBe('light')
+  expect(relaunched.saveAppearance('system').appearance).toBe('system')
+  expect(() => store.saveAppearance('blue' as never)).toThrow('Invalid')
+})
+
+it('the end-of-day time is 2:50 pm until changed, must be a real HH:MM, and is kept across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '14:50', reminder: true, automatic: false, automaticAt: '15:50' })
+  expect(store.saveTempCheckout({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '15:50' }).tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '15:50' })
+  for (const endOfDay of ['24:00', '3:10', '15:60', '', 1510]) expect(() => store.saveTempCheckout({ endOfDay, reminder: true, automatic: false, automaticAt: '15:50' } as never)).toThrow('Enter the end-of-day time as HH:MM, like 14:50.')
+  expect(() => store.saveTempCheckout({ endOfDay: '00:00', reminder: true, automatic: false, automaticAt: '15:50' })).toThrow("The end-of-day time can't be midnight.")
+  expect(createSettingsStore(path, storage, '0.1.0').get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '15:50' })
+})
+
+it('the End-of-day reminder is on until switched off; its last day is kept but not shown', () => {
+  const { path, storage, store } = setup()
+  // Saved before the switch existed: still on.
+  writeFileSync(path, JSON.stringify({ baseUrl: '', defaultLocation: null, tempCheckout: { endOfDay: '15:10' } }))
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '16:10' })
+  expect(store.saveTempCheckout({ endOfDay: '15:10', reminder: false, automatic: false, automaticAt: '15:50' }).tempCheckout).toEqual({ endOfDay: '15:10', reminder: false, automatic: false, automaticAt: '15:50' })
+  expect(() => store.saveTempCheckout({ endOfDay: '15:10', reminder: 'yes', automatic: false, automaticAt: '15:50' } as never)).toThrow('Invalid Temp checkout settings')
+  expect(store.lastReminder()).toBeUndefined()
+  store.recordReminder('2026-10-12')
+  const reopened = createSettingsStore(path, storage, '0.1.0')
+  expect(reopened.lastReminder()).toBe('2026-10-12')
+  expect(reopened.get()).not.toHaveProperty('reminderDay')
+  expect(reopened.get().tempCheckout.reminder).toBe(false)
+})
+
+it('Automatic check-in is off until switched on, at 3:50 pm, and must come after the end-of-day time', () => {
+  const { path, storage, store } = setup()
+  // Until its time is set, an hour after the end-of-day time.
+  writeFileSync(path, JSON.stringify({ baseUrl: '', defaultLocation: null, tempCheckout: { endOfDay: '15:10', reminder: true } }))
+  expect(store.get().tempCheckout).toEqual({ endOfDay: '15:10', reminder: true, automatic: false, automaticAt: '16:10' })
+  const temp = { endOfDay: '14:50', reminder: true, automatic: true, automaticAt: '15:50' }
+  expect(store.saveTempCheckout(temp).tempCheckout).toEqual(temp)
+  for (const [endOfDay, automaticAt] of [['14:50', '14:50'], ['14:50', '09:00'], ['16:00', '15:50']])
+    expect(() => store.saveTempCheckout({ ...temp, endOfDay, automaticAt })).toThrow('Automatic check-in must be after the end-of-day time')
+  // Off, it's no reason to refuse a later end-of-day time; switching it on then is refused.
+  const off = { ...temp, automatic: false, endOfDay: '16:00' }
+  expect(store.saveTempCheckout(off).tempCheckout).toEqual(off)
+  expect(() => store.saveTempCheckout({ ...off, automatic: true })).toThrow('Automatic check-in must be after the end-of-day time')
+  for (const automaticAt of ['24:00', '4:10', '']) expect(() => store.saveTempCheckout({ ...temp, automaticAt })).toThrow('Enter the Automatic check-in time as HH:MM, like 15:50.')
+  expect(() => store.saveTempCheckout({ ...temp, automatic: 1 } as never)).toThrow('Invalid Temp checkout settings')
+  expect(store.lastAutomatic()).toBeUndefined()
+  store.recordAutomatic('2026-10-12')
+  const reopened = createSettingsStore(path, storage, '0.1.0')
+  expect(reopened.lastAutomatic()).toBe('2026-10-12')
+  expect(reopened.get()).not.toHaveProperty('automaticDay')
+  expect(reopened.get().tempCheckout).toEqual(off)
+})
+
+it('keeps the School calendar as checked entries sorted by date; a bad line refuses the whole save', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().schoolCalendar).toEqual([])
+  const saved = store.saveSchoolCalendar('2026-12-18 half day 12:00 Winter concert\n2026-11-23 to 2026-11-27 Thanksgiving break')
+  expect(saved.schoolCalendar).toEqual([
+    { from: '2026-11-23', to: '2026-11-27', label: 'Thanksgiving break' },
+    { from: '2026-12-18', to: '2026-12-18', halfDay: '12:00', label: 'Winter concert' },
+  ])
+  expect(() => store.saveSchoolCalendar('2026-11-26 Thanksgiving\n2026-11-27 to 2026-11-23 Break')).toThrow('Line 2: the end date is before the start date')
+  expect(() => store.saveSchoolCalendar(7 as never)).toThrow('Invalid School calendar')
+  expect(createSettingsStore(path, storage, '0.1.0').get().schoolCalendar).toEqual(saved.schoolCalendar)
+  // An empty box: every weekday is a School day.
+  expect(store.saveSchoolCalendar('\n  \n').schoolCalendar).toEqual([])
+})
+
+it('keeps the Maintenance type for repairs blank until set: a whole number above 0, or blank for none, kept across a restart', () => {
+  const { path, storage, store } = setup()
+  expect(store.get().repairTypeId).toBeNull()
+  store.save(input)
+  expect(store.saveRepairs(' 12 ').repairTypeId).toBe(12)
+  const relaunched = createSettingsStore(path, storage, '0.1.0')
+  expect(relaunched.get()).toMatchObject({ hasToken: true, repairTypeId: 12 })
+  for (const bad of ['0', '-3', '1.5', '1e3', 'abc', '12 34', '99999999999999999999', 7 as never, null as never])
+    expect(() => relaunched.saveRepairs(bad)).toThrow('Maintenance type for repairs must be a whole number above 0, or blank.')
+  expect(relaunched.get().repairTypeId).toBe(12)
+  expect(relaunched.saveRepairs('  ').repairTypeId).toBeNull()
 })

@@ -41,7 +41,8 @@ export function ImportView() {
   return (
     <>
       <header className="head">
-        <h1>Import<span className="sub">Create or update Records from a CSV, through Snipe-IT's importer</span></h1>
+        <h1>Import</h1>
+        <span className="dim">Create or update Records from a CSV, through Snipe-IT's importer</span>
         <div className="actions">
           <input ref={picker} type="file" accept=".csv,text/csv" hidden onChange={(e) => upload(e.target.files?.[0])} />
           <button disabled={uploading} onClick={() => picker.current?.click()}>{uploading ? 'Uploading…' : 'Upload CSV…'}</button>
@@ -55,7 +56,7 @@ export function ImportView() {
           <thead><tr><th>File</th><th>Uploaded</th><th>Size</th><th>Last imported as</th><th /></tr></thead>
           <tbody>{files.map((f) => (
             <tr key={f.id} className={f.id === active?.id ? 'sel' : undefined}>
-              <td className="mono">{f.name}</td><td>{f.uploaded}</td><td>{f.size || '—'}</td><td>{f.type ? IMPORT_TYPES[f.type] : '—'}</td>
+              <td>{f.name}</td><td>{f.uploaded}</td><td>{f.size || '—'}</td><td>{f.type ? IMPORT_TYPES[f.type] : '—'}</td>
               <td><div className="actions">
                 <button className="quiet" onClick={() => setActive(f)}>{f.type ? 'Import again…' : 'Import…'}</button>
                 <DeleteUpload file={f} onDeleted={() => (active?.id === f.id && setActive(null), refresh())} onFailed={refresh} />
@@ -65,7 +66,7 @@ export function ImportView() {
         </table>
       )}
       {files?.length === 0 && <p className="empty">No CSVs uploaded yet</p>}
-      {!files && !error && <p className="message list-message" role="status">Loading…</p>}
+      {!files && !error && <p className="empty" role="status">Loading…</p>}
     </>
   )
 }
@@ -105,7 +106,7 @@ function ImportForm({ file, onRan, onClose }: { file: ImportFile; onRan: () => v
   return (
     <form className="import-form" onSubmit={run}>
       <div className="actions">
-        <b className="mono">{file.name}</b>
+        <b>{file.name}</b>
         <select value={type} required disabled={busy} onChange={(e) => choose(e.target.value as ImportType)} aria-label="What it imports">
           <option value="" disabled>Choose what it imports…</option>
           {(Object.keys(IMPORT_TYPES) as ImportType[]).map((t) => <option key={t} value={t}>{IMPORT_TYPES[t]}</option>)}

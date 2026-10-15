@@ -1,16 +1,24 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput } from './config'
+import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { sendMail } from './mail'
+import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
+import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
-import { createSnipeIt } from './snipeit'
+import { createSnipeIt, overdueTemp, toWire } from './snipeit'
 import trayIcon from './tray.png?asset'
+
+// The theme's page colour (--bg), so a window never flashes the other theme's colour before it paints.
+// ponytail: copies --bg from styles.css; change both together.
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#16181d' : '#ffffff')
 
 /** Opens the Assets' Labels, one PDF, to print or save: Snipe-IT's, or the app's own (ownLabelHtml, see labelHtml) when Snipe-IT can't make them. */
 export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promise<'snipeit' | 'own'> }
+/** unsent: how many scans Paused Workflows are keeping from Snipe-IT, so quitting can ask first. */
+export type WorkflowsApi = { unsent(count: number): Promise<void> }
 
 // A Label PDF in its own window, in Chromium's PDF viewer: its Print button opens the system print dialog, which can also
 // save it as a PDF, as can its Download button. ponytail: Electron 44 can't open that dialog for a PDF by itself
@@ -18,7 +26,7 @@ export type LabelApi = { print(assetTags: string[], ownLabelHtml: string): Promi
 async function showLabel(parent: BrowserWindow | null, dir: string, name: string, pdf: Buffer) {
   const file = join(dir, `${name.replace(/[^\w.-]+/g, '_')}.pdf`)
   await writeFile(file, pdf)
-  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: '#0d1117', webPreferences: { plugins: true } })
+  const win = new BrowserWindow({ parent: parent ?? undefined, width: 560, height: 460, backgroundColor: windowBackground(), webPreferences: { plugins: true } })
   win.setMenuBarVisibility(false)
   win.on('closed', () => rm(dir, { recursive: true, force: true }))
   await win.loadFile(file, { hash: 'navpanes=0' })
@@ -49,12 +57,15 @@ app.whenReady().then(() => {
   const client = (input?: SettingsInput) => createSnipeIt(store.credentials(input), fetch)
   // A corrupt settings file shouldn't keep the window from opening to say so.
   let background = BACKGROUND_OFF
-  try { background = store.get().background } catch {}
+  let appearance: Appearance = 'system'
+  try { ({ background, appearance } = store.get()) } catch {}
+  // Also switches the window's prefers-color-scheme, so the stylesheet's one dark token block follows the setting.
+  nativeTheme.themeSource = appearance
   const win = new BrowserWindow({
     show: !(background.tray && process.argv.includes(HIDDEN_ARG)),
     width: 1280,
     height: 800,
-    backgroundColor: '#0d1117',
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -67,29 +78,58 @@ app.whenReady().then(() => {
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   const show = () => { if (win.isMinimized()) win.restore(); win.show(); win.focus() }
   app.on('second-instance', show)
+  nativeTheme.on('updated', () => win.setBackgroundColor(windowBackground()))
 
-  ipcMain.handle('settings:get', () => store.get())
-  ipcMain.handle('settings:save', (_e, input: SettingsInput) => store.save(input))
-  ipcMain.handle('settings:clearToken', () => store.clearToken())
-  ipcMain.handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
-  ipcMain.handle('settings:testMail', async (_e, input: MailInput) => {
+  // Every call from the window, with any failure's kind written into the message for the preload to read back (toWire).
+  const handle = (channel: string, listener: Parameters<typeof ipcMain.handle>[1]) =>
+    ipcMain.handle(channel, async (e, ...args) => {
+      try {
+        return await listener(e, ...args)
+      } catch (err) {
+        throw toWire(err)
+      }
+    })
+  handle('settings:get', () => store.get())
+  handle('settings:save', (_e, input: SettingsInput) => {
+    const saved = store.save(input)
+    scheduler.cancelPending()
+    automatic.cancel()
+    return saved
+  })
+  handle('settings:clearToken', () => {
+    const saved = store.clearToken()
+    scheduler.cancelPending()
+    automatic.cancel()
+    return saved
+  })
+  handle('settings:saveMail', (_e, input: MailInput) => store.saveMail(input))
+  handle('settings:saveTempCheckout', (_e, input: TempCheckout) => store.saveTempCheckout(input))
+  handle('settings:saveSchoolCalendar', (_e, text: string) => store.saveSchoolCalendar(text))
+  handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()
     await sendMail(server, { to, subject: 'Snipe-IT Desktop test email', text: 'This is a test email from Snipe-IT Desktop. Your email settings work, so Reports can be emailed to you here.' })
     return to
   })
   // Kept here, not in the window's storage, so the Report scheduler can read them with the window closed.
-  ipcMain.handle('settings:savedReports', () => store.savedReports())
-  ipcMain.handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
-  ipcMain.handle('settings:renameReport', (_e, id: string, name: string) => store.renameReport(id, name))
-  ipcMain.handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
-  ipcMain.handle('settings:schedules', () => store.schedules())
-  ipcMain.handle('settings:setSchedule', (_e, report: ScheduleKey, schedule: Schedule | null) => store.setSchedule(report, schedule, new Date()))
+  handle('settings:savedReports', () => store.savedReports())
+  handle('settings:saveReport', (_e, report: SavedReportInput) => store.saveReport(report))
+  handle('settings:renameReport', (_e, id: string, name: string) => store.renameReport(id, name))
+  handle('settings:deleteReport', (_e, id: string) => store.deleteReport(id))
+  handle('settings:schedules', () => store.schedules())
+  handle('settings:setSchedule', (_e, report: ScheduleKey, schedule: Schedule | null) => store.setSchedule(report, schedule, new Date()))
   const scheduler = createReportScheduler({
     now: () => new Date(),
-    run: (ref) => reportRunner(client(), store.savedReports)(ref),
-    recipient: () => client().operatorEmail(),
-    send: (mail) => sendMail(store.mailServer(), mail),
+    session: () => {
+      const connection = client()
+      const reports = store.savedReports()
+      const server = store.mailServer()
+      return {
+        run: reportRunner(connection, () => reports),
+        recipient: () => connection.operatorEmail(),
+        send: (mail) => sendMail(server, mail),
+      }
+    },
     schedules: store.schedules,
     recordSend: store.recordSend,
     // Only while the window is hidden; open, the Reports page shows the failure. No Report name: an Operator's name for a
@@ -101,22 +141,80 @@ app.whenReady().then(() => {
       note.show()
     },
   })
-  ipcMain.handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
-  // At launch, sending what came due while the app was closed, then every minute.
-  const tick = () => scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+  handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
+  // Kept, so their clicks still open the window after the notifications would otherwise be garbage collected.
+  let reminderNote: Notification | null = null
+  let automaticNote: Notification | null = null
+  // Even with the window open: at the end of the day it may be behind other windows.
+  const notify = ({ title, body }: { title: string; body: string }, click: () => void) => {
+    if (!Notification.isSupported()) return null
+    const note = new Notification({ title, body })
+    note.on('click', () => { show(); click() })
+    note.show()
+    return note
+  }
+  // The dashboard's Overdue list, so the reminder counts exactly what the click opens: sorted most late first.
+  // ponytail: a lasting failure (say a 403 on the Activity Report) refetches every Asset each minute until the day ends.
+  const outstanding = async (connection: ReturnType<typeof client>) => {
+    const temp = overdueTemp((await connection.dashboard(['overdue'])).overdue)
+    if (!Array.isArray(temp)) throw new Error(temp?.error ?? "Snipe-IT didn't send the Overdue list.")
+    return temp
+  }
+  const reminder = createEndOfDayReminder({
+    now: () => new Date(),
+    settings: store.get,
+    lastShown: store.lastReminder,
+    recordShown: store.recordReminder,
+    outstanding: async () => (await outstanding(client())).map((a) => a.assetTag),
+    notify: (text) => { reminderNote = notify(text, () => win.webContents.send('reminder:open')) },
+  })
+  const automatic = createAutomaticCheckin({
+    now: () => new Date(),
+    settings: store.get,
+    lastRan: store.lastAutomatic,
+    recordRan: store.recordAutomatic,
+    connect: () => {
+      const connection = client()
+      return { outstanding: () => outstanding(connection), checkin: (id, checkout, note) => connection.automaticCheckin(id, checkout, note) }
+    },
+    // Opens the Activity Report on that day's automatic check-ins.
+    notify: (text, day) => { automaticNote = notify(text, () => win.webContents.send('automatic:open', day)) },
+    log: (message) => console.error('Automatic check-in:', message),
+  })
+  // At launch, sending what came due while the app was closed (and today's End-of-day reminder and Automatic check-in if
+  // their times have passed), then every minute.
+  const tick = () => {
+    scheduler.tick().catch((e: Error) => console.error('Report scheduler:', e.message))
+    reminder.tick().catch((e: Error) => console.error('End-of-day reminder:', e.message))
+    automatic.tick().catch((e: Error) => console.error('Automatic check-in:', e.message))
+  }
   tick()
   setInterval(tick, 60_000)
-  ipcMain.handle('settings:saveBackground', (_e, input: Background) => {
+  handle('settings:saveBackground', (_e, input: Background) => {
     const saved = store.saveBackground(input)
     applyBackground(saved.background)
     return saved
   })
-  ipcMain.handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
-  ipcMain.handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
-  for (const name of ['testConnection', 'operatorEmail', 'locations', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'searchLocations', 'checkout', 'checkin', 'dashboard', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
-    ipcMain.handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
+  handle('settings:saveAppearance', (_e, input: Appearance) => {
+    const saved = store.saveAppearance(input)
+    nativeTheme.themeSource = saved.appearance
+    return saved
+  })
+  // Never clears the session: only Settings that point at another server do that.
+  handle('settings:saveRepairs', (_e, input: string) => store.saveRepairs(input))
+  handle('settings:test', (_e, input: SettingsInput) => client(input).testConnection())
+  handle('settings:locations', (_e, input: SettingsInput) => client(input).locations())
+  // The Newer Snipe-IT available Health warning; its check failing shows nothing. From source it asks only
+  // SNIPEIT_RELEASES_URL (the mock, scripts/mock-snipeit.mjs), so development and screenshots never ask GitHub.
+  const releasesUrl = app.isPackaged ? RELEASES_URL : process.env.SNIPEIT_RELEASES_URL
+  const releases = releasesUrl ? createReleaseCheck({ store, fetch, now: () => new Date(), url: releasesUrl }) : null
+  handle('release:latest', () => releases?.latest().catch(() => null) ?? null)
+  handle('release:open', (_e, url: string) => openReleaseNotes(url, (page) => shell.openExternal(page)))
+  handle('release:hide', (_e, tag: string) => releases?.hide(tag))
+  for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'checkoutStock', 'accessoryHolders', 'checkinAccessory', 'userAccessories', 'returnAccessory', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
+    handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
-  ipcMain.handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
+  handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
     const pdf = await client().labelPdf(assetTags)
     const dir = await mkdtemp(join(tmpdir(), 'snipe-it-label-'))
     try {
@@ -133,9 +231,25 @@ app.whenReady().then(() => {
   // tray quits. Logging out of Windows ends the app without asking.
   let tray: Tray | null = null
   let quitting = false
-  app.on('before-quit', () => { quitting = true })
+  // Windows logging out or shutting down: never held up by the prompt below.
+  win.on('session-end', () => { quitting = true })
+  // Quitting (the tray's Quit, Ctrl+Q, or closing the window out of tray mode) while a Paused Workflow holds scans asks
+  // first (#73); a moving queue quits without asking. In memory only, so quitting loses them.
+  let unsent = 0
+  handle('workflows:unsent', (_e, count: unknown) => { unsent = Number.isSafeInteger(count) && (count as number) > 0 ? count as number : 0 })
+  const quitAnyway = () => {
+    if (!unsent) return true
+    const ask = { type: 'warning' as const, buttons: ['Quit', 'Cancel'], defaultId: 1, cancelId: 1, message: `${unsent} scan${unsent === 1 ? " wasn't" : "s weren't"} sent to Snipe-IT. Quit anyway?` }
+    return (win.isVisible() ? dialog.showMessageBoxSync(win, ask) : dialog.showMessageBoxSync(ask)) === 0
+  }
+  app.on('before-quit', (e) => {
+    if (!quitting && !quitAnyway()) return e.preventDefault()
+    quitting = true
+  })
   win.on('close', (e) => {
-    if (!tray || quitting) return
+    if (quitting) return
+    // Closing the last window quits: asked here, while the window is still there to cancel.
+    if (!tray) return void (quitAnyway() ? (quitting = true) : e.preventDefault())
     e.preventDefault()
     win.getChildWindows().forEach((w) => w.close())
     win.hide()

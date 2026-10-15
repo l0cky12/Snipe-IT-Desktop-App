@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { lastSendText, scheduleText } from './ReportsView'
+import { automaticCheckins, lastSendText, pickerOptions, reportFilters, scheduleText, weekCheckouts } from './ReportsView'
 
 it("says when a Report emails itself and over which dates", () => {
   expect(scheduleText({ every: 'day', time: '07:00' })).toBe('Daily at 07:00')
@@ -12,4 +12,27 @@ it("says when a Report emails itself and over which dates", () => {
 it('says how the last send went, including why it failed', () => {
   expect(lastSendText({ at: new Date(2026, 9, 5, 7).toISOString(), rows: 1 })).toBe('Last sent Oct 5, 7:00 AM: 1 row')
   expect(lastSendText({ at: new Date(2026, 9, 5, 19, 5).toISOString(), error: 'Wrong password' })).toBe('Last send failed Oct 5, 7:05 PM: Wrong password')
+})
+
+it('tells same-name Locations apart in the picker', () => {
+  expect(pickerOptions('Any Location', [{ id: 3, name: 'Room 101' }, { id: 9, name: 'Room 101' }, { id: 4, name: 'Gym' }])).toEqual([
+    { value: '3', label: 'Room 101 (id 3)' },
+    { value: '9', label: 'Room 101 (id 9)' },
+    { value: '4', label: 'Gym' },
+  ])
+  expect(pickerOptions('Any Category')).toEqual([])
+})
+
+it("opens on a starting query: Automatic check-in's is that day's automatic check-ins, every filter of it sent", () => {
+  const start = automaticCheckins('2026-10-12')
+  expect(start).toEqual({ kind: 'activity', query: { from: '2026-10-12', to: '2026-10-12', itemType: 'asset', actionType: 'checkin from', search: 'Automatic check-in' } })
+  expect(reportFilters(start.kind, start.query)).toEqual(start.query)
+  // A search is the Activity Report's own, like its record type and action.
+  expect(reportFilters('overdue', { ...start.query, locationId: '3' })).toEqual({ from: '2026-10-12', to: '2026-10-12' })
+  expect(reportFilters('auditDue', { search: 'x', locationId: '3' })).toEqual({ from: undefined, to: undefined, locationId: '3', categoryId: undefined })
+})
+
+it('a week of Checkouts over time opens its Asset Checkouts, Monday through Sunday, across a year end too', () => {
+  expect(weekCheckouts('2025-12-29')).toEqual({ kind: 'activity', query: { from: '2025-12-29', to: '2026-01-04', itemType: 'asset', actionType: 'checkout' } })
+  expect(weekCheckouts('2026-09-21').query.to).toBe('2026-09-27')
 })
