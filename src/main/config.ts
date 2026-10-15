@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
+import { SIDEBAR_DEFAULT, SIDEBAR_PAGES, type SidebarPage } from './sidebar'
 import { END_OF_DAY, later, parseCalendar, realTime, type CalendarEntry } from './calendar'
 import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance; sidebar: SidebarPage[]
   tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[]
   /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
   repairTypeId: number | null }
@@ -38,6 +39,8 @@ export type SettingsApi = {
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
   saveAppearance(input: Appearance): Promise<Settings>
+  /** The sidebar's pages to show, on this PC; any order, kept in sidebar order. */
+  saveSidebar(input: SidebarPage[]): Promise<Settings>
   saveTempCheckout(input: TempCheckout): Promise<Settings>
   /** The School calendar box's text; throws "Line N: …" and saves nothing when a line is bad. */
   saveSchoolCalendar(text: string): Promise<Settings>
@@ -81,7 +84,7 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; sidebar?: SidebarPage[]
   release?: ReleaseCache; repairTypeId?: number | null
   tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string; automaticDay?: string }
 
@@ -181,7 +184,7 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     const value = read()
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
-      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', repairTypeId: value.repairTypeId ?? null,
+      background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', sidebar: value.sidebar ?? SIDEBAR_DEFAULT, repairTypeId: value.repairTypeId ?? null,
       tempCheckout: tempCheckout(value.tempCheckout), schoolCalendar: value.schoolCalendar ?? [] }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
@@ -255,6 +258,12 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     saveAppearance(appearance: Appearance) {
       if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
+      return get()
+    },
+    saveSidebar(sidebar: SidebarPage[]) {
+      if (!Array.isArray(sidebar) || !sidebar.every((p) => SIDEBAR_PAGES.includes(p))) throw new Error('Invalid sidebar pages')
+      // Kept in sidebar order, once each, so the sidebar never depends on the order the boxes were ticked.
+      write({ ...read(), sidebar: SIDEBAR_PAGES.filter((p) => sidebar.includes(p)) })
       return get()
     },
     /** The newer Snipe-IT release check's cache and hidden tag, on this PC (see createReleaseCheck). */

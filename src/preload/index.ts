@@ -83,7 +83,7 @@ const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
-  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveRepairs: call('settings:saveRepairs'),
+  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveSidebar: call('settings:saveSidebar'), saveRepairs: call('settings:saveRepairs'),
   saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }

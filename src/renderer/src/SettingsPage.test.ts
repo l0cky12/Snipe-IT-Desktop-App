@@ -2,7 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
-import { SettingsPage, unencryptedRemote } from './SettingsPage'
+import { SIDEBAR_DEFAULT } from '../../main/sidebar'
+import { SettingsPage, sidebarTicks, unencryptedRemote } from './SettingsPage'
 
 describe('the unencrypted connection warning', () => {
   it('shows for HTTP to any other machine, LAN included', () => {
@@ -27,7 +28,7 @@ describe('the Settings tabs', () => {
   const settings: Settings = {
     baseUrl: 'https://snipeit.example.org', defaultLocation: null, hasToken: true, plaintext: false, appVersion: '1.0.0',
     mail: { host: 'smtp.example.org', port: 465, security: 'ssl', username: 'it@example.org', sender: 'it@example.org', hasPassword: true, plaintext: false },
-    background: { tray: false, startAtLogin: false }, appearance: 'system',
+    background: { tray: false, startAtLogin: false }, appearance: 'system', sidebar: SIDEBAR_DEFAULT,
     tempCheckout: { endOfDay: '14:50', reminder: true, automatic: false, automaticAt: '15:50' }, schoolCalendar: [], repairTypeId: null,
   }
   const html = renderToStaticMarkup(createElement(SettingsPage, { settings, onSaved: () => {}, onAppearance: () => {}, onStatusLabels: () => {} }))
@@ -39,9 +40,31 @@ describe('the Settings tabs', () => {
     expect(panels.map((p) => p.hidden)).toEqual([false, true, true, true])
   })
 
-  it('each hold their sections, About, Repairs and Status Labels with the connection', () => {
+  it('each hold their sections, About, Repairs and Status Labels with the connection, Sidebar with this PC', () => {
     expect(panels.map((p) => p.headings)).toEqual([
-      ['Connection', 'About', 'Repairs', 'Status Labels'], ['Email', 'Scheduled Reports'], ['Temp checkout', 'School calendar'], ['Running in the background', 'Appearance'],
+      ['Connection', 'About', 'Repairs', 'Status Labels'], ['Email', 'Scheduled Reports'], ['Temp checkout', 'School calendar'], ['Running in the background', 'Appearance', 'Sidebar'],
     ])
+  })
+})
+
+describe('the Sidebar checkboxes', () => {
+  it('two quick ticks both stick, the second saved on top of the first', async () => {
+    const saved: string[][] = []
+    const tick = sidebarTicks(['assets', 'users'], async (s) => { saved.push(s) })
+    tick('licenses', true)
+    tick('accessories', true)
+    await tick('users', false)
+    expect(saved).toEqual([['assets', 'users', 'licenses'], ['assets', 'users', 'licenses', 'accessories'], ['assets', 'licenses', 'accessories']])
+  })
+
+  it('a tick that fails to save is left out of the ones after it, even those clicked before it failed', async () => {
+    const saved: string[][] = []
+    const tick = sidebarTicks(['assets'], async (s) => { if (s.includes('licenses')) throw new Error('disk full'); saved.push(s) })
+    const failed = expect(tick('licenses', true)).rejects.toThrow('disk full')
+    const pending = tick('accessories', true)
+    await failed
+    await pending
+    await tick('reports', true)
+    expect(saved).toEqual([['assets', 'accessories'], ['assets', 'accessories', 'reports']])
   })
 })
