@@ -90,6 +90,8 @@ export const panelTakesFocus = (place: KeyPlace, text: string) => place !== 'fie
 
 // Stored per computer, like the Dashboard layout: which groups of pages in the sidebar are open. Browse starts open, the rest closed.
 const GROUPS_KEY = 'sidebarGroups'
+// Likewise whether the sidebar lists each Workflow under the Workflows item; hidden until opened.
+const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
@@ -166,6 +168,8 @@ export function App() {
   const search = useRef<HTMLInputElement>(null)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{"Browse":true}'))
   useEffect(() => localStorage.setItem(GROUPS_KEY, JSON.stringify(openGroups)), [openGroups])
+  const [workflowsOpen, setWorkflowsOpen] = useState(() => localStorage.getItem(WORKFLOWS_OPEN_KEY) === 'true')
+  useEffect(() => localStorage.setItem(WORKFLOWS_OPEN_KEY, String(workflowsOpen)), [workflowsOpen])
   // What was in the box is selected, so a scan replaces it.
   function openPanel() {
     search.current?.focus()
@@ -384,13 +388,15 @@ export function App() {
   const openSettings = () => (cancel(), setShowSettings(true))
   const show = (p: 'dashboard' | 'workflows' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
   // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
-  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string }
+  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string; toggle?: { open: boolean; flip: () => void } }
   const pages: Page[][] = [
     [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
     [
-      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows', open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+      // With the Workflows hidden, the Workflows item stands for whichever is open.
+      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+        toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
         aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
-      ...BUILT.map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
+      ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
       ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
     ],
     [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
@@ -456,11 +462,17 @@ export function App() {
               <button className={`grp${!open && pages[i].some((p) => p.sel) ? ' sel' : ''}`} aria-expanded={open} onClick={() => setOpenGroups((g) => ({ ...g, [name]: !open }))}>
                 {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{name}{!open && badge > 0 && <span className={`badge${paused ? ' paused' : ''}`}>{badge}</span>}
               </button>
-              {open && pages[i].map((p) => (
-                <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
+              {open && pages[i].map((p) => {
+                const item = <button key={p.label} aria-label={p.aria} disabled={!settings?.hasToken} className={`nav${p.sub ? ' sub' : ''}${p.sel ? ' sel' : ''}`} onClick={p.open}>
                   <p.Icon size={18} />{p.label}{!!p.badge && <span className={`badge${p.paused ? ' paused' : ''}`}>{p.badge}</span>}{p.kbd && <kbd>{p.kbd}</kbd>}
                 </button>
-              ))}
+                return p.toggle ? <div key={p.label} className="nav-row">
+                  {item}
+                  <button aria-label={`${p.toggle.open ? 'Hide' : 'Show'} ${p.label}`} aria-expanded={p.toggle.open} className="nav toggle" onClick={p.toggle.flip}>
+                    {p.toggle.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+                </div> : item
+              })}
             </Fragment>
           })}
           <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={openSettings}><SettingsIcon size={18} />Settings</button>
