@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { Activity, Boxes, Briefcase, Building2, Cable, ChevronDown, ChevronRight, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, ListChecks, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, DASHBOARD_PIECES, toSummary, type Asset, type AssetSegment, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type Dashboard, type DashboardPiece, type EditKind, type Failed, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { SettingsPage } from './SettingsPage'
@@ -41,12 +40,12 @@ export const checkoutReason = (a: Pick<Asset, 'can' | 'assignee' | 'checkoutAllo
 export const opensPanel = (e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, inField: boolean) =>
   !e.altKey && !e.metaKey && (e.ctrlKey ? e.key.toLowerCase() === 'k' : !inField && e.key.length === 1 && e.key !== ' ')
 
-// Stored per computer, like the Dashboard layout: whether the Scan/Search panel is open.
-const PANEL_KEY = 'scanPanelOpen'
+// Stored per computer, like the Dashboard layout: which groups of pages in the sidebar are open. Browse starts open, the rest closed.
+const GROUPS_KEY = 'sidebarGroups'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the left strip; every List (these and the rest) is on the All records page.
+// The Lists in the sidebar's Browse group; every List (these and the rest) is on the All records page.
 const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
@@ -95,11 +94,10 @@ export function App() {
   // One place for what the rail says: an info line, or an error (shown the same way for every failure).
   const [message, setMessage] = useState<{ text: string; error?: boolean }>({ text: '' })
   const search = useRef<HTMLInputElement>(null)
-  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== 'false')
-  useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen])
-  // Rendered now, so the box can take focus (and the keystroke being handled) straight away; what was in it is selected, so a scan replaces it.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{"Browse":true}'))
+  useEffect(() => localStorage.setItem(GROUPS_KEY, JSON.stringify(openGroups)), [openGroups])
+  // What was in the box is selected, so a scan replaces it.
   function openPanel() {
-    flushSync(() => setPanelOpen(true))
     search.current?.focus()
     search.current?.select()
   }
@@ -254,8 +252,8 @@ export function App() {
   }
 
   const selected = view ? undefined : asset?.id
-  // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the panel, so it opens.
-  const showSegment = (s: AssetSegment) => (setPanelOpen(true), setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
+  // The dashboard stays in the main area, so the Operator can click through several segments in turn; the segment's Assets list in the sidebar.
+  const showSegment = (s: AssetSegment) => (setMatches({ label: `${s.status || 'No status'} (${s.count})`, assets: s.assets }), setOthers([]), setMessage({ text: '' }))
   const go = (page: ListKind, drill?: Drill, report?: SavedReport) => (setShowSettings(false), setView({ page, drill, report, n: cancel() }))
   const openRecord = (kind: RecordKind, id: number) => (setShowSettings(false), setView({ page: 'record', kind, id, n: cancel() }))
   // A new record (id null) or an edit; saved, it opens, so the Operator sees what Snipe-IT kept.
@@ -272,10 +270,18 @@ export function App() {
     setMessage({ text: `Deleted ${name}` })
   }
   const page = !showSettings && view?.page
-  // The All records button stands for every page not in the strip.
+  // The All records button stands for every page not in the sidebar.
   const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+  const show = (p: 'dashboard' | 'batch' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
+  // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (changing Assets), Admin.
+  type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number }
+  const pages: Page[][] = [
+    [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
+    [{ label: 'Batch', Icon: ListChecks, sel: page === 'batch', open: () => show('batch'), badge: batch.length }, ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : [])],
+    [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
+  ]
 
-  // What the rail says; with the panel closed it shows above the page instead, so an error is never hidden.
+  // What the sidebar says, under the scan box.
   const railMessage = <>
     {busy > 0 && <p className="message" role="status">Loading…</p>}
     {message.text && (
@@ -289,36 +295,7 @@ export function App() {
     <div className="layout">
       <aside className="rail">
         <nav className="strip" aria-label="Pages">
-          <span className="logo" aria-hidden="true">S</span>
-          <button title={panelOpen ? 'Close Scan/Search' : 'Scan/Search (Ctrl+K)'} aria-label="Scan/Search panel" aria-expanded={panelOpen} aria-controls={panelOpen ? 'scan-panel' : undefined} className="nav panel-nav"
-            onClick={() => (panelOpen ? setPanelOpen(false) : openPanel())}>
-            <Search size={20} />
-          </button>
-          <button title="Dashboard" aria-label="Dashboard" disabled={!settings?.hasToken} className={`nav${page === 'dashboard' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'dashboard' }))}>
-            <LayoutGrid size={20} />
-          </button>
-          {LISTS.map((k) => {
-            const Icon = listIcon[k]
-            return <button key={k} title={listName[k]} aria-label={listName[k]} disabled={!settings?.hasToken} className={`nav${page === k ? ' sel' : ''}`} onClick={() => go(k)}><Icon size={20} /></button>
-          })}
-          <button title={`Batch (${batch.length})`} aria-label={`Batch, ${batch.length} ${batch.length === 1 ? 'Asset' : 'Assets'}`} disabled={!settings?.hasToken} className={`nav${page === 'batch' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'batch' }))}>
-            <ListChecks size={20} />
-            {batch.length > 0 && <span className="badge">{batch.length}</span>}
-          </button>
-          <button title="Reports" aria-label="Reports" disabled={!settings?.hasToken} className={`nav${page === 'reports' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'reports' }))}>
-            <FileSpreadsheet size={20} />
-          </button>
-          {canImport && (
-            <button title="Import" aria-label="Import" disabled={!settings?.hasToken} className={`nav${page === 'import' ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'import' }))}>
-              <FileUp size={20} />
-            </button>
-          )}
-          <button title="All records" aria-label="All records" disabled={!settings?.hasToken} className={`nav${elsewhere ? ' sel' : ''}`} onClick={() => (cancel(), setShowSettings(false), setView({ page: 'records' }))}>
-            <Boxes size={20} />
-          </button>
-          <button title="Settings" aria-label="Settings" className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={20} /></button>
-        </nav>
-        {panelOpen && <div className="panel" id="scan-panel">
+          <div className="wordmark"><span className="logo" aria-hidden="true">S</span>Snipe-IT</div>
           <form onSubmit={onSubmit}>
             <ScanBarcode size={16} />
             <input
@@ -328,6 +305,7 @@ export function App() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Scan / search…"
+              title="Ctrl+K"
               aria-label="Scan an Asset Tag, or search everything"
             />
           </form>
@@ -354,9 +332,25 @@ export function App() {
               ))}
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={choose} />}
           </div>
-        </div>}
+          {['Browse', 'Act', 'Admin'].map((name, i) => {
+            const open = !!openGroups[name]
+            const badge = pages[i].reduce((n, p) => n + (p.badge ?? 0), 0)
+            // A closed group holding the current page shows as selected, so the Operator can still see where they are.
+            return <Fragment key={name}>
+              <button className={`grp${!open && pages[i].some((p) => p.sel) ? ' sel' : ''}`} aria-expanded={open} onClick={() => setOpenGroups((g) => ({ ...g, [name]: !open }))}>
+                {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}{name}{!open && badge > 0 && <span className="badge">{badge}</span>}
+              </button>
+              {open && pages[i].map((p) => (
+                <button key={p.label} aria-label={p.badge ? `${p.label}, ${p.badge} ${p.badge === 1 ? 'Asset' : 'Assets'}` : undefined} disabled={!settings?.hasToken} className={`nav${p.sel ? ' sel' : ''}`} onClick={p.open}>
+                  <p.Icon size={18} />{p.label}{!!p.badge && <span className="badge">{p.badge}</span>}
+                </button>
+              ))}
+            </Fragment>
+          })}
+          <button className={`nav settings-nav${showSettings ? ' sel' : ''}`} onClick={() => { cancel(); setShowSettings(true) }}><SettingsIcon size={18} />Settings</button>
+        </nav>
       </aside>
-      <main className="sheet">{!panelOpen && <div className="sheet-status">{railMessage}</div>}{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
+      <main className="sheet">{showSettings ? settings ? <SettingsPage settings={settings} onSaved={saved} /> : <p className="message error" role="alert">{settingsError || 'Loading settings…'}</p> : view?.page === 'dashboard' ? <DashboardView onPick={pick} onSegment={showSegment} /> : view?.page === 'reports' ? <ReportsView onOpenSaved={(r) => go(r.kind, { filters: r.filters, label: r.label }, r)} /> : view?.page === 'import' ? <ImportView /> : view?.page === 'batch' ? <BatchView batch={batch} busy={batchRun.busy} last={batchRun.last} onRun={runBatch} onRemove={(ids) => setBatch((b) => b.filter((a) => !ids.includes(a.id)))} onClear={() => (setBatch([]), setBatchRun({ busy: false, last: null }))} statusLabels={statusLabels} locations={locations} defaultLocation={settings?.defaultLocation ?? null} onOpenAsset={pick} />
         : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
@@ -369,7 +363,7 @@ export function App() {
   )
 }
 
-// Every List, the ones in the strip and the rest.
+// Every List, the ones in the sidebar and the rest.
 function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
   return (
     <>

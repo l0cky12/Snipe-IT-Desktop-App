@@ -11,7 +11,6 @@
   --bg: #f4f6fb; --panel: #ffffff; --panel2: #e9edf7; --line: #d7ddeb;
   --text: #15213f; --dim: #5d6b8a; --heading: var(--navy);
   --primary: var(--navy); --on-primary: #ffffff; --focus: var(--gold);
-  --strip: var(--navy); --strip-fg: #c9d3f0; --strip-hover: #2a4079;
   --coral: #ee5a42; --leaf: #22b573; --sky: #2e8be8; --tangerine: #f27e2e; --violet: #7a5af8; --slate: #7c8aa5;
   --on-bright: #14213d; --on-deep: #ffffff;
   /* Asset status colors: deployed, deployable, pending, archived, undeployable. */
@@ -29,7 +28,6 @@
     --bg: #0b1530; --panel: #122047; --panel2: #1a2c5c; --line: #28407c;
     --text: #e8eeff; --dim: #97a6cc; --heading: var(--gold);
     --primary: var(--gold); --on-primary: var(--navy);
-    --strip: #08102a; --strip-fg: #a9b7dd; --strip-hover: #1a2c5c;
     --coral: #ff6b55; --leaf: #3dd68c; --sky: #5aa9ff; --tangerine: #ff9a4d; --violet: #9b85ff; --slate: #8e9cba;
     --shadow: 0 8px 22px -8px #00000080;
   }
@@ -44,29 +42,32 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .mono { font-family: var(--mono); font-size: .93em; }
 .dim { color: var(--dim); font-weight: 400; }
 
-/* Shell: an icon strip, the scan panel, and the sheet. The strip is always navy, in both themes. */
-/* The panel can be closed (the strip stays), giving the sheet the full width. */
+/* Shell: the sidebar (the scan box and what it found, then the pages in groups that open and close) and the sheet. */
 .layout { display: grid; grid-template-columns: auto 1fr; height: 100%; }
 .rail { display: flex; min-height: 0; }
-.strip { width: 68px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 16px 10px 14px; background: var(--strip); }
-.logo { display: grid; place-items: center; width: 40px; height: 40px; margin: 0 auto 12px; border-radius: 12px; background: var(--gold); color: var(--navy); font: 700 22px var(--display); }
-.nav { all: unset; box-sizing: border-box; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: var(--strip-fg); cursor: pointer; transition: background var(--fast), color var(--fast); }
-.nav:hover, .nav:focus-visible { background: var(--strip-hover); color: #ffffff; }
-.nav.sel { background: var(--gold); color: var(--navy); }
+.strip { width: 300px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px 14px; background: var(--panel); border-right: 1px solid var(--line); }
+.strip form { position: relative; margin: 0 -2px 4px; }
+.strip form svg { position: absolute; left: 16px; top: 15px; width: 20px; height: 20px; color: var(--dim); pointer-events: none; }
+/* What the scan box found takes what room the groups leave, and scrolls. */
+.strip .list { flex: 0 1 auto; min-height: 0; margin: 0 -12px; padding-bottom: 4px; }
+.wordmark { display: flex; align-items: center; gap: 10px; margin: 0 2px 12px; color: var(--heading); font: 600 17px var(--display); }
+.logo { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--gold); color: var(--navy); font: 700 19px var(--display); }
+.grp { all: unset; box-sizing: border-box; flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px; margin-top: 8px; border-radius: 8px; font: 700 13px var(--sans); color: var(--heading); cursor: pointer; }
+.grp:hover, .grp:focus-visible { background: var(--panel2); }
+.grp.sel { background: var(--primary); color: var(--on-primary); }
+.nav { all: unset; box-sizing: border-box; flex: none; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px 0 30px; border-radius: 10px; color: var(--text); font: 600 14px var(--sans); white-space: nowrap; cursor: pointer; transition: background var(--fast), color var(--fast); }
+.nav svg { flex: none; }
+.nav:hover, .nav:focus-visible { background: var(--panel2); }
+.nav.sel { background: var(--primary); color: var(--on-primary); }
 .nav:disabled { opacity: .4; cursor: default; }
-.nav { position: relative; }
-.badge { position: absolute; top: 2px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: var(--r-pill); background: var(--coral); color: var(--on-deep); font: 700 11px/18px var(--sans); text-align: center; }
-.settings-nav { margin-top: auto; }
-.panel-nav[aria-expanded="true"] { color: var(--gold); }
-.panel { width: 336px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); }
-.panel form { position: relative; padding: 16px 14px 10px; }
-.panel form svg { position: absolute; left: 30px; top: 31px; width: 20px; height: 20px; color: var(--dim); pointer-events: none; }
+.badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--coral); color: var(--on-deep); font: 700 11px/18px var(--sans); text-align: center; }
+.settings-nav { margin-top: auto; padding-left: 8px; }
 .search { width: 100%; height: 50px; background: var(--bg); border: 2px solid var(--line); color: var(--text);
           font: 500 15px var(--sans); padding: 0 14px 0 48px; border-radius: 14px; outline: none; transition: border-color var(--fast); }
 .search::placeholder { color: var(--dim); }
 .search:focus { border-color: var(--gold); background: var(--panel); }
 .search:disabled { opacity: .5; }
-.rail .message { margin: 0 14px 8px; }
+.rail .message { margin: 0 2px 8px; }
 .rail .section { padding: 14px 22px 6px; }
 .list { overflow: auto; flex: 1; padding-bottom: 12px; }
 .row { all: unset; box-sizing: border-box; margin: 2px 14px; width: calc(100% - 28px); padding: 10px 12px; border-radius: 12px; cursor: pointer;
@@ -137,7 +138,6 @@ input:focus-visible, select:focus-visible { outline-offset: 0; }
 .history .late { color: var(--coral); font-weight: 700; }
 .history td .mono { font-weight: 700; }
 .sheet .message.error { margin: 14px 28px; }
-.sheet-status .message { margin: 10px 28px; }
 
 /* Inventory Chart: a ledger of thick rounded bars, label | bar | total, segment counts underneath. */
 .chart { display: grid; grid-template-columns: var(--bar-name-w) 1fr auto; column-gap: 14px; align-items: center; padding: 6px 28px 14px; font-size: 13.5px; }
