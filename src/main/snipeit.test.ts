@@ -1901,12 +1901,17 @@ describe('report', () => {
     const shelved = [asset(4, { status_label: { id: 9, name: 'Retired', status_type: 'archived', status_meta: 'archived' } })]
     const trashed = [asset(5, { status_label: ready, deleted_at: { datetime: '2026-09-30 12:00:00' } })]
     const fields = [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1' }, { id: 2, name: 'Cart', db_column_name: '_snipeit_cart_2' }]
+    // The log's Checkouts, newest first: NOMMA-1 out in October and in September, NOMMA-2 (whose last_checkout is blank) in September.
+    const checkout = (id: number, assetId: number, datetime: string) =>
+      ({ id, action_type: 'checkout', created_at: { datetime }, created_by: { id: 5, name: 'E. Caldwell' }, target: { id: 311, name: 'Jordan Reyes' }, note: null, item: { id: assetId, name: `NOMMA-${assetId}`, type: 'asset' } })
+    const log = [checkout(3, 1, '2026-10-02 09:00:00'), checkout(2, 1, '2026-09-20 09:00:00'), checkout(1, 2, '2026-09-15 09:00:00')]
     function customFetch(fieldsStatus = 200) {
       const queries: Record<string, string>[] = []
       const fetch = (async (input: string | URL | Request) => {
         const url = new URL(String(input))
         if (url.pathname.endsWith('/fields')) return new Response(JSON.stringify(fieldsStatus === 200 ? { total: fields.length, rows: fields } : { status: 'error', messages: 'You do not have permission to access this area.', payload: null }), { status: fieldsStatus })
         queries.push(Object.fromEntries(url.searchParams))
+        if (url.pathname.endsWith('/reports/activity')) return new Response(JSON.stringify({ total: log.length, rows: log }))
         const rows = { Archived: shelved, Deleted: trashed }[url.searchParams.get('status') ?? ''] ?? hardware
         return new Response(JSON.stringify({ total: rows.length, rows }))
       }) as typeof globalThis.fetch
@@ -1932,6 +1937,17 @@ describe('report', () => {
       const columns = ['_snipeit_mac_address_1', '_snipeit_cart_2', '_snipeit_gone_3']
       expect((await createSnipeIt(config, customFetch().fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', 'Cart', '_snipeit_gone_3'])
       expect((await createSnipeIt(config, customFetch(403).fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', '_snipeit_cart_2', '_snipeit_gone_3'])
+      // The picker's list, too, comes from the Assets when /fields is refused.
+      expect(await createSnipeIt(config, customFetch(403).fetch, today).customFieldList()).toEqual([{ key: '_snipeit_mac_address_1', label: 'MAC Address' }])
+    })
+
+    it('a Checked out range matches any Checkout in the log within it, not only the last one', async () => {
+      const { fetch, queries } = customFetch()
+      const run = (filters: Record<string, string>) => createSnipeIt(config, fetch, today).report('custom', { columns: ['asset_tag'], filters }).then((r) => r.rows.map((row) => row[0]))
+      expect(await run({ checkout_from: '2026-09-01', checkout_to: '2026-09-30' })).toEqual(['NOMMA-1', 'NOMMA-2'])
+      expect(queries.find((q) => q.action_type)).toMatchObject({ action_type: 'checkout', sort: 'created_at', order: 'desc' })
+      expect(await run({ checkout_from: '2026-10-01' })).toEqual(['NOMMA-1'])
+      expect(await run({ checkout_to: '2026-09-16' })).toEqual(['NOMMA-2'])
     })
 
     it('sends the id and Order number filters to Snipe-IT and applies the dates, cost, checked out, Archived and deleted ones itself', async () => {

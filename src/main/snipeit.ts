@@ -1033,20 +1033,17 @@ export const CUSTOM_COLUMN_GROUPS: { name: string; columns: CustomColumn[] }[] =
   .map((name) => ({ name, columns: CUSTOM_COLUMNS.filter((c) => c.group === name).map(({ key, label }) => ({ key, label })) }))
 const CUSTOM_FIELD_KEY = /^_snipeit_[a-z0-9_]+$/
 const customFieldValue = (a: RawAsset, key: string) => String(Object.values(a.custom_fields ?? {}).find((c) => c?.field === key)?.value ?? '')
-// The Asset dates the Custom Asset Report narrows by (<name>_from and <name>_to, "YYYY-MM-DD", both included), and each one's day.
-const CUSTOM_DATES: Record<string, [label: string, of: (a: RawAsset) => string | null]> = {
-  purchase: ['Purchase date', (a) => dayOf(a.purchase_date)],
-  created: ['Created', (a) => dayOf(a.created_at)],
-  checkout: ['Checked out', (a) => dayOf(a.last_checkout)],
-  checkin: ['Last checkin', (a) => dayOf(a.last_checkin)],
-  expected_checkin: ['Expected Checkin', (a) => dayOf(a.expected_checkin)],
-  eol: ['End of life', (a) => dayOf(a.asset_eol_date)],
-  last_audit: ['Last audited', (a) => dayOf(a.last_audit_date)],
-  next_audit: ['Next audit', (a) => dayOf(a.next_audit_date)],
-  updated: ['Updated', (a) => dayOf(a.updated_at)],
+// The Asset dates the Custom Asset Report narrows by (<name>_from and <name>_to, "YYYY-MM-DD", both included), and each one's
+// day. Checked out isn't one: its range matches any Checkout in it (see customReport), as Snipe-IT's report reads its log.
+const CUSTOM_DATES: Record<string, (a: RawAsset) => string | null> = {
+  purchase: (a) => dayOf(a.purchase_date), created: (a) => dayOf(a.created_at), checkin: (a) => dayOf(a.last_checkin), expected_checkin: (a) => dayOf(a.expected_checkin),
+  eol: (a) => dayOf(a.asset_eol_date), last_audit: (a) => dayOf(a.last_audit_date), next_audit: (a) => dayOf(a.next_audit_date), updated: (a) => dayOf(a.updated_at),
 }
-/** The date ranges' names, by their key (purchase: Purchase date, …), for the form. */
-export const CUSTOM_DATE_LABELS: Record<string, string> = Object.fromEntries(Object.entries(CUSTOM_DATES).map(([key, [label]]) => [key, label]))
+/** The date ranges' names, by their key (purchase: Purchase date, …), in the form's order. */
+export const CUSTOM_DATE_LABELS: Record<string, string> = {
+  purchase: 'Purchase date', created: 'Created', checkout: 'Checked out', checkin: 'Last checkin', expected_checkin: 'Expected Checkin',
+  eol: 'End of life', last_audit: 'Last audited', next_audit: 'Next audit', updated: 'Updated',
+}
 /**
  * The Custom Asset Report's filters, in Snipe-IT's names. An id, or the Order number as typed, Snipe-IT applies; the rest
  * the app applies after reading the Assets, as Snipe-IT's own report applies them in SQL the API doesn't offer: a date
@@ -1055,7 +1052,7 @@ export const CUSTOM_DATE_LABELS: Record<string, string> = Object.fromEntries(Obj
 export const CUSTOM_FILTERS: Record<string, 'id' | 'text' | 'date' | 'number' | readonly string[]> = {
   company_id: 'id', location_id: 'id', rtd_location_id: 'id', supplier_id: 'id', model_id: 'id', manufacturer_id: 'id', category_id: 'id', status_id: 'id',
   order_number: 'text',
-  ...Object.fromEntries(Object.keys(CUSTOM_DATES).flatMap((d) => [[`${d}_from`, 'date'], [`${d}_to`, 'date']])),
+  ...Object.fromEntries(Object.keys(CUSTOM_DATE_LABELS).flatMap((d) => [[`${d}_from`, 'date'], [`${d}_to`, 'date']])),
   purchase_cost_min: 'number', purchase_cost_max: 'number',
   exclude_archived: ['1'], assignment: ['assigned', 'unassigned'], deleted: ['include', 'only'],
 }
@@ -1393,7 +1390,16 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // Every Custom Field, for the Custom Asset Report's column picker: its db column (the column's key) and its name.
   async function customFieldList(): Promise<CustomColumn[]> {
-    return (await allRows<{ name: string; db_column_name: string }>('/fields')).map((f) => ({ key: f.db_column_name, label: f.name }))
+    try {
+      return (await allRows<{ name: string; db_column_name: string }>('/fields')).map((f) => ({ key: f.db_column_name, label: f.name }))
+    } catch (e) {
+      if ((e as Partial<Failure>).kind !== 'forbidden') throw e
+      // A key without customfields.view still reads each Asset's fields, so the Assets name them. ponytail: every Asset
+      // is read (as the Report reads them anyway); a field no Asset has a value for yet is missed.
+      const seen = new Map<string, string>()
+      for (const a of await allRows<RawAsset>('/hardware')) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) seen.set(c.field, label)
+      return [...seen].map(([key, label]) => ({ key, label }))
+    }
   }
 
   // The Custom Asset Report. Snipe-IT applies the id and Order number filters; the rest are applied here (see CUSTOM_FILTERS).
@@ -1419,7 +1425,18 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     const byId = new Map<number, RawAsset>()
     for (const rows of await Promise.all(lists)) for (const a of rows) byId.has(a.id) || byId.set(a.id, a)
     const rows = [...byId.values()].sort((a, b) => a.id - b.id)
+    // A Checked out range matches any Checkout in it, not only the last (an Asset out in September and again in October is
+    // in September's), as Snipe-IT's report does: the log's Checkouts, read down to the range's start.
+    let checkedOut: Set<number> | null = null
+    if (f.checkout_from || f.checkout_to) {
+      checkedOut = new Set()
+      for await (const r of activitySince(f.checkout_from, 'checkout')) {
+        const day = dayOf(r.created_at)
+        if (r.item?.type === 'asset' && day && (!f.checkout_to || day <= f.checkout_to)) checkedOut.add(r.item.id)
+      }
+    }
     const kept = rows.filter((a) => {
+      if (checkedOut && !checkedOut.has(a.id)) return false
       if (f.exclude_archived && [a.status_label?.status_type, a.status_label?.status_meta].includes('archived')) return false
       if (f.assignment === 'assigned' && !a.assigned_to) return false
       if (f.assignment === 'unassigned' && a.assigned_to) return false
@@ -1427,7 +1444,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const cost = a.purchase_cost === null || a.purchase_cost === undefined ? null : Number(plainNumber(a.purchase_cost))
       if (f.purchase_cost_min && !(cost !== null && cost >= Number(f.purchase_cost_min))) return false
       if (f.purchase_cost_max && !(cost !== null && cost <= Number(f.purchase_cost_max))) return false
-      for (const [name, [, dayOfAsset]] of Object.entries(CUSTOM_DATES)) {
+      for (const [name, dayOfAsset] of Object.entries(CUSTOM_DATES)) {
         const [from, to] = [f[`${name}_from`], f[`${name}_to`]]
         if (!from && !to) continue
         const day = dayOfAsset(a)
