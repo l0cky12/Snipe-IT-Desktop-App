@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Activity, Boxes, Briefcase, Building2, Cable, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
+import { Activity, Boxes, Briefcase, Building2, Cable, Check, Copy, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Search, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
 import { END_OF_DAY } from '../../main/calendar'
@@ -760,6 +760,41 @@ export type SheetProps = {
 /** The Asset panel's extras: Tick (the Asset in the List's Selection or not), Close, and whether the Asset is outside the open View. */
 export type Docked = { ticked: boolean; onTick: () => void; onClose: () => void; notInView: boolean }
 
+// The Asset panel's facts: label, what shows, and what its Copy button copies (nothing when the Asset has no value).
+// Overdue and Warranty flag the fact they're about.
+export const assetFacts = (a: Asset): [label: string, shown: React.ReactNode, copy: string | null][] => [
+  ['Name', a.name || 'Unnamed Asset', a.name],
+  ['Asset Model', a.model, a.model],
+  ['Status', <StatusChip asset={a} />, a.status],
+  ['Assignee', a.assignee?.name ?? 'Unassigned', a.assignee?.name ?? null],
+  ['Type', a.assignee && kind[a.assignee.type], a.assignee && kind[a.assignee.type]],
+  ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>, a.expectedCheckin],
+  ['Location', a.location, a.location],
+  ['Last audited', a.lastAudited ?? 'Never', a.lastAudited],
+  ['Next audit', a.nextAudit, a.nextAudit],
+  ['Category', a.category, a.category],
+  ['Serial', a.serial && <span className="mono">{a.serial}</span>, a.serial],
+  ['Purchased', a.purchaseDate, a.purchaseDate],
+  ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
+    ? <span className="flag c-grey">Warranty expired</span>
+    : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>, a.warrantyEnd],
+]
+
+// Copies one fact to the clipboard; the icon turns to a tick for a moment once it has.
+export function CopyButton({ label, text }: { label: string; text: string }) {
+  const [done, setDone] = useState<'Copied' | "Couldn't copy" | null>(null)
+  useEffect(() => {
+    if (!done) return
+    const t = setTimeout(() => setDone(null), 1500)
+    return () => clearTimeout(t)
+  }, [done])
+  return (
+    <button className="link copy" aria-label={`Copy ${label}`} title={done ?? `Copy ${label}`} onClick={() => navigator.clipboard.writeText(text).then(() => setDone('Copied'), () => setDone("Couldn't copy"))}>
+      {done === 'Copied' ? <Check size={14} /> : <Copy size={14} />}
+    </button>
+  )
+}
+
 // One component in two places: the full Asset sheet, or docked beside the Assets List as the Asset panel.
 // form: the form it opens with (a Quick Action's).
 export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheckout, onStatus, onAudit, audited, defaultLocation, locations, onOpenRecord, onOpenAsset, onEdit, onDeleted, onUnfinished, form: initialForm, docked }: SheetProps & { form?: SheetForm; docked?: Docked }) {
@@ -782,24 +817,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
     setForm(null)
     root.current?.focus()
   }
-  // Overdue and Warranty flag the fact they're about.
-  const facts: [string, React.ReactNode][] = [
-    ['Name', a.name || 'Unnamed Asset'],
-    ['Asset Model', a.model],
-    ['Status', <StatusChip asset={a} />],
-    ['Assignee', a.assignee?.name ?? 'Unassigned'],
-    ['Type', a.assignee && kind[a.assignee.type]],
-    ['Expected Checkin', <>{a.expectedCheckin || '—'}{a.overdue !== null && <span className="flag c-red">Overdue {lateness(a.overdue)}</span>}</>],
-    ['Location', a.location],
-    ['Last audited', a.lastAudited ?? 'Never'],
-    ['Next audit', a.nextAudit],
-    ['Category', a.category],
-    ['Serial', a.serial && <span className="mono">{a.serial}</span>],
-    ['Purchased', a.purchaseDate],
-    ['Warranty ends', <>{a.warrantyEnd || '—'}{a.warranty && (a.warranty.expired
-      ? <span className="flag c-grey">Warranty expired</span>
-      : <span className="flag c-amber">Warranty {a.warranty.daysLeft}d left</span>)}</>],
-  ]
+  const facts = assetFacts(a)
   const canCheckout = !checkoutReason(a)
   return (
     <div ref={root} onKeyDown={onKeyDown} {...(docked && { className: 'asset-panel', tabIndex: -1, role: 'region', 'aria-label': `Asset panel: ${a.assetTag}` })}>
@@ -829,7 +847,7 @@ export function AssetSheet({ asset: a, baseUrl, statusLabels, onCheckin, onCheck
       )}
       <div className="asset-top">
         <dl className="facts">
-          {facts.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}</dd></Fragment>)}
+          {facts.map(([k, v, copy]) => <Fragment key={k}><dt>{k}</dt><dd>{v || '—'}{copy && <CopyButton label={k} text={copy} />}</dd></Fragment>)}
         </dl>
         <AssetCodes baseUrl={baseUrl} asset={a} />
       </div>
