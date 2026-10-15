@@ -250,6 +250,9 @@ A stocked part installed into Assets (RAM, a drive). Each unit is **In use** or 
 **Holding**:
 A User who currently has at least one Asset, License seat, or Accessory checked out. Consumables don't count; they never come back.
 
+**Check in everything**:
+The User page's Bulk Action: every Accessory unit and License seat the User holds comes back, one Checkin at a time with one note, with a result per Accessory or License and nothing rolled back. Their Assets are left to Bulk return, which gives each a Location and Status Label.
+
 **Custom Field**:
 An extra field an Asset carries because its Asset Model asks for it (a MAC Address, a Cart). An Asset Model's set of them is its **Fieldset**; choosing another Asset Model swaps them.
 _Avoid_: attribute, property, extra

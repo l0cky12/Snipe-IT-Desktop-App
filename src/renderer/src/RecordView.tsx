@@ -4,7 +4,7 @@ import { drillLabel, listName, type Drill } from './ListView'
 import { DeleteButton } from './RecordForm'
 import { UserAccessSection, type CanManage } from './AccessView'
 import { CheckoutForm, NOT_ALLOWED } from './App'
-import { HoldersSection, UserHeldSection } from './StockView'
+import { HoldersSection, UserHeldSection, UserReturnAll } from './StockView'
 
 export const editable = (kind: ListKind): kind is EditKind => (EDIT_KINDS as readonly string[]).includes(kind)
 
@@ -44,6 +44,8 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
   // Bumped by a Checkout or Checkin, so what's left and who holds it reload in place.
   const [version, setVersion] = useState(0)
   const [checkingOut, setCheckingOut] = useState(false)
+  // Bumped when Check in everything ends, so a User's held sections reload.
+  const [returned, setReturned] = useState(0)
   const [message, setMessage] = useState({ text: '', error: false })
   useEffect(() => {
     let stale = false
@@ -92,8 +94,9 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
       <FieldGrid fields={record.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
       {record.fields.length === 0 && <p className="empty">No fields</p>}
       {(kind === 'accessories' || kind === 'licenses') && <HoldersSection kind={kind} id={id} canCheckin={record.can.checkin} version={version} onChanged={changed} onOpenRecord={onOpenRecord} />}
-      {kind === 'users' && <UserHeldSection kind="accessories" userId={id} onOpenRecord={onOpenRecord} />}
-      {kind === 'users' && <UserHeldSection kind="licenses" userId={id} onOpenRecord={onOpenRecord} />}
+      {kind === 'users' && <UserReturnAll userId={id} onChanged={() => setReturned((v) => v + 1)} />}
+      {kind === 'users' && <UserHeldSection kind="accessories" userId={id} version={returned} onOpenRecord={onOpenRecord} />}
+      {kind === 'users' && <UserHeldSection kind="licenses" userId={id} version={returned} onOpenRecord={onOpenRecord} />}
       {kind === 'users' && <UserAccessSection userId={id} canManage={canManage} />}
     </>
   )

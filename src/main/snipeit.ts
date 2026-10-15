@@ -120,6 +120,8 @@ export type StockCheckout = { userId: number; qty: number; note?: string }
 export type AccessoryCheckout = { rowId: number; assignee: Assignee; since: string; note: string }
 /** An Accessory (or License) a User holds, and how many units (seats) of it. */
 export type HeldAccessory = { id: number; name: string; count: number; can: Can }
+/** How one Accessory or License fared in Check in everything. */
+export type ReturnedLine = { name: string; outcome: string; failed?: true }
 
 /** What the rail shows for a match or a recent scan. */
 export type AssetSummary = Pick<Asset, 'id' | 'assetTag' | 'name' | 'status' | 'statusMeta' | 'assignee' | 'can'>
@@ -1299,8 +1301,26 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (isError(result)) throw new Error(reason(result.messages))
   }
 
+  // What a User holds, counted per Accessory. v8.8+ lists each unit (its checkout row, with the Accessory under
+  // "accessory"); earlier v8s list the Accessory itself once per unit.
+  async function userAccessories(userId: number): Promise<HeldAccessory[]> {
+    checkId(userId, 'User')
+    const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return heldOf(body.rows, (r) => (r.accessory as NonNullable<Named> | undefined) ?? r)
+  }
+
+  // The Licenses a User has a seat of, counted per License. v8.8+ lists each seat (with its License under "license");
+  // earlier v8s list the License itself once per seat.
+  async function userLicenses(userId: number): Promise<HeldAccessory[]> {
+    checkId(userId, 'User')
+    const body = await request<{ rows: RawRow[] }>(`/users/${userId}/licenses`)
+    if (isError(body)) throw new Error(reason(body.messages))
+    return heldOf(body.rows, (r) => (r.license as NonNullable<Named> | undefined) ?? r)
+  }
+
   // Rows that name one thing per unit held (an Accessory per unit, a License per seat), counted per thing: of() says
-  // which row field is the thing (the row itself, or the License a seat row names).
+  // which row field is the thing (the row itself, or the Accessory or License a unit row names).
   function heldOf(rows: RawRow[], of: (r: RawRow) => NonNullable<Named>): HeldAccessory[] {
     const held = new Map<number, HeldAccessory>()
     for (const r of rows) {
@@ -2133,21 +2153,32 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     licenseHolders,
     checkinLicense,
 
-    // What a User holds; Snipe-IT lists an Accessory once per unit, so they're counted here.
-    async userAccessories(userId: number): Promise<HeldAccessory[]> {
-      checkId(userId, 'User')
-      const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
-      if (isError(body)) throw new Error(reason(body.messages))
-      return heldOf(body.rows, (r) => r)
-    },
+    userAccessories,
+    userLicenses,
 
-    // The Licenses a User has a seat of, counted per License. v8.8+ lists each seat (with its License under "license");
-    // earlier v8s list the License itself once per seat.
-    async userLicenses(userId: number): Promise<HeldAccessory[]> {
+    // Checks in everything a User holds that comes back: each Accessory unit and License seat, one Checkin at a time,
+    // nothing rolled back (a Bulk Action); one line per thing says what happened. Assets are Bulk return's; Consumables
+    // never come back.
+    async returnAll(userId: number, note?: string): Promise<ReturnedLine[]> {
       checkId(userId, 'User')
-      const body = await request<{ rows: RawRow[] }>(`/users/${userId}/licenses`)
-      if (isError(body)) throw new Error(reason(body.messages))
-      return heldOf(body.rows, (r) => (r.license as NonNullable<Named> | undefined) ?? r)
+      const [accessories, licenses] = await Promise.all([userAccessories(userId), userLicenses(userId)])
+      const lines: ReturnedLine[] = []
+      const mine = (h: AccessoryCheckout) => h.assignee.type === 'user' && h.assignee.id === userId
+      const each = async (name: string, rows: AccessoryCheckout[], checkin: (rowId: number) => Promise<void>) => {
+        let n = 0
+        try {
+          for (const h of rows) {
+            await checkin(h.rowId)
+            n++
+          }
+          lines.push({ name, outcome: `Checked in ${n}` })
+        } catch (e) {
+          lines.push({ name, outcome: `Checked in ${n} of ${rows.length}: ${(e as Error).message}`, failed: true })
+        }
+      }
+      for (const a of accessories) await each(a.name, (await accessoryHolders(a.id)).filter(mine), (rowId) => checkinAccessory(rowId, note))
+      for (const l of licenses) await each(l.name, (await licenseHolders(l.id)).filter(mine), (seatId) => checkinLicense(l.id, seatId, note))
+      return lines
     },
 
     // A User hands back one seat of a License: their seat is looked up (Snipe-IT checks a seat in by its id) and freed.

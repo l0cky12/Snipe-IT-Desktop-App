@@ -586,8 +586,12 @@ createServer(async (req, res) => {
     return send({ status: 'success', messages: 'Checked in.', payload: null })
   }
   if ((m = path.match(/^accessories\/(\d+)\/checkedout$/))) return send(listPage({ rows: () => accessoryCheckouts.filter((c) => c.accessory === +m[1]) }, url.searchParams))
+  // v8.8+: one row per unit, its id the checkout row, the Accessory under "accessory".
   if ((m = path.match(/^users\/(\d+)\/accessories$/))) {
-    const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => accessories.find((a) => a.id === c.accessory))
+    const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => {
+      const a = accessories.find((a) => a.id === c.accessory)
+      return { id: c.id, accessory: { id: a.id, name: a.name }, name: a.name, note: c.note, created_at: c.created_at, assigned_to: c.assigned_to.id, checkin_backto: 'user', available_actions: { checkin: true } }
+    })
     return send({ total: rows.length, rows })
   }
   // License seats: one goes to a User per Checkout (the next Free one), and comes back by seat id. v8.8+ lists a User's as seat rows.
