@@ -8,6 +8,7 @@ import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
 import { SettingsPage } from './SettingsPage'
+import { applyColors } from './branding'
 import { ListView, drillTo, eachInTurn, listName, missingWhat, reportDrill, type BulkAction, type BulkRun, type Drill } from './ListView'
 import { automaticCheckins, ReportsView, weekCheckouts, type ReportStart } from './ReportsView'
 import { ImportView } from './ImportView'
@@ -217,6 +218,12 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onWorkflow, settings?.hasToken])
+  // The organisation's colours and name on the page, as saved (Branding in Settings previews its own as typed).
+  useEffect(() => {
+    if (!settings) return
+    applyColors(settings.branding)
+    document.title = settings.branding.name
+  }, [settings?.branding])
   useEffect(() => {
     window.settings.get().then((value) => { setSettings(value); setShowSettings(!value.hasToken) }, (e: Error) => { setSettingsError(e.message); setShowSettings(true) })
   }, [])
@@ -434,7 +441,7 @@ export function App() {
     <div className="layout">
       <aside className="rail">
         <nav className="sidebar" aria-label="Pages">
-          <div className="brand"><span className="logo" aria-hidden="true">S</span>Snipe-IT Desktop</div>
+          <div className="brand">{settings?.branding.icon ? <img className="logo" src={settings.branding.icon} alt="" /> : <span className="logo" aria-hidden="true">{(settings?.branding.name ?? 'S')[0]}</span>}{settings?.branding.name ?? 'Snipe-IT Desktop'}</div>
           <form onSubmit={onSubmit}>
             <ScanBarcode size={18} />
             <input

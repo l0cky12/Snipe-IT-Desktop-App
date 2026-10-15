@@ -2,31 +2,28 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeptSchedule, LastSend, SavedListReport, SavedReport, Schedule, ScheduleKey, Scheduled } from '../../main/config'
 import type { ReportRef } from '../../main/scheduler'
 import { choices as filterChoices, listName } from './ListView'
-import { csvName, rowCount, toCsv } from '../../main/export'
+import { rowCount } from '../../main/export'
+import { FORMATS, type ExportFormat } from '../../main/report'
 import { ACTIVITY_ACTIONS, ACTIVITY_ITEM_TYPES, actionLabel, ASSET_VIEWS, CUSTOM_COLUMN_GROUPS, CUSTOM_DATE_LABELS, itemTypeName, LOCATION_CATEGORY_REPORTS, REPORT_NAMES, REPORTS, takesRange,
   type CustomColumn, type NamesKind, type Report, type ReportKind, type ReportQuery, type StatusLabel } from '../../main/snipeit'
 
 // What the date range bounds in each report; a snapshot Report has none.
 const rangeName: Partial<Record<ReportKind, string>> = { activity: 'When', overdue: 'Expected Checkin', expiring: 'Warranty ends', auditDue: 'Next audit', auditLate: 'Next audit', lastAudited: 'Last audited', endOfLife: 'End of life', maintenances: 'Started', tempHistory: 'Checked out' }
 
-// Saves a CSV where the Operator chooses; nothing is written without that. name: what it holds, e.g. "Activity Report".
-export function saveCsv(name: string, columns: string[], rows: string[][]) {
-  const url = URL.createObjectURL(new Blob([toCsv(columns, rows)], { type: 'text/csv;charset=utf-8' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = csvName(name, new Date())
-  a.click()
-  URL.revokeObjectURL(url)
-}
+/** Saves a List or Report as a CSV, HTML or PDF file where the Operator chooses; false when they cancel. name: what it holds, e.g. "Activity Report". */
+export const saveExport = (format: ExportFormat, name: string, columns: string[], rows: string[][]) => window.exporter.save({ format, name, columns, rows })
 
-// Asked before saving rows that hold Users or Assignees.
-export function FerpaConfirm({ rows, onExport, onCancel }: { rows: number; onExport: () => void; onCancel: () => void }) {
+// Asked before saving: which file to make and, for rows that hold Users or Assignees (ferpa), that it stays in the district.
+export function ExportConfirm({ rows, ferpa, onExport, onCancel }: { rows: number; ferpa: boolean; onExport: (format: ExportFormat) => void; onCancel: () => void }) {
   return (
-    <div className="ferpa" role="alertdialog" aria-labelledby="ferpa-heading">
-      <p><b id="ferpa-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
-        post it, or save it to a shared or personal drive, and delete it when you're done.</p>
+    <div className="ferpa" role={ferpa ? 'alertdialog' : 'dialog'} aria-labelledby="export-heading">
+      {ferpa
+        ? <p><b id="export-heading">This export includes student information.</b> Under FERPA it must stay with authorized district staff: don't email it outside the district,
+          post it, or save it to a shared or personal drive, and delete it when you're done.</p>
+        : <p><b id="export-heading">Export {rows.toLocaleString()} rows.</b> HTML and PDF carry your organisation's name and icon.</p>}
       <div className="actions">
-        <button onClick={onExport}>I understand, export {rows.toLocaleString()} rows</button>
+        <span>{ferpa ? `I understand, export ${rows.toLocaleString()} rows as` : 'Save as'}</span>
+        {(Object.keys(FORMATS) as ExportFormat[]).map((f) => <button key={f} onClick={() => onExport(f)}>{f.toUpperCase()}</button>)}
         <button className="quiet" onClick={onCancel}>Cancel</button>
       </div>
     </div>
@@ -37,10 +34,10 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 const ordinal = (n: number) => n + ((n % 100 >= 11 && n % 100 <= 13) ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
 const RANGE_NAMES = { 1: 'the previous day', 7: 'the previous 7 days', 30: 'the previous 30 days', since: 'since the last send' } as const
 /** When a Report emails itself, e.g. "Weekly on Mondays at 07:00 · the previous 7 days". */
-export function scheduleText({ every, day = 1, time, range }: Schedule) {
+export function scheduleText({ every, day = 1, time, range, format }: Schedule) {
   const when = every === 'day' ? 'Daily' : every === 'week' ? `Weekly on ${WEEKDAYS[day]}s`
     : `Monthly on the ${ordinal(day)}${day > 28 ? " (or the month's last day)" : ''}`
-  return `${when} at ${time}${range === undefined ? '' : ` · ${RANGE_NAMES[range]}`}`
+  return `${when} at ${time}${range === undefined ? '' : ` · ${RANGE_NAMES[range]}`}${format ? ` · as ${format.toUpperCase()}` : ''}`
 }
 /** How a scheduled send went, e.g. "Last sent Oct 5, 7:00 AM: 3 rows". */
 export function lastSendText(last: LastSend) {
@@ -81,6 +78,11 @@ function ScheduleForm({ report, schedule, name, onDone }: { report: ScheduleKey;
     const { range: _, ...rest } = s
     setS(v ? { ...rest, range: v === 'since' ? 'since' : Number(v) as 1 | 7 | 30 } : rest)
   }
+  // CSV is the Schedule without a format, as ones from before the choice are.
+  function setFormat(f: ExportFormat) {
+    const { format: _, ...rest } = s
+    setS(f === 'csv' ? rest : { ...rest, format: f })
+  }
   return (
     <form className="schedule" onSubmit={(e) => (e.preventDefault(), save(s))} aria-label={`Schedule ${name}`}>
       <div className="actions">
@@ -104,6 +106,7 @@ function ScheduleForm({ report, schedule, name, onDone }: { report: ScheduleKey;
             <option value="1">Previous day</option><option value="7">Previous 7 days</option><option value="30">Previous 30 days</option><option value="since">Since the last send</option>
           </select>
         )}
+        <FormatSelect value={s.format ?? 'csv'} label={`Send ${name} as`} onChange={setFormat} />
       </div>
       {s.every === 'month' && s.day! > 28 && <span className="dim">In a shorter month it sends on the month's last day.</span>}
       {'builtIn' in report && report.builtIn === 'activity' && <span className="dim">It sends every record type and action.</span>}
@@ -157,19 +160,29 @@ export function ScheduledReports() {
 
 type Notice = { text: string; error?: true }
 // Emails the Report to the Operator now (the main process runs it afresh); what happened shows as the page's notice.
+/** The file a Report is emailed as: "as CSV", "as HTML", "as PDF". */
+function FormatSelect({ value, label, onChange }: { value: ExportFormat; label: string; onChange: (f: ExportFormat) => void }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value as ExportFormat)} aria-label={label}>
+      {(Object.keys(FORMATS) as ExportFormat[]).map((f) => <option key={f} value={f}>as {f.toUpperCase()}</option>)}
+    </select>
+  )
+}
+
 function EmailNow({ report, name, onDone }: { report: ReportRef; name: string; onDone: (notice: Notice) => void }) {
   const [busy, setBusy] = useState(false)
+  const [format, setFormat] = useState<ExportFormat>('csv')
   async function send() {
     setBusy(true)
     try {
-      const { to, rows } = await window.reports.emailNow(report)
+      const { to, rows } = await window.reports.emailNow(report, format)
       onDone({ text: `Emailed ${name} (${rowCount(rows)}) to ${to}` })
     } catch (e) {
       onDone({ text: `${name} wasn't emailed. ${(e as Error).message}`, error: true })
     }
     setBusy(false)
   }
-  return <button className="quiet" disabled={busy} onClick={send}>{busy ? 'Emailing…' : 'Email me now'}</button>
+  return <><button className="quiet" disabled={busy} onClick={send}>{busy ? 'Emailing…' : 'Email me now'}</button><FormatSelect value={format} label={`Email ${name} as`} onChange={setFormat} /></>
 }
 
 // Runs when asked (a report can page through a lot), not on every change of a filter. A Saved Report opens as its List.
@@ -318,9 +331,9 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
   // Opened on a starting query: run it once.
   useEffect(() => { if (start) run() }, [])
 
-  function download(r: Report, what: ReportKind) {
-    saveCsv(what === 'custom' && template ? template.name : REPORT_NAMES[what], r.columns, r.rows)
+  async function download(r: Report, what: ReportKind, format: ExportFormat) {
     setExporting(false)
+    if (await saveExport(format, what === 'custom' && template ? template.name : REPORT_NAMES[what], r.columns, r.rows)) setNotice({ text: `Exported ${rowCount(r.rows.length)}.` })
   }
   // A template opens as the Custom Asset Report with its columns and filters, run at once.
   function openTemplate(r: SavedReport & { kind: 'custom' }) {
@@ -352,7 +365,7 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
         <span className="dim">{busy ? 'Loading…' : report && ran && `${report.rows.length.toLocaleString()} rows`}</span>
         <div className="actions">
           {kind === 'custom' && <button className="quiet" onClick={() => setNaming(template?.name ?? '')} aria-expanded={naming !== null}>Save report…</button>}
-          <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export CSV…</button>
+          <button className="quiet" disabled={!report?.rows.length || busy} onClick={() => setExporting((x) => !x)} aria-expanded={exporting}>Export…</button>
           <EmailNow report={{ builtIn: kind, query: sent }} name={kind === 'custom' && template ? template.name : REPORT_NAMES[kind]} onDone={setNotice} />
         </div>
         <form className="actions" onSubmit={run}>
@@ -405,7 +418,7 @@ export function ReportsView({ start, onOpenSaved }: { start?: ReportStart; onOpe
       )}
       {kind === 'custom' && <CustomReportForm columns={sent.columns ?? []} filters={sent.filters ?? {}} onColumns={(columns) => set({ columns })} onFilter={(key, value) => set({ filters: { ...sent.filters, [key]: value } })} />}
       {exporting && report && ran && (
-        <FerpaConfirm rows={report.rows.length} onExport={() => download(report, ran.kind)} onCancel={() => setExporting(false)} />
+        <ExportConfirm ferpa rows={report.rows.length} onExport={(f) => download(report, ran.kind, f)} onCancel={() => setExporting(false)} />
       )}
       {error && <p className="message error" role="alert">{error}</p>}
       {notice && <p className={`message ${notice.error ? 'error' : 'list-message'}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}

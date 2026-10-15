@@ -137,5 +137,6 @@ export function toCsv(columns: string[], rows: string[][]): string {
 export const rowCount = (n: number) => `${n.toLocaleString('en-US')} ${n === 1 ? 'row' : 'rows'}`
 /** The day as "YYYY-MM-DD", local, so a late-evening export isn't stamped with tomorrow (UTC). */
 export const localDate = (d: Date) => [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, '0')).join('-')
-/** A CSV's file name: what it holds ("Activity Report") and the day, e.g. activity-report-2026-10-01.csv. */
-export const csvName = (name: string, d: Date) => `${name.toLowerCase().replace(/ /g, '-')}-${localDate(d)}.csv`
+/** An export's file name: what it holds ("Activity Report"), the day and the format, e.g. activity-report-2026-10-01.csv. */
+export const fileName = (name: string, d: Date, ext: string) => `${name.toLowerCase().replace(/ /g, '-')}-${localDate(d)}.${ext}`
+export const csvName = (name: string, d: Date) => fileName(name, d, 'csv')

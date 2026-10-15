@@ -1,8 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
-import { createSettingsStore } from './config'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BRAND_DEFAULTS, textOn } from './branding'
+import { createSettingsStore, reportDomain } from './config'
 import { RANGED_REPORTS, REPORTS, takesRange } from './snipeit'
 
 const dirs: string[] = []
@@ -355,4 +356,62 @@ it('keeps the Maintenance type for repairs blank until set: a whole number above
     expect(() => relaunched.saveRepairs(bad)).toThrow('Maintenance type for repairs must be a whole number above 0, or blank.')
   expect(relaunched.get().repairTypeId).toBe(12)
   expect(relaunched.saveRepairs('  ').repairTypeId).toBeNull()
+})
+
+describe('Branding', () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('rest')])
+
+  it("is the app's own name and colours until saved, checks what's typed, and keeps the choice across a restart", () => {
+    const { path, storage, store } = setup()
+    expect(store.get().branding).toEqual({ ...BRAND_DEFAULTS, icon: null })
+    expect(store.saveBranding({ name: '  Example School ', primary: '#1A2B3C', accent: '#ffcc00', footer: ' Confidential ' }).branding)
+      .toEqual({ name: 'Example School', primary: '#1a2b3c', accent: '#ffcc00', footer: 'Confidential', icon: null })
+    expect(createSettingsStore(path, storage, '0.1.0').get().branding.name).toBe('Example School')
+    expect(() => store.saveBranding({ ...BRAND_DEFAULTS, name: ' ' })).toThrow('Enter the organisation name')
+    expect(() => store.saveBranding({ ...BRAND_DEFAULTS, primary: '#fff' })).toThrow('primary colour as six hex digits')
+    expect(() => store.saveBranding({ ...BRAND_DEFAULTS, accent: 'gold' })).toThrow('accent colour')
+    expect(() => store.saveBranding({ ...BRAND_DEFAULTS, footer: 'x'.repeat(201) })).toThrow('up to 200')
+    expect(store.get().branding.name).toBe('Example School')
+  })
+
+  it('keeps the icon as a PNG file beside the settings, hands it to the window as a data: URL, and removes it', () => {
+    const { path, store } = setup()
+    expect(store.iconPath()).toBeNull()
+    expect(() => store.saveIcon(Buffer.from('GIF89a'))).toThrow('Choose a PNG')
+    expect(() => store.saveIcon(Buffer.concat([png, Buffer.alloc(2_000_000)]))).toThrow('under 2 MB')
+    expect(store.saveIcon(png).branding.icon).toBe(`data:image/png;base64,${png.toString('base64')}`)
+    expect(store.iconPath()).toBe(join(path, '..', 'branding-icon.png'))
+    expect(readFileSync(store.iconPath()!)).toEqual(png)
+    store.saveBranding(BRAND_DEFAULTS)
+    expect(readFileSync(path, 'utf8')).not.toContain('base64')
+    expect(store.removeIcon().branding.icon).toBeNull()
+    expect(store.removeIcon().branding.icon).toBeNull()
+  })
+
+  it('picks text that reads on a colour: the preferred colour at 4.5:1, else black or white', () => {
+    expect(textOn('#14285a')).toBe('#ffffff')
+    expect(textOn('#f5b301')).toBe('#000000')
+    expect(textOn('#f5b301', '#14285a')).toBe('#14285a')
+    expect(textOn('#f5b301', '#ffcc00')).toBe('#000000')
+    expect(textOn('#808080')).toBe('#000000')
+    expect(textOn('#707070')).toBe('#ffffff')
+  })
+})
+
+it('a Schedule keeps the format it sends as, CSV being none, and refuses another', () => {
+  const { store } = setup()
+  const since = new Date(2026, 9, 1, 6)
+  expect(store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'pdf' }, since)[0].schedule).toMatchObject({ format: 'pdf' })
+  expect(store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'csv' }, since)[0].schedule).not.toHaveProperty('format')
+  expect(() => store.setSchedule({ builtIn: 'overdue' }, { every: 'day', time: '07:00', format: 'docx' as never }, since)).toThrow('Choose CSV, HTML or PDF.')
+})
+
+it("Reports are emailed only to the Email settings' domain: the sender address's unless set; set, lowercased and checked", () => {
+  const { store } = setup()
+  expect(reportDomain(store.saveMail(mail).mail)).toBe('nomma.net')
+  expect(reportDomain({ ...mail, sender: 'IT@Example.ORG' })).toBe('example.org')
+  expect(store.saveMail({ ...mail, domain: ' Schools.Example.org ' }).mail.domain).toBe('schools.example.org')
+  expect(reportDomain(store.get().mail)).toBe('schools.example.org')
+  expect(store.saveMail({ ...mail, domain: '' }).mail).not.toHaveProperty('domain')
+  for (const domain of ['not a domain', 'nomma', '@nomma.net', 'x@nomma.net']) expect(() => store.saveMail({ ...mail, domain })).toThrow('Enter the email domain')
 })

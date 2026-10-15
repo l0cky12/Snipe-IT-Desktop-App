@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto'
-import { readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync, renameSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
+import { BRAND_DEFAULTS, HEX, type Branding, type BrandingInput } from './branding'
 import { SIDEBAR_DEFAULT, SIDEBAR_PAGES, type SidebarPage } from './sidebar'
 import { END_OF_DAY, later, parseCalendar, realTime, type CalendarEntry } from './calendar'
+import { FORMATS, type ExportFormat } from './report'
 import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
+export type { Branding, BrandingInput } from './branding'
 export type SettingsInput = { baseUrl: string; apiKey: string; defaultLocation: StatusLabel | null }
 // plaintext: no OS secure storage, so the token is kept in the owner-only settings file instead.
-export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance; sidebar: SidebarPage[]
+export type Settings = Omit<SettingsInput, 'apiKey'> & { hasToken: boolean; plaintext: boolean; appVersion: string; mail: MailServer & { hasPassword: boolean; plaintext: boolean }; background: Background; appearance: Appearance; branding: Branding; sidebar: SidebarPage[]
   tempCheckout: TempCheckout; schoolCalendar: CalendarEntry[]
   /** Settings' "Maintenance type for repairs": the last step of Repair intake's Maintenance type fallback chain; null when blank. */
   repairTypeId: number | null }
@@ -25,8 +29,14 @@ export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
 /** Light or dark on this PC; system follows the OS. */
 export const APPEARANCES = ['system', 'light', 'dark'] as const
 export type Appearance = (typeof APPEARANCES)[number]
-/** ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted. */
-export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string }
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+/**
+ * ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted.
+ * domain: Reports are emailed only to an Operator whose Snipe-IT email is at it, so student information stays in the
+ * organisation; blank (left out) means the sender address's domain (reportDomain).
+ */
+export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string; domain?: string }
+export const reportDomain = (m: MailServer) => m.domain || m.sender.slice(m.sender.lastIndexOf('@') + 1).toLowerCase()
 /** A blank password keeps the saved one, as long as the mail server's host and username are the same. */
 export type MailInput = MailServer & { password: string }
 const GMAIL: MailServer = { host: 'smtp.gmail.com', port: 465, security: 'ssl', username: '', sender: '' }
@@ -39,6 +49,10 @@ export type SettingsApi = {
   saveMail(input: MailInput): Promise<Settings>
   saveBackground(input: Background): Promise<Settings>
   saveAppearance(input: Appearance): Promise<Settings>
+  saveBranding(input: BrandingInput): Promise<Settings>
+  /** Opens a file dialog for a PNG icon; cancelling changes nothing. */
+  pickIcon(): Promise<Settings>
+  removeIcon(): Promise<Settings>
   /** The sidebar's pages to show, on this PC; any order, kept in sidebar order. */
   saveSidebar(input: SidebarPage[]): Promise<Settings>
   saveTempCheckout(input: TempCheckout): Promise<Settings>
@@ -75,8 +89,9 @@ export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
  * the day it sends (so daily and weekly sends neither miss a day nor repeat one), or from the day of the last send. None
  * (and always for a Report not in RANGED_REPORTS, such as Warranty expiring, which looks ahead, or a Saved Report, whose List
  * has no dates): all of it. No Schedule keeps a Location or Category: an audit Report's send covers all of them.
+ * format: the file it sends, HTML or PDF with the Branding; left out, CSV (so Schedules from before the choice send CSV).
  */
-export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since' }
+export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since'; format?: ExportFormat }
 /** A scheduled send: when, and the rows it sent or why it failed. */
 export type LastSend = { at: string; rows: number } | { at: string; error: string }
 /** A Schedule as kept. since: when it was set; last: the last send; sentAt: the last send that went out. */
@@ -84,7 +99,7 @@ export type KeptSchedule = Schedule & { since: string; last?: LastSend; sentAt?:
 export type ScheduleKey = { saved: string } | { builtIn: ReportKind }
 export type Scheduled = { report: ScheduleKey; schedule: KeptSchedule }
 type Stored = { baseUrl: string; encryptedToken?: string; plainToken?: string; defaultLocation: StatusLabel | null; savedReports?: SavedReport[]
-  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; sidebar?: SidebarPage[]
+  builtInSchedules?: Partial<Record<ReportKind, KeptSchedule>>; mail?: MailServer; encryptedMailPassword?: string; plainMailPassword?: string; background?: Background; appearance?: Appearance; branding?: Partial<BrandingInput>; sidebar?: SidebarPage[]
   release?: ReleaseCache; repairTypeId?: number | null
   tempCheckout?: Partial<TempCheckout>; schoolCalendar?: CalendarEntry[]; reminderDay?: string; automaticDay?: string }
 
@@ -119,7 +134,9 @@ function checkMail(m: MailInput): MailServer {
   const sender = typeof m.sender === 'string' ? m.sender.trim() : ''
   if (!/^[^\s@]+@[^\s@]+$/.test(sender)) throw new Error('Enter the sender email address.')
   if (typeof m.password !== 'string') throw new Error('Invalid email password')
-  return { host, port: m.port, security: m.security, username, sender }
+  const domain = typeof m.domain === 'string' ? m.domain.trim().toLowerCase() : ''
+  if (domain && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw new Error("Enter the email domain like nomma.net, or leave it blank for the sender address's.")
+  return { host, port: m.port, security: m.security, username, sender, ...(domain && { domain }) }
 }
 
 // What comes from the screen, checked, keeping only what its frequency and Report use. ranged: the Report has past dates to narrow.
@@ -129,7 +146,18 @@ function checkSchedule(s: Schedule, ranged: boolean): Schedule {
   if (s.every === 'month' && !(Number.isInteger(s.day) && s.day! >= 1 && s.day! <= 31)) throw new Error('Choose a date from 1 to 31.')
   if (typeof s.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) throw new Error('Choose the time to send it.')
   if (s.range !== undefined && ![1, 7, 30, 'since'].includes(s.range)) throw new Error('Choose the date range.')
-  return { every: s.every, ...(s.every !== 'day' && { day: s.day }), time: s.time, ...(ranged && s.range !== undefined && { range: s.range }) }
+  if (s.format !== undefined && !Object.hasOwn(FORMATS, s.format)) throw new Error('Choose CSV, HTML or PDF.')
+  return { every: s.every, ...(s.every !== 'day' && { day: s.day }), time: s.time, ...(ranged && s.range !== undefined && { range: s.range }), ...(s.format && s.format !== 'csv' && { format: s.format }) }
+}
+
+function checkBranding(b: BrandingInput): BrandingInput {
+  const name = typeof b?.name === 'string' ? b.name.trim() : ''
+  if (!name || name.length > 80) throw new Error('Enter the organisation name, up to 80 characters.')
+  for (const [key, label] of [['primary', 'primary'], ['accent', 'accent']] as const)
+    if (typeof b[key] !== 'string' || !HEX.test(b[key])) throw new Error(`Enter the ${label} colour as six hex digits, like #14285a.`)
+  const footer = typeof b.footer === 'string' ? b.footer.trim() : null
+  if (footer === null || footer.length > 200) throw new Error('The report footer line can be up to 200 characters.')
+  return { name, primary: b.primary.toLowerCase(), accent: b.accent.toLowerCase(), footer }
 }
 
 function tempCheckout(saved?: Partial<TempCheckout>): TempCheckout {
@@ -154,6 +182,9 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     writeFileSync(path + '.tmp', JSON.stringify(value), { mode: 0o600 })
     renameSync(path + '.tmp', path)
   }
+  // The icon lives beside settings.json, not in it: a PNG in JSON would be read and parsed on every setting.
+  const iconFile = join(dirname(path), 'branding-icon.png')
+  const iconPath = () => (existsSync(iconFile) ? iconFile : null)
   const withoutToken = ({ encryptedToken: _, plainToken: __, ...rest }: Stored): Stored => rest
   const withoutMailPassword = ({ encryptedMailPassword: _, plainMailPassword: __, ...rest }: Stored): Stored => rest
   const savedReports = () => read().savedReports ?? []
@@ -185,7 +216,8 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     return { baseUrl: value.baseUrl, defaultLocation: value.defaultLocation, hasToken: !!(value.encryptedToken || value.plainToken), plaintext: !!value.plainToken, appVersion,
       mail: { ...(value.mail ?? GMAIL), hasPassword: !!(value.encryptedMailPassword || value.plainMailPassword), plaintext: !!value.plainMailPassword },
       background: value.background ?? BACKGROUND_OFF, appearance: value.appearance ?? 'system', sidebar: value.sidebar ?? SIDEBAR_DEFAULT, repairTypeId: value.repairTypeId ?? null,
-      tempCheckout: tempCheckout(value.tempCheckout), schoolCalendar: value.schoolCalendar ?? [] }
+      tempCheckout: tempCheckout(value.tempCheckout), schoolCalendar: value.schoolCalendar ?? [],
+      branding: { ...BRAND_DEFAULTS, ...value.branding, icon: iconPath() && `data:image/png;base64,${readFileSync(iconFile).toString('base64')}` } }
   }
   // The saved email password, only for the host and username it was saved for, so it never goes to a changed mail server or account.
   function savedMailPassword(saved: Stored, { host, username }: MailServer) {
@@ -258,6 +290,23 @@ export function createSettingsStore(path: string, storage: Pick<typeof safeStora
     saveAppearance(appearance: Appearance) {
       if (!APPEARANCES.includes(appearance)) throw new Error('Invalid appearance')
       write({ ...read(), appearance })
+      return get()
+    },
+    saveBranding(input: BrandingInput) {
+      write({ ...read(), branding: checkBranding(input) })
+      return get()
+    },
+    /** The icon file for the window and tray, or null for the app's own. */
+    iconPath,
+    saveIcon(bytes: Uint8Array) {
+      if (!(bytes instanceof Uint8Array) || !Buffer.from(bytes.subarray(0, 8)).equals(PNG)) throw new Error('Choose a PNG image.')
+      if (bytes.length > 2_000_000) throw new Error('Choose a PNG under 2 MB.')
+      writeFileSync(iconFile + '.tmp', bytes, { mode: 0o600 })
+      renameSync(iconFile + '.tmp', iconFile)
+      return get()
+    },
+    removeIcon() {
+      rmSync(iconFile, { force: true })
       return get()
     },
     saveSidebar(sidebar: SidebarPage[]) {

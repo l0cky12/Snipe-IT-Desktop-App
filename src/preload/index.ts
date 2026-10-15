@@ -4,6 +4,7 @@ import { fromWire, type SnipeItBridge } from '../main/snipeit'
 import type { LabelApi, WorkflowsApi } from '../main/index'
 import type { ReleaseApi } from '../main/release'
 import type { ReminderApi } from '../main/reminder'
+import type { ExportApi } from '../main/report'
 import type { ReportsApi } from '../main/scheduler'
 
 // Electron wraps a rejection as "Error invoking remote method '…': Error: <message>"; pass on just the message, with the
@@ -88,7 +89,8 @@ const label: LabelApi = { print: call('label:print') }
 contextBridge.exposeInMainWorld('label', label)
 
 const settings: SettingsApi = { get: call('settings:get'), save: call('settings:save'), test: call('settings:test'), locations: call('settings:locations'), clearToken: call('settings:clearToken'),
-  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveSidebar: call('settings:saveSidebar'), saveRepairs: call('settings:saveRepairs'),
+  saveMail: call('settings:saveMail'), testMail: call('settings:testMail'), saveBackground: call('settings:saveBackground'), saveAppearance: call('settings:saveAppearance'), saveSidebar: call('settings:saveSidebar'),
+  saveBranding: call('settings:saveBranding'), pickIcon: call('settings:pickIcon'), removeIcon: call('settings:removeIcon'), saveRepairs: call('settings:saveRepairs'),
   saveTempCheckout: call('settings:saveTempCheckout'), saveSchoolCalendar: call('settings:saveSchoolCalendar'),
   savedReports: call('settings:savedReports'), saveReport: call('settings:saveReport'), renameReport: call('settings:renameReport'), deleteReport: call('settings:deleteReport'),
   schedules: call('settings:schedules'), setSchedule: call('settings:setSchedule') }
@@ -96,6 +98,9 @@ contextBridge.exposeInMainWorld('settings', settings)
 
 const reports: ReportsApi = { emailNow: call('reports:emailNow') }
 contextBridge.exposeInMainWorld('reports', reports)
+
+const exporter: ExportApi = { save: call('export:save') }
+contextBridge.exposeInMainWorld('exporter', exporter)
 
 const releases: ReleaseApi = { latest: call('release:latest'), open: call('release:open'), hide: call('release:hide') }
 contextBridge.exposeInMainWorld('releases', releases)

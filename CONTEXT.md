@@ -299,3 +299,7 @@ _Avoid_: alert, notification (a desktop notification is a separate thing)
 - "Issue" (as in "bulk issue") was a second word for Checkout. Resolved: the Workflow is **Bulk checkout**; say Checkout.
 - "Batch" was the old page for checking many Assets out or in. Resolved: scanning goes through a Workflow; a **Selection** uses the Checkout and Checkin **Bulk Actions**.
 - "Saved views" in the brief meant the built-in **Views**. What the Operator saves is a **Saved Report**.
+
+**Branding**:
+The organisation's name, square PNG icon, two colours (primary, accent) and Report footer line, set in Settings on this PC. They show in the app and on exported Reports. Not the installer's name, app ID or launcher icon, which stay as built (ADR 0003).
+_Avoid_: theme (that's light or dark, the Appearance setting), white-label

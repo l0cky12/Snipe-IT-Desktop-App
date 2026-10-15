@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -24,6 +24,7 @@ const appEvents = new Map<string, (e: { preventDefault(): void }) => void>()
 let trayMenu: { label: string; click: () => void }[] = []
 const ask = vi.fn<(...args: unknown[]) => number>()
 const quit = vi.fn()
+const saveAs = vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>()
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -39,6 +40,7 @@ beforeEach(async () => {
   appEvents.clear()
   ask.mockReset().mockReturnValue(1)
   quit.mockClear()
+  saveAs.mockReset()
   send.mockClear()
   openExternal.mockClear()
   request.mockReset().mockImplementation(async (url) => new Response(JSON.stringify(
@@ -53,6 +55,7 @@ beforeEach(async () => {
     app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, getPath: () => dir, getVersion: () => 'test', on: (name: string, handler: (e: { preventDefault(): void }) => void) => appEvents.set(name, handler), setAppUserModelId: () => {}, quit, isPackaged: false },
     BrowserWindow: class {
       setMenuBarVisibility() {}
+      setIcon() {}
       loadFile() {}
       loadURL() {}
       on(name: string, handler: (e: { preventDefault(): void }) => void) { windowEvents.set(name, handler) }
@@ -60,8 +63,8 @@ beforeEach(async () => {
       getChildWindows() { return [] }
       hide() {}
     },
-    dialog: { showMessageBoxSync: ask },
-    Tray: class { setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
+    dialog: { showMessageBoxSync: ask, showSaveDialog: saveAs },
+    Tray: class { setImage() {} setToolTip() {} setContextMenu(menu: typeof trayMenu) { trayMenu = menu } on() {} destroy() {} },
     Menu: { buildFromTemplate: (template: typeof trayMenu) => template },
     nativeImage: { createFromPath: () => ({}) },
     ipcMain: { handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) },
@@ -269,5 +272,25 @@ describe('quitting while a Paused Workflow holds scans (#73)', () => {
       expect(close()).toBe(false)
     }
     expect(ask).not.toHaveBeenCalled()
+  })
+})
+
+describe('Export…', () => {
+  const table = { name: 'Users', columns: ['Name'], rows: [['A']] }
+
+  it('writes the CSV or HTML file where the Operator chooses, named for the day, and nothing when they cancel', async () => {
+    saveAs.mockResolvedValueOnce({ canceled: true })
+    expect(await call('export:save', { ...table, format: 'csv' })).toBe(false)
+    expect(saveAs.mock.calls[0][1]).toMatchObject({ defaultPath: expect.stringMatching(/users-\d{4}-\d{2}-\d{2}\.csv$/), filters: [{ name: 'CSV file', extensions: ['csv'] }] })
+    const csv = join(dir, 'users.csv')
+    saveAs.mockResolvedValueOnce({ canceled: false, filePath: csv })
+    expect(await call('export:save', { ...table, format: 'csv' })).toBe(true)
+    expect(readFileSync(csv, 'utf8')).toBe('\uFEFF"Name"\r\n"A"\r\n')
+    const html = join(dir, 'users.html')
+    saveAs.mockResolvedValueOnce({ canceled: false, filePath: html })
+    expect(await call('export:save', { ...table, format: 'html' })).toBe(true)
+    expect(readFileSync(html, 'utf8')).toContain('<div class="org">Snipe-IT Desktop</div><h1>Users</h1>')
+    expect(readFileSync(html, 'utf8')).toContain('<td>A</td>')
+    await expect(call('export:save', { ...table, format: 'docx' })).rejects.toThrow('Invalid export')
   })
 })

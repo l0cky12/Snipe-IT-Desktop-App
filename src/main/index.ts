@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, shell, Tray } from 'electron'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import { BACKGROUND_OFF, createSettingsStore, reportDomain, type Appearance, type Background, type BrandingInput, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import { fileName, toCsv } from './export'
 import type { SidebarPage } from './sidebar'
 import { sendMail } from './mail'
+import { checkExport, FORMATS, pdfFooter, reportHtml, type ExportFormat, type ExportInput } from './report'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
@@ -33,20 +35,22 @@ async function showLabel(parent: BrowserWindow | null, dir: string, name: string
   await win.loadFile(file, { hash: 'navpanes=0' })
 }
 
-// The app's own Labels (a page of HTML from the screen, see labelHtml) as a PDF of Label-sized pages. From a file, as a
-// data: URL of many Labels would pass Chromium's 2 MB URL limit.
-async function ownLabelPdf(dir: string, html: string): Promise<Buffer> {
-  if (typeof html !== 'string') throw new Error('Invalid Label')
-  const file = join(dir, 'labels.html')
+// A page of HTML as a PDF, from a file in dir: as a data: URL, many Labels or rows would pass Chromium's 2 MB URL limit.
+async function htmlToPdf(dir: string, html: string, options: Electron.PrintToPDFOptions): Promise<Buffer> {
+  if (typeof html !== 'string') throw new Error('Invalid page')
+  const file = join(dir, 'page.html')
   await writeFile(file, html)
   const win = new BrowserWindow({ show: false, webPreferences: { javascript: false } })
   try {
     await win.loadFile(file)
-    return await win.webContents.printToPDF({ pageSize: { width: 2.25, height: 1.25 }, margins: { top: 0, bottom: 0, left: 0, right: 0 }, printBackground: true })
+    return await win.webContents.printToPDF(options)
   } finally {
     win.destroy()
   }
 }
+// The app's own Labels (a page of HTML from the screen, see labelHtml) as a PDF of Label-sized pages.
+const ownLabelPdf = (dir: string, html: string) =>
+  htmlToPdf(dir, html, { pageSize: { width: 2.25, height: 1.25 }, margins: { top: 0, bottom: 0, left: 0, right: 0 }, printBackground: true })
 
 // One app at a time: launching it again (say, while it's in the tray) shows this one's window, and no Report sends twice.
 if (!app.requestSingleInstanceLock()) app.exit()
@@ -109,7 +113,8 @@ app.whenReady().then(() => {
   handle('settings:testMail', async (_e, input: MailInput) => {
     const server = store.mailServer(input)
     const to = await client().operatorEmail()
-    await sendMail(server, { to, subject: 'Snipe-IT Desktop test email', text: 'This is a test email from Snipe-IT Desktop. Your email settings work, so Reports can be emailed to you here.' })
+    const { name } = store.get().branding
+    await sendMail(server, { to, subject: `${name} test email`, text: `This is a test email from ${name}. Your email settings work, so Reports can be emailed to you here.` })
     return to
   })
   // Kept here, not in the window's storage, so the Report scheduler can read them with the window closed.
@@ -128,6 +133,8 @@ app.whenReady().then(() => {
       return {
         run: reportRunner(connection, () => reports),
         recipient: () => connection.operatorEmail(),
+        domain: reportDomain(server),
+        attach: async (report, format, when) => ({ filename: fileName(report.name, when, format), ...await reportFile(format, report, when) }),
         send: (mail) => sendMail(server, mail),
       }
     },
@@ -142,7 +149,7 @@ app.whenReady().then(() => {
       note.show()
     },
   })
-  handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
+  handle('reports:emailNow', (_e, ref: ReportRef, format?: ExportFormat) => scheduler.emailNow(ref, format))
   // Kept, so their clicks still open the window after the notifications would otherwise be garbage collected.
   let reminderNote: Notification | null = null
   let automaticNote: Notification | null = null
@@ -215,6 +222,30 @@ app.whenReady().then(() => {
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
   for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'checkoutStock', 'accessoryHolders', 'checkinAccessory', 'userAccessories', 'returnAccessory', 'licenseHolders', 'checkinLicense', 'userLicenses', 'returnLicense', 'returnAll', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'customFieldList', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'deleteGroup', 'operatorAccess', 'setGroupMember', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
+  // A Report as the format's file, for the save dialog and for email: CSV as Export writes it; HTML and PDF carry the
+  // Branding, the PDF landscape Letter with the footer line and page numbers on every page.
+  async function reportFile(format: ExportFormat, table: Omit<ExportInput, 'format'>, when: Date): Promise<{ content: string | Buffer; contentType: string }> {
+    if (format === 'csv') return { content: toCsv(table.columns, table.rows), contentType: 'text/csv; charset=utf-8' }
+    const { branding } = store.get()
+    const html = reportHtml(table, when, branding, { paged: format === 'pdf' })
+    if (format === 'html') return { content: html, contentType: 'text/html; charset=utf-8' }
+    const dir = await mkdtemp(join(tmpdir(), 'snipe-it-report-'))
+    try {
+      const options: Electron.PrintToPDFOptions = { pageSize: 'Letter', landscape: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: pdfFooter(branding), margins: { top: 0.5, bottom: 0.7, left: 0.5, right: 0.5 } }
+      return { content: await htmlToPdf(dir, html, options), contentType: 'application/pdf' }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+  // A List or Report as a file where the Operator chooses; nothing is written without that.
+  handle('export:save', async (_e, input: ExportInput) => {
+    const { format, name, columns, rows } = checkExport(input)
+    const when = new Date()
+    const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: join(app.getPath('documents'), fileName(name, when, format)), filters: [{ name: FORMATS[format], extensions: [format] }] })
+    if (canceled || !filePath) return false
+    await writeFile(filePath, (await reportFile(format, { name, columns, rows }, when)).content)
+    return true
+  })
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.
   handle('label:print', async (e, assetTags: string[], ownLabelHtml: string) => {
     const pdf = await client().labelPdf(assetTags)
@@ -256,12 +287,39 @@ app.whenReady().then(() => {
     win.getChildWindows().forEach((w) => w.close())
     win.hide()
   })
+  // The organisation's name and icon on the window, taskbar and tray (ADR 0003). The app's own tray image stands in for
+  // a window icon until one is chosen, and again once it's removed; the launcher's icon is the installer's.
+  function applyBrand() {
+    const { branding } = store.get()
+    const icon = nativeImage.createFromPath(store.iconPath() ?? trayIcon)
+    win.setIcon(icon)
+    if (!tray) return
+    tray.setImage(icon)
+    tray.setToolTip(branding.name)
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: `Open ${branding.name}`, click: show }, { label: 'Quit', click: () => app.quit() }]))
+  }
+  handle('settings:saveBranding', (_e, input: BrandingInput) => {
+    const saved = store.saveBranding(input)
+    applyBrand()
+    return saved
+  })
+  handle('settings:pickIcon', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'PNG image', extensions: ['png'] }] })
+    if (canceled || !filePaths[0]) return store.get()
+    const saved = store.saveIcon(await readFile(filePaths[0]))
+    applyBrand()
+    return saved
+  })
+  handle('settings:removeIcon', () => {
+    const saved = store.removeIcon()
+    applyBrand()
+    return saved
+  })
   function applyBackground({ tray: inTray, startAtLogin }: Background) {
     if (inTray && !tray) {
       tray = new Tray(nativeImage.createFromPath(trayIcon))
-      tray.setToolTip('Snipe-IT Desktop')
-      tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Open Snipe-IT Desktop', click: show }, { label: 'Quit', click: () => app.quit() }]))
       tray.on('click', show)
+      applyBrand()
     } else if (!inTray && tray) {
       tray.destroy()
       tray = null
@@ -273,6 +331,7 @@ app.whenReady().then(() => {
     else app.setLoginItemSettings({ openAtLogin: startAtLogin, args: [HIDDEN_ARG] })
   }
   try { applyBackground(background) } catch (e) { console.error('Tray and Start at login:', (e as Error).message) }
+  try { applyBrand() } catch (e) { console.error('Branding:', (e as Error).message) }
 })
 
 app.on('window-all-closed', () => app.quit())

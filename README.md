@@ -62,7 +62,9 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 - **Warranty expiring**: every Expiring Warranty (the next 90 days), soonest first, optionally within a date range.
 - **Custom Asset Report**: Snipe-IT's own Custom Asset Report, in the app. Tick which Asset fields (and Custom Fields) are its columns, then narrow by Company, Location, Default Location, Supplier, Asset Model, Manufacturer, Category, Status Label, Order number, Purchase cost, a date range on any of the Asset's dates, whether it's checked out, and whether Archived or deleted Assets are included. **Save report…** keeps it as a template under Saved Reports, where it can be emailed now or on a Schedule.
 
-**Export CSV…** saves the table as a CSV file where you choose. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
+**Export…** saves the table as a CSV, HTML or PDF file where you choose. HTML and PDF carry your organisation's icon, name and primary colour (see Branding), the date, the row count and your Report footer line; the PDF is landscape Letter with the footer line and page numbers on every page. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
+
+**Email me now** and each Report's **Schedule** send the Report the same way, as CSV, HTML or PDF (CSV until you choose). Reports go only to your own Snipe-IT email address, and only when it's at the domain in Email settings, which is the sender address's unless you set another.
 
 ## Permissions
 
@@ -74,7 +76,9 @@ A User's page shows their permission groups and any permissions of their own. Ma
 
 Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
 
-Settings has four tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server and each Report's Schedule), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+Settings has five tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server, the domain Reports may be emailed to, and each Report's Schedule), **Branding** (your organisation's name, icon and colours), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+
+Branding puts your organisation's name in the sidebar, the window title, the tray and emails, its square PNG icon in the sidebar, on the window and taskbar and in the tray, and its two colours (primary: the logo tile and buttons; accent: the selection marker and focus ring) on the page as you type them. The Start menu or launcher keeps the installed icon and name, and About keeps the app's own. Reset colours puts NOMMA's navy and gold back.
 
 Lists load on demand, so there is no refresh interval. Appearance retains the existing dark theme.
 

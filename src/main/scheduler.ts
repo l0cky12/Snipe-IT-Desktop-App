@@ -1,18 +1,16 @@
 import type { KeptSchedule, LastSend, SavedReport, Schedule, ScheduleKey, Scheduled } from './config'
-import { csvName, exportTable, localDate, rowCount, shownColumns, toCsv, viewColumns } from './export'
-import type { Mail } from './mail'
+import { exportTable, localDate, rowCount, shownColumns, viewColumns } from './export'
+import type { Attachment, Mail } from './mail'
+import { FORMATS, type ExportFormat } from './report'
 import { REPORT_NAMES, type ReportKind, type ReportQuery, type SnipeIt } from './snipeit'
-
-/** Reports are emailed only to an Operator at this domain, so student information stays in the district. Not a setting. */
-export const REPORT_DOMAIN = 'nomma.net'
 
 /** A Report to run: a Saved Report, by id, or a built-in Report with its filters. */
 export type ReportRef = { saved: string } | { builtIn: ReportKind; query: ReportQuery }
 /** A Report run to rows, as Export saves it. capped: more rows matched than a Report holds. */
 export type ReportRun = { name: string; columns: string[]; rows: string[][]; capped: boolean }
 export type ReportsApi = {
-  /** Emails the Report to the Operator now; resolves to the address and the row count. */
-  emailNow(ref: ReportRef): Promise<{ to: string; rows: number }>
+  /** Emails the Report to the Operator now, as the format's file (CSV until chosen); resolves to the address and the row count. */
+  emailNow(ref: ReportRef, format?: ExportFormat): Promise<{ to: string; rows: number }>
 }
 
 // The latest time the schedule came due, at or before `when`.
@@ -41,7 +39,7 @@ function rangeOf({ range, since, sentAt }: KeptSchedule, when: Date): ReportQuer
   return range === 'since' ? { from: localDate(new Date(sentAt ?? since)), to: daysBack(0) } : { from: daysBack(range), to: daysBack(1) }
 }
 
-// The Report scheduler: emails a Report to the Operator, and only to them at REPORT_DOMAIN, now or when its schedule
+// The Report scheduler: emails a Report to the Operator, and only to them at the Email settings' domain, now or when its schedule
 // comes due (tick, every minute while the app runs). Each send captures its connection and Report definitions before
 // any async work. Saving the connection or logging out cancels pending sends and the rest of the current tick.
 export function createReportScheduler({ now, session, schedules, recordSend, failed }: {
@@ -50,6 +48,10 @@ export function createReportScheduler({ now, session, schedules, recordSend, fai
     run: (ref: ReportRef) => Promise<ReportRun>
     /** The Operator's Snipe-IT email address. */
     recipient: () => Promise<string>
+    /** The domain Reports may be emailed to (reportDomain). */
+    domain: string
+    /** The Report as the format's file, named for the day. */
+    attach: (report: ReportRun, format: ExportFormat, when: Date) => Promise<Attachment>
     send: (mail: Mail) => Promise<void>
   }
   schedules: () => Scheduled[]
@@ -72,7 +74,7 @@ export function createReportScheduler({ now, session, schedules, recordSend, fai
         for (const { report, schedule } of schedules()) {
           if (!isDue(schedule, when)) continue
           const ref = 'saved' in report ? report : { builtIn: report.builtIn, query: rangeOf(schedule, when) }
-          const last: LastSend = await api.emailNow(ref).then(({ rows }) => ({ at, rows }), (e: Error) => ({ at, error: e.message }))
+          const last: LastSend = await api.emailNow(ref, schedule.format).then(({ rows }) => ({ at, rows }), (e: Error) => ({ at, error: e.message }))
           // Neither the old queue nor its result belongs to the new connection.
           if (started !== generation) return
           recordSend(report, last)
@@ -82,27 +84,29 @@ export function createReportScheduler({ now, session, schedules, recordSend, fai
         ticking = false
       }
     },
-    async emailNow(ref: ReportRef) {
+    async emailNow(ref: ReportRef, format: ExportFormat = 'csv') {
+      if (!Object.hasOwn(FORMATS, format)) throw new Error('Choose CSV, HTML or PDF.')
       const started = generation
-      const { recipient, run, send } = session()
+      const { recipient, run, send, domain, attach } = session()
       const check = () => {
         if (started !== generation) throw new Error('Report email cancelled because the connection was saved or you logged out. Run it again after connecting.')
       }
       const to = await recipient()
       check()
-      if (!to.toLowerCase().endsWith(`@${REPORT_DOMAIN}`))
-        throw new Error(`Reports are emailed only to @${REPORT_DOMAIN} addresses, and your Snipe-IT email is ${to}. Student information mustn't leave the district; ask a Snipe-IT Superuser to change your email.`)
+      if (!to.toLowerCase().endsWith(`@${domain}`))
+        throw new Error(`Reports are emailed only to @${domain} addresses, and your Snipe-IT email is ${to}. Student information mustn't leave the organisation; ask a Snipe-IT Superuser to change your email, or change the domain in Settings.`)
       const report = await run(ref)
-      check()
       const when = now()
+      const attachment = await attach(report, format, when)
+      check()
       // No await between the check and SMTP handoff. A message already handed to SMTP cannot be recalled.
       await send({
         to,
         subject: `${report.name}, ${localDate(when)}`,
-        text: `${report.name} has ${rowCount(report.rows.length)}. The CSV is attached.\n\n`
+        text: `${report.name} has ${rowCount(report.rows.length)}. The ${FORMATS[format]} is attached.\n\n`
           + (report.capped ? `More rows matched than a Report holds, so only the first ${rowCount(report.rows.length)} are attached. Narrow the Report for the rest.\n\n` : '')
           + "It may hold student information. Under FERPA it must stay with authorized district staff: don't forward it outside the district, and delete it when you're done.\n",
-        attachments: [{ filename: csvName(report.name, when), content: toCsv(report.columns, report.rows), contentType: 'text/csv; charset=utf-8' }],
+        attachments: [attachment],
       })
       return { to, rows: report.rows.length }
     },
