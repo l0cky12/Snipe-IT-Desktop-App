@@ -4,17 +4,26 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSettingsStore, type Schedule, type ScheduleKey } from './config'
 import type { Mail } from './mail'
+import { csvName, toCsv } from './export'
+import type { ExportFormat } from './report'
 import { createReportScheduler, reportRunner, type ReportRef, type ReportRun } from './scheduler'
+
+// A fake of the main process's attach: the CSV as Export writes it; the other formats as a stand-in.
+const attach = async (report: ReportRun, format: ExportFormat, when: Date) =>
+  format === 'csv' ? { filename: csvName(report.name, when), content: toCsv(report.columns, report.rows), contentType: 'text/csv; charset=utf-8' }
+  : { filename: csvName(report.name, when).replace(/csv$/, format), content: `<${format}>`, contentType: `x/${format}` }
 
 const overdue: ReportRun = { name: 'Overdue', columns: ['Asset Tag', 'Assignee'], rows: [['NOMMA-1', 'J. R.'], ['NOMMA-2', '=1+1']], capped: false }
 // The Report scheduler on a fake clock, a fake Report and a fake sender: what it emails, and to whom.
-function scheduler({ email = 'ecaldwell@nomma.net', report = overdue } = {}) {
+function scheduler({ email = 'ecaldwell@nomma.net', report = overdue, domain = 'nomma.net' } = {}) {
   const sent: Mail[] = []
   const ran: unknown[] = []
   const s = createReportScheduler({
     now: () => new Date(2026, 9, 1, 23, 30),
     session: () => ({
       recipient: async () => email,
+      domain,
+      attach,
       run: async (ref) => (ran.push(ref), report),
       send: async (mail) => void sent.push(mail),
     }),
@@ -52,12 +61,25 @@ describe('Email me now', () => {
     expect(sent[0].text).toMatch(/^Overdue has 1 row\..*only the first 1 row/s)
   })
 
-  it('refuses, saying why, unless the Operator\'s Snipe-IT email is at nomma.net; nothing is run or sent', async () => {
+  it("refuses, saying why, unless the Operator's Snipe-IT email is at the Email settings' domain; nothing is run or sent", async () => {
     for (const email of ['jordan@gmail.com', 'x@nomma.net.evil.com', 'x@notnomma.net', 'nomma.net']) {
       const { s, sent, ran } = scheduler({ email })
       await expect(s.emailNow({ saved: 'r1' })).rejects.toThrow(`only to @nomma.net addresses, and your Snipe-IT email is ${email}`)
       expect([sent, ran]).toEqual([[], []])
     }
+    const { s, sent } = scheduler({ email: 'jordan@example.org', domain: 'example.org' })
+    await s.emailNow({ saved: 'r1' })
+    expect(sent[0].to).toBe('jordan@example.org')
+  })
+
+  it('sends the Report as the chosen file, HTML or PDF, named for the day, saying which is attached; CSV until chosen', async () => {
+    const { s, sent } = scheduler()
+    await s.emailNow({ builtIn: 'overdue', query: {} }, 'pdf')
+    expect(sent[0].text).toMatch(/^Overdue has 2 rows\. The PDF document is attached\./)
+    expect(sent[0].attachments).toEqual([{ filename: 'overdue-2026-10-01.pdf', content: '<pdf>', contentType: 'x/pdf' }])
+    await s.emailNow({ saved: 'r1' }, 'html')
+    expect(sent[1].attachments?.[0]).toMatchObject({ filename: 'overdue-2026-10-01.html', content: '<html>' })
+    await expect(s.emailNow({ saved: 'r1' }, 'docx' as never)).rejects.toThrow('Choose CSV, HTML or PDF.')
   })
 
   it('the domain may be in capitals', async () => {
@@ -102,15 +124,17 @@ const at = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hou
 function scheduled(schedules: [ScheduleKey, Schedule][], { setAt = at(1, 6), fail = '' } = {}) {
   const path = join(mkdtempSync(join(tmpdir(), 'snipe-scheduler-')), 'settings.json')
   dirs.push(join(path, '..'))
-  const t = { clock: setAt, fail, sent: [] as string[], ran: [] as ReportRef[], failed: [] as string[] }
+  const t = { clock: setAt, fail, sent: [] as string[], files: [] as string[], ran: [] as ReportRef[], failed: [] as string[] }
   const launch = () => {
     const store = createSettingsStore(path, storage, '0.1.0')
     return { store, scheduler: createReportScheduler({
       now: () => t.clock,
       session: () => ({
         recipient: async () => 'ecaldwell@nomma.net',
+        domain: 'nomma.net',
+        attach,
         run: async (ref) => (t.ran.push(ref), overdue),
-        send: async (mail) => { if (t.fail) throw new Error(t.fail); t.sent.push(`${mail.subject} @ ${t.clock.toString().slice(4, 21)}`) },
+        send: async (mail) => { if (t.fail) throw new Error(t.fail); t.sent.push(`${mail.subject} @ ${t.clock.toString().slice(4, 21)}`); t.files.push(mail.attachments![0].filename) },
       }),
       schedules: store.schedules,
       recordSend: store.recordSend,
@@ -142,6 +166,8 @@ describe('scheduled Reports', () => {
       now: () => at(2, 7),
       session: () => ({
         recipient: async () => { recipients.push('operator@nomma.net'); await pause('recipient'); return 'operator@nomma.net' },
+        domain: 'nomma.net',
+        attach,
         run: async () => { await pause('report'); return overdue },
         send: async (mail) => { sent.push(mail); await pause('SMTP') },
       }),

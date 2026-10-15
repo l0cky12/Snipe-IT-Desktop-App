@@ -1,7 +1,9 @@
 import { createTransport } from 'nodemailer'
 import type { MailInput } from './config'
 
-export type Mail = { to: string; subject: string; text: string; attachments?: { filename: string; content: string; contentType: string }[] }
+export type Mail = { to: string; subject: string; text: string; attachments?: Attachment[] }
+/** A file on an email: a Report as CSV, HTML (text) or PDF (bytes). */
+export type Attachment = { filename: string; content: string | Buffer; contentType: string }
 
 // The only code that touches the mail library. Sends one message and closes the connection.
 export async function sendMail(server: MailInput, mail: Mail) {

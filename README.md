@@ -63,6 +63,8 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 
 **Export…** saves the table as a CSV, HTML or PDF file where you choose. HTML and PDF carry your organisation's icon, name and primary colour (see Branding), the date, the row count and your Report footer line; the PDF is landscape Letter with the footer line and page numbers on every page. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
 
+**Email me now** and each Report's **Schedule** send the Report the same way, as CSV, HTML or PDF (CSV until you choose). Reports go only to your own Snipe-IT email address, and only when it's at the domain in Email settings, which is the sender address's unless you set another.
+
 ## Permissions
 
 What the app offers follows what Snipe-IT lets your API key do: Checkout, Checkin, Status, Edit and Delete are turned off (with the reason on hover) wherever Snipe-IT says your account may not, record by record.
@@ -73,7 +75,7 @@ A User's page shows their permission groups and any permissions of their own. Ma
 
 Open the gear at the bottom left. Enter your server URL and personal API token, test the connection, and save. New installations open Settings automatically.
 
-Settings has five tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server and each Report's Schedule), **Branding** (your organisation's name, icon and colours), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
+Settings has five tabs: **Snipe-IT** (the connection, the versions and Log out, and the Maintenance type for Repairs), **Email & Reports** (the mail server, the domain Reports may be emailed to, and each Report's Schedule), **Branding** (your organisation's name, icon and colours), **Checkouts** (Temp checkout and the School calendar) and **This PC** (Running in the background and Appearance).
 
 Branding puts your organisation's name in the sidebar, the window title, the tray and emails, its square PNG icon in the sidebar, on the window and taskbar and in the tray, and its two colours (primary: the logo tile and buttons; accent: the selection marker and focus ring) on the page as you type them. The Start menu or launcher keeps the installed icon and name, and About keeps the app's own. Reset colours puts NOMMA's navy and gold back.
 

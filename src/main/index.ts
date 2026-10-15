@@ -3,10 +3,10 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HIDDEN_ARG, linuxAutostart } from './background'
-import { BACKGROUND_OFF, createSettingsStore, type Appearance, type Background, type BrandingInput, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
+import { BACKGROUND_OFF, createSettingsStore, reportDomain, type Appearance, type Background, type BrandingInput, type MailInput, type SavedReportInput, type Schedule, type ScheduleKey, type SettingsInput, type TempCheckout } from './config'
 import { fileName, toCsv } from './export'
 import { sendMail } from './mail'
-import { checkExport, FORMATS, pdfFooter, reportHtml, type ExportInput } from './report'
+import { checkExport, FORMATS, pdfFooter, reportHtml, type ExportFormat, type ExportInput } from './report'
 import { createReleaseCheck, openReleaseNotes, RELEASES_URL } from './release'
 import { createAutomaticCheckin, createEndOfDayReminder } from './reminder'
 import { createReportScheduler, reportRunner, type ReportRef } from './scheduler'
@@ -132,6 +132,8 @@ app.whenReady().then(() => {
       return {
         run: reportRunner(connection, () => reports),
         recipient: () => connection.operatorEmail(),
+        domain: reportDomain(server),
+        attach: async (report, format, when) => ({ filename: fileName(report.name, when, format), ...await reportFile(format, report, when) }),
         send: (mail) => sendMail(server, mail),
       }
     },
@@ -146,7 +148,7 @@ app.whenReady().then(() => {
       note.show()
     },
   })
-  handle('reports:emailNow', (_e, ref: ReportRef) => scheduler.emailNow(ref))
+  handle('reports:emailNow', (_e, ref: ReportRef, format?: ExportFormat) => scheduler.emailNow(ref, format))
   // Kept, so their clicks still open the window after the notifications would otherwise be garbage collected.
   let reminderNote: Notification | null = null
   let automaticNote: Notification | null = null
@@ -218,29 +220,28 @@ app.whenReady().then(() => {
   handle('release:hide', (_e, tag: string) => releases?.hide(tag))
   for (const name of ['testConnection', 'keyRefused', 'operatorEmail', 'locations', 'assetByTag', 'lookup', 'getAsset', 'statusLabels', 'searchUsers', 'exactUsers', 'userSelectlist', 'userCard', 'supplierSelectlist', 'operatorName', 'repairTypeId', 'openMaintenances', 'maintenance', 'createMaintenance', 'updateMaintenance', 'completeMaintenance', 'deleteMaintenance', 'addAssetNote', 'appendUserNotes', 'removeUserNotesLine', 'searchLocations', 'checkout', 'checkin', 'checkoutStock', 'accessoryHolders', 'checkinAccessory', 'userAccessories', 'returnAccessory', 'audit', 'dashboard', 'health', 'list', 'exportList', 'names', 'updateStatus', 'report', 'record', 'form', 'customFields', 'save', 'remove', 'canManagePermissions', 'userAccess', 'groups', 'group', 'setUserGroups', 'saveGroup', 'canImport', 'imports', 'uploadImport', 'processImport', 'deleteImport'] as const)
     handle(`snipeit:${name}`, (_e, ...args) => (client()[name] as (...a: unknown[]) => unknown)(...args))
-  // A List or Report as a file where the Operator chooses; nothing is written without that. HTML and PDF carry the
-  // Branding; the PDF is landscape Letter with the footer line and page numbers on every page.
+  // A Report as the format's file, for the save dialog and for email: CSV as Export writes it; HTML and PDF carry the
+  // Branding, the PDF landscape Letter with the footer line and page numbers on every page.
+  async function reportFile(format: ExportFormat, table: Omit<ExportInput, 'format'>, when: Date): Promise<{ content: string | Buffer; contentType: string }> {
+    if (format === 'csv') return { content: toCsv(table.columns, table.rows), contentType: 'text/csv; charset=utf-8' }
+    const { branding } = store.get()
+    const html = reportHtml(table, when, branding, { paged: format === 'pdf' })
+    if (format === 'html') return { content: html, contentType: 'text/html; charset=utf-8' }
+    const dir = await mkdtemp(join(tmpdir(), 'snipe-it-report-'))
+    try {
+      const options: Electron.PrintToPDFOptions = { pageSize: 'Letter', landscape: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: pdfFooter(branding), margins: { top: 0.5, bottom: 0.7, left: 0.5, right: 0.5 } }
+      return { content: await htmlToPdf(dir, html, options), contentType: 'application/pdf' }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+  // A List or Report as a file where the Operator chooses; nothing is written without that.
   handle('export:save', async (_e, input: ExportInput) => {
     const { format, name, columns, rows } = checkExport(input)
     const when = new Date()
     const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: join(app.getPath('documents'), fileName(name, when, format)), filters: [{ name: FORMATS[format], extensions: [format] }] })
     if (canceled || !filePath) return false
-    if (format === 'csv') {
-      await writeFile(filePath, toCsv(columns, rows))
-      return true
-    }
-    const { branding } = store.get()
-    const html = reportHtml({ name, columns, rows }, when, branding, { paged: format === 'pdf' })
-    if (format === 'html') {
-      await writeFile(filePath, html)
-      return true
-    }
-    const dir = await mkdtemp(join(tmpdir(), 'snipe-it-report-'))
-    try {
-      await writeFile(filePath, await htmlToPdf(dir, html, { pageSize: 'Letter', landscape: true, printBackground: true, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: pdfFooter(branding), margins: { top: 0.5, bottom: 0.7, left: 0.5, right: 0.5 } }))
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+    await writeFile(filePath, (await reportFile(format, { name, columns, rows }, when)).content)
     return true
   })
   // Snipe-IT's Labels, so they match the web UI's; the app's own when Snipe-IT can't make them over the API.

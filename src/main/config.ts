@@ -5,6 +5,7 @@ import type { safeStorage } from 'electron'
 import type { ReleaseCache } from './release'
 import { BRAND_DEFAULTS, HEX, type Branding, type BrandingInput } from './branding'
 import { END_OF_DAY, later, parseCalendar, realTime, type CalendarEntry } from './calendar'
+import { FORMATS, type ExportFormat } from './report'
 import { ASSET_VIEWS, LIST_SORTS, REPORT_NAMES, takesRange, type AssetView, type Config, type ListKind, type ReportKind, type StatusLabel } from './snipeit'
 
 export type { Branding, BrandingInput } from './branding'
@@ -28,8 +29,13 @@ export const BACKGROUND_OFF: Background = { tray: false, startAtLogin: false }
 export const APPEARANCES = ['system', 'light', 'dark'] as const
 export type Appearance = (typeof APPEARANCES)[number]
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-/** ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted. */
-export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string }
+/**
+ * ssl: TLS from the start (port 465). starttls: upgraded after connecting (port 587), never sent unencrypted.
+ * domain: Reports are emailed only to an Operator whose Snipe-IT email is at it, so student information stays in the
+ * organisation; blank (left out) means the sender address's domain (reportDomain).
+ */
+export type MailServer = { host: string; port: number; security: 'ssl' | 'starttls'; username: string; sender: string; domain?: string }
+export const reportDomain = (m: MailServer) => m.domain || m.sender.slice(m.sender.lastIndexOf('@') + 1).toLowerCase()
 /** A blank password keeps the saved one, as long as the mail server's host and username are the same. */
 export type MailInput = MailServer & { password: string }
 const GMAIL: MailServer = { host: 'smtp.gmail.com', port: 465, security: 'ssl', username: '', sender: '' }
@@ -74,8 +80,9 @@ export type SavedReportInput = SavedReportQuery & { id?: string; name: string }
  * the day it sends (so daily and weekly sends neither miss a day nor repeat one), or from the day of the last send. None
  * (and always for a Report not in RANGED_REPORTS, such as Warranty expiring, which looks ahead, or a Saved Report, whose List
  * has no dates): all of it. No Schedule keeps a Location or Category: an audit Report's send covers all of them.
+ * format: the file it sends, HTML or PDF with the Branding; left out, CSV (so Schedules from before the choice send CSV).
  */
-export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since' }
+export type Schedule = { every: 'day' | 'week' | 'month'; day?: number; time: string; range?: 1 | 7 | 30 | 'since'; format?: ExportFormat }
 /** A scheduled send: when, and the rows it sent or why it failed. */
 export type LastSend = { at: string; rows: number } | { at: string; error: string }
 /** A Schedule as kept. since: when it was set; last: the last send; sentAt: the last send that went out. */
@@ -113,7 +120,9 @@ function checkMail(m: MailInput): MailServer {
   const sender = typeof m.sender === 'string' ? m.sender.trim() : ''
   if (!/^[^\s@]+@[^\s@]+$/.test(sender)) throw new Error('Enter the sender email address.')
   if (typeof m.password !== 'string') throw new Error('Invalid email password')
-  return { host, port: m.port, security: m.security, username, sender }
+  const domain = typeof m.domain === 'string' ? m.domain.trim().toLowerCase() : ''
+  if (domain && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw new Error("Enter the email domain like nomma.net, or leave it blank for the sender address's.")
+  return { host, port: m.port, security: m.security, username, sender, ...(domain && { domain }) }
 }
 
 // What comes from the screen, checked, keeping only what its frequency and Report use. ranged: the Report has past dates to narrow.
@@ -123,7 +132,8 @@ function checkSchedule(s: Schedule, ranged: boolean): Schedule {
   if (s.every === 'month' && !(Number.isInteger(s.day) && s.day! >= 1 && s.day! <= 31)) throw new Error('Choose a date from 1 to 31.')
   if (typeof s.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) throw new Error('Choose the time to send it.')
   if (s.range !== undefined && ![1, 7, 30, 'since'].includes(s.range)) throw new Error('Choose the date range.')
-  return { every: s.every, ...(s.every !== 'day' && { day: s.day }), time: s.time, ...(ranged && s.range !== undefined && { range: s.range }) }
+  if (s.format !== undefined && !Object.hasOwn(FORMATS, s.format)) throw new Error('Choose CSV, HTML or PDF.')
+  return { every: s.every, ...(s.every !== 'day' && { day: s.day }), time: s.time, ...(ranged && s.range !== undefined && { range: s.range }), ...(s.format && s.format !== 'csv' && { format: s.format }) }
 }
 
 function checkBranding(b: BrandingInput): BrandingInput {

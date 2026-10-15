@@ -138,6 +138,8 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
           <input id="smtp-username" required autoComplete="off" placeholder="you@nomma.net" value={mail.username} onChange={(e) => setMailField({ username: e.target.value })} />
           <label htmlFor="smtp-sender">Sender address</label>
           <input id="smtp-sender" type="email" required placeholder="you@nomma.net" value={mail.sender} onChange={(e) => setMailField({ sender: e.target.value })} />
+          <label htmlFor="smtp-domain">Reports may be emailed to addresses at</label>
+          <input id="smtp-domain" autoComplete="off" spellCheck={false} placeholder={`Blank: the sender address's domain${/@[^\s@]+$/.test(mail.sender) ? ` (${mail.sender.slice(mail.sender.lastIndexOf('@') + 1).toLowerCase()})` : ''}`} value={mail.domain ?? ''} onChange={(e) => setMailField({ domain: e.target.value })} />
           <label htmlFor="smtp-password">Password</label>
           <input id="smtp-password" type="password" autoComplete="new-password" value={mail.password} onChange={(e) => setMailField({ password: e.target.value })}
             placeholder={settings.mail.hasPassword && mail.host.trim() === settings.mail.host && mail.username.trim() === settings.mail.username ? (settings.mail.plaintext ? 'Saved (unencrypted)' : 'Saved securely') + '. Leave blank to keep it.' : 'App password'} />
@@ -145,7 +147,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
           <div className="connection-row"><input id="smtp-recipient" readOnly value={!settings.hasToken ? 'Connect to Snipe-IT first' : recipient.to ?? (recipient.error ? 'Unavailable' : 'Loading…')} />
             <button type="button" onClick={(e) => { if (e.currentTarget.form?.reportValidity()) run(async () => setMessage(`Test email sent to ${await window.settings.testMail(mail)}. Check that inbox.`), 'mail') }}>Send test email</button></div>
           {recipient.error && settings.hasToken && <p className="hint">{recipient.error}</p>}
-          <p className="hint">Reports go only to your own Snipe-IT email address. The password is encrypted with your OS credential store when available.</p>
+          <p className="hint">Reports go only to your own Snipe-IT email address, and only when it's at that domain, so student information stays in the organisation. The password is encrypted with your OS credential store when available.</p>
           <div className="settings-footer"><button className="primary" type="submit">{busy ? 'Working…' : 'Save email settings'}</button></div>
         </section>
       </fieldset>

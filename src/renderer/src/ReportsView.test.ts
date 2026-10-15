@@ -7,6 +7,7 @@ it("says when a Report emails itself and over which dates", () => {
   expect(scheduleText({ every: 'month', day: 2, time: '07:00', range: 'since' })).toBe('Monthly on the 2nd at 07:00 · since the last send')
   expect(scheduleText({ every: 'month', day: 31, time: '07:00', range: 1 })).toBe("Monthly on the 31st (or the month's last day) at 07:00 · the previous day")
   expect(scheduleText({ every: 'month', day: 13, time: '07:00' })).toBe('Monthly on the 13th at 07:00')
+  expect(scheduleText({ every: 'day', time: '07:00', range: 1, format: 'pdf' })).toBe('Daily at 07:00 · the previous day · as PDF')
 })
 
 it('says how the last send went, including why it failed', () => {
