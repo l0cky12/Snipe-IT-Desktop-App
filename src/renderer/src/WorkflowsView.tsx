@@ -521,7 +521,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
                 </span>
               ))}
               <input value={stockText} onChange={(e) => (setStockText(e.target.value), setStatus(''))} onKeyDown={(e) => e.key === 'Enter' && stock?.q === sq && stock.rows[0] && (e.preventDefault(), pickStock(stock.rows[0]))}
-                placeholder="Also hand out an Accessory, Consumable or License…" aria-label="Also hand out" role="combobox" aria-expanded={!!sq && stock?.q === sq} aria-controls="handout-stock" />
+                placeholder="Also hand out by name…" aria-label="Also hand out an Accessory, Consumable or License" role="combobox" aria-expanded={!!sq && stock?.q === sq} aria-controls="handout-stock" />
               <label className="dim">Quantity <input type="number" min={1} step={1} value={qty} onChange={(e) => setQty(e.target.value)} aria-label="Handout quantity" /></label>
             </div>
             {sq && stock?.q === sq && (
