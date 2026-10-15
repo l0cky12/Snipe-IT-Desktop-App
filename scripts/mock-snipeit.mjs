@@ -268,10 +268,14 @@ Object.assign(lists, {
 })
 lists.categories.rows = () => categories.map((c) => ({ ...c, category_type: 'asset', item_count: tally(assets, (a) => a.category.id === c.id) }))
 lists.departments.rows = () => departments.map((d) => ({ ...d, location: campus, users_count: tally(users, (u) => u.department?.id === d.id) }))
-lists.statuslabels.rows = () => statuses.map((s) => ({ ...s, type: s.status_meta, assets_count: tally(assets, (a) => a.status_label.id === s.id) }))
+// As in Snipe-IT, a label any Asset is on can't be deleted.
+lists.statuslabels.rows = () => statuses.map((s) => {
+  const assets_count = tally(assets, (a) => a.status_label.id === s.id)
+  return { ...s, type: s.status_meta, assets_count, available_actions: { ...s.available_actions, delete: s.available_actions.delete && !assets_count } }
+})
 Object.assign(lists.hardware.filters, { manufacturer_id: (a, v) => makerOf(a).id === +v, supplier_id: (a, v) => a.supplier.id === +v, company_id: (a, v) => a.company.id === +v })
 // A User made in the app may have no Location or department.
-Object.assign(lists.users.filters, { company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
+Object.assign(lists.users.filters, { group_id: (u, v) => u.groups.rows.some((g) => g.id === +v), company_id: () => true, location_id: (u, v) => u.location?.id === +v, department_id: (u, v) => u.department?.id === +v })
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].filters = { ...lists[k].filters, category_id: (r, v) => r.category?.id === +v }
 // Snipe-IT's audit routes: next audit within its Audit warning setting (30 days here), or past; never Archived Assets.
 const auditable = (a) => a.next_audit_date && a.status_label.status_meta !== 'archived'
@@ -304,7 +308,7 @@ for (const m of models) m.fieldset = m.category.name === 'Chromebook' ? { id: fi
 const store = { hardware: assets, users, locations, models, categories, manufacturers, suppliers, departments, companies, statuslabels: statuses, ...Object.fromEntries(['licenses', 'accessories', 'consumables', 'components'].map((k) => [k, lists[k].rows()])) }
 for (const k of ['licenses', 'accessories', 'consumables', 'components']) lists[k].rows = () => store[k]
 const required = { hardware: ['asset_tag', 'model_id', 'status_id'], users: ['first_name', 'username'], locations: ['name'], licenses: ['name', 'seats', 'category_id'],
-  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'] }
+  accessories: ['name', 'qty', 'category_id'], consumables: ['name', 'qty', 'category_id'], components: ['name', 'qty', 'category_id'], statuslabels: ['name', 'type'] }
 const refs = { model_id: ['model', models], status_id: ['status_label', statuses], location_id: ['location', locations], rtd_location_id: ['rtd_location', locations], parent_id: ['parent', locations],
   category_id: ['category', categories], manufacturer_id: ['manufacturer', manufacturers], supplier_id: ['supplier', suppliers], company_id: ['company', companies], department_id: ['department', departments] }
 function saveRecord(kind, body, row) {
@@ -328,6 +332,7 @@ function saveRecord(kind, body, row) {
   }
   if (kind === 'users' && ('first_name' in body || 'last_name' in body)) target.name = [target.first_name, target.last_name].filter(Boolean).join(' ')
   if (kind === 'hardware') Object.assign(target, { category: target.model?.category ?? target.category ?? null, assigned_to: target.assigned_to ?? null, supplier: target.supplier ?? suppliers[0], company: target.company ?? companies[0], notes: target.notes ?? null })
+  if (kind === 'statuslabels') Object.assign(target, { status_type: target.type, status_meta: target.type, available_actions: target.available_actions ?? actions })
   if (!row) store[kind].push(target)
   return { status: 'success', messages: row ? 'Updated.' : 'Created.', payload: target }
 }
@@ -404,7 +409,7 @@ createServer(async (req, res) => {
   const fail = (messages) => send({ status: 'error', messages, payload: null })
   let m
   if (!routes.find(([route]) => route.test(path))?.[1].includes(req.method)) return send(noEndpoint, 404)
-  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' } })
+  if (path === 'users/me') return send({ id: 900, name: 'Demo Operator', display_name: 'Demo Tech', username: 'demo.operator', email: 'demo.operator@nomma.net', permissions: limited ? {} : { superuser: '1' }, groups: groupsOf(limited ? [] : [1]) })
   if (path === 'maintenance-types') return limited ? send(refused, 403) : send(listPage({ rows: () => maintenanceTypeRows, search: (t) => text(t.name) }, url.searchParams))
   if (path === 'maintenances' && req.method === 'POST') {
     const item = assets.find((a) => a.id === body.asset_id)
@@ -450,16 +455,30 @@ createServer(async (req, res) => {
   }
   if (path === 'groups' || path.startsWith('groups/')) {
     if (limited) return send(refused, 403)
-    if (path === 'groups') return send(listPage({ rows: () => groups }, url.searchParams))
+    // Like Snipe-IT: the list counts each group's Users, a single group doesn't (users_count 0), and one with Users won't delete.
+    const members = (g) => users.filter((u) => u.groups.rows.some((x) => x.id === g.id)).length
+    if (path === 'groups' && req.method === 'POST') {
+      if (!body.name) return fail({ name: ['The name field is required.'] })
+      if (groups.some((x) => x.name === body.name)) return fail({ name: ['The name has already been taken.'] })
+      const g = { id: Math.max(0, ...groups.map((x) => x.id)) + 1, name: body.name, permissions: JSON.parse(body.permissions ?? '{}') }
+      groups.push(g)
+      return send({ status: 'success', messages: 'Created.', payload: { ...g, users_count: 0 } })
+    }
+    if (path === 'groups') return send(listPage({ rows: () => groups.map((g) => ({ ...g, users_count: members(g) })) }, url.searchParams))
     const g = groups.find((x) => x.id === Number(path.split('/')[1]))
     if (!g) return send({ status: 'error', messages: 'Group not found' }, 404)
+    if (req.method === 'DELETE') {
+      if (members(g)) return send({ status: 'error', messages: 'This group has users associated with it and cannot be deleted.', payload: null })
+      groups.splice(groups.indexOf(g), 1)
+      return send({ status: 'success', messages: 'Deleted.', payload: null })
+    }
     if (req.method === 'PATCH') {
       if (!body.name) return fail({ name: ['The name field is required.'] })
       let permissions
       try { permissions = body.permissions && JSON.parse(body.permissions) } catch { return fail({ permissions: ['The permissions must be JSON.'] }) }
       Object.assign(g, { name: body.name, ...(permissions && { permissions }) })
     }
-    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : g)
+    return send(req.method === 'PATCH' ? { status: 'success', messages: 'Updated.', payload: g } : { ...g, users_count: 0 })
   }
   if (path === 'imports' || path.startsWith('imports/')) {
     if (limited) return send(refused, 403)
@@ -516,6 +535,7 @@ createServer(async (req, res) => {
     if (!row) return send({ status: 'error', messages: 'Not found' }, 404)
     if (req.method === 'PATCH' || req.method === 'PUT') return send(saveRecord(m[1], body, row))
     if (m[1] === 'hardware' && row.assigned_to) return fail('This asset is currently checked out, and cannot be deleted. Check it in first.')
+    if (m[1] === 'statuslabels' && assets.some((x) => x.status_label.id === row.id)) return fail('Status label is in use and cannot be deleted.')
     if (m[1] === 'users' && assets.some((x) => x.assigned_to?.type === 'user' && x.assigned_to.id === row.id)) return fail('This user has items assigned and could not be deleted.')
     store[m[1]].splice(store[m[1]].indexOf(row), 1)
     return send({ status: 'success', messages: 'Deleted.', payload: null })
