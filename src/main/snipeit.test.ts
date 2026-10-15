@@ -1897,16 +1897,17 @@ describe('report', () => {
       asset(2, { purchase_date: { date: '2026-09-10' }, purchase_cost: '300.00', status_label: ready }),
       asset(3, { status_label: ready }),
     ]
-    // Archived Assets come only from their own list (Snipe-IT's "show archived in list" off); this one is deleted too.
-    const shelved = [asset(4, { status_label: { id: 9, name: 'Retired', status_type: 'archived', status_meta: 'archived' }, deleted_at: { datetime: '2026-09-30 12:00:00' } })]
-    const fields = [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1' }]
-    function customFetch() {
+    // Archived and deleted Assets come only from their own lists (Snipe-IT's "show archived in list" off; status=Deleted).
+    const shelved = [asset(4, { status_label: { id: 9, name: 'Retired', status_type: 'archived', status_meta: 'archived' } })]
+    const trashed = [asset(5, { status_label: ready, deleted_at: { datetime: '2026-09-30 12:00:00' } })]
+    const fields = [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1' }, { id: 2, name: 'Cart', db_column_name: '_snipeit_cart_2' }]
+    function customFetch(fieldsStatus = 200) {
       const queries: Record<string, string>[] = []
       const fetch = (async (input: string | URL | Request) => {
         const url = new URL(String(input))
-        if (url.pathname.endsWith('/fields')) return new Response(JSON.stringify({ total: fields.length, rows: fields }))
+        if (url.pathname.endsWith('/fields')) return new Response(JSON.stringify(fieldsStatus === 200 ? { total: fields.length, rows: fields } : { status: 'error', messages: 'You do not have permission to access this area.', payload: null }), { status: fieldsStatus })
         queries.push(Object.fromEntries(url.searchParams))
-        const rows = url.searchParams.get('status') === 'Archived' ? shelved : hardware
+        const rows = { Archived: shelved, Deleted: trashed }[url.searchParams.get('status') ?? ''] ?? hardware
         return new Response(JSON.stringify({ total: rows.length, rows }))
       }) as typeof globalThis.fetch
       return { fetch, queries }
@@ -1927,6 +1928,12 @@ describe('report', () => {
       expect(queries.map((q) => q.status)).toEqual([undefined, 'Archived'])
     })
 
+    it("heads a Custom Field column as the Assets name it, or as Snipe-IT's field list does; a key neither names, or that the list can't be read for, stays a key", async () => {
+      const columns = ['_snipeit_mac_address_1', '_snipeit_cart_2', '_snipeit_gone_3']
+      expect((await createSnipeIt(config, customFetch().fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', 'Cart', '_snipeit_gone_3'])
+      expect((await createSnipeIt(config, customFetch(403).fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', '_snipeit_cart_2', '_snipeit_gone_3'])
+    })
+
     it('sends the id and Order number filters to Snipe-IT and applies the dates, cost, checked out, Archived and deleted ones itself', async () => {
       const { fetch, queries } = customFetch()
       const snipeIt = createSnipeIt(config, fetch, today)
@@ -1943,8 +1950,11 @@ describe('report', () => {
       expect(await run({ status_id: '1' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3'])
       expect(queries.at(-1)).toMatchObject({ status_id: '1' })
       expect(queries.at(-1)?.status).toBeUndefined()
-      expect(await run({ deleted: 'only' })).toEqual(['NOMMA-4'])
-      expect(queries.at(-1)?.deleted).toBe('true')
+      // Deleted Assets have their own list too, read beside the others or, for Only deleted, alone.
+      expect(await run({ deleted: 'include' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3', 'NOMMA-4', 'NOMMA-5'])
+      expect(queries.slice(-3).map((q) => q.status)).toEqual([undefined, 'Archived', 'Deleted'])
+      expect(await run({ deleted: 'only', category_id: '3' })).toEqual(['NOMMA-5'])
+      expect(queries.slice(-1)).toEqual([{ category_id: '3', status: 'Deleted', limit: '500', offset: '0', sort: 'id', order: 'asc' }])
     })
 
     it('refuses an unknown column or filter, a malformed value, or no columns, without asking Snipe-IT', async () => {

@@ -1398,7 +1398,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
   // The Custom Asset Report. Snipe-IT applies the id and Order number filters; the rest are applied here (see CUSTOM_FILTERS).
   // Archived Assets come from their own list unless left out or a Status Label is asked for (as Duplicates reads them,
-  // Snipe-IT's "show archived in list" being off); deleted ones only when asked for. columns and filters arrive from the screen over IPC.
+  // Snipe-IT's "show archived in list" being off); deleted ones from theirs (status=Deleted, the only way the list gives
+  // them) when asked for, alone for Only deleted. columns and filters arrive from the screen over IPC.
   async function customReport(columns: unknown, filters: unknown): Promise<Report> {
     if (!Array.isArray(columns) || !columns.length) throw new Error('Choose at least one column.')
     for (const c of columns) if (typeof c !== 'string' || !(CUSTOM_CELLS.has(c) || CUSTOM_FIELD_KEY.test(c))) throw new Error(`Unknown column: ${c}`)
@@ -1411,17 +1412,15 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       f[key] = value
     }
     const params = new URLSearchParams(Object.entries(f).filter(([key]) => CUSTOM_FILTERS[key] === 'id' || CUSTOM_FILTERS[key] === 'text'))
-    if (f.deleted) params.set('deleted', 'true')
-    const path = (extra = '') => `/hardware?${params}${extra}`
-    const rows = await allRows<RawAsset>(path())
-    if (!f.exclude_archived && !f.status_id) {
-      const listed = new Set(rows.map((a) => a.id))
-      rows.push(...(await allRows<RawAsset>(path('&status=Archived'))).filter((a) => !listed.has(a.id)))
-      rows.sort((a, b) => a.id - b.id)
-    }
+    const list = (status?: string) => allRows<RawAsset>(`/hardware?${params}${status ? `&status=${status}` : ''}`)
+    const lists = f.deleted === 'only' ? [list('Deleted')]
+      : [list(), ...(!f.exclude_archived && !f.status_id ? [list('Archived')] : []), ...(f.deleted ? [list('Deleted')] : [])]
+    // Each list in id order (see allRows), merged in id order; an Asset on two lists (a shared Archived one) counts once.
+    const byId = new Map<number, RawAsset>()
+    for (const rows of await Promise.all(lists)) for (const a of rows) byId.has(a.id) || byId.set(a.id, a)
+    const rows = [...byId.values()].sort((a, b) => a.id - b.id)
     const kept = rows.filter((a) => {
       if (f.exclude_archived && [a.status_label?.status_type, a.status_label?.status_meta].includes('archived')) return false
-      if (f.deleted === 'only' && !a.deleted_at) return false
       if (f.assignment === 'assigned' && !a.assigned_to) return false
       if (f.assignment === 'unassigned' && a.assigned_to) return false
       // A blank cost or date is never in a range, as Snipe-IT's own report has it.
@@ -1436,8 +1435,11 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       }
       return true
     })
-    // A Custom Field column is headed with the field's name; one Snipe-IT no longer has keeps its key.
-    const fieldNames = columns.some((c) => CUSTOM_FIELD_KEY.test(c)) ? new Map((await customFieldList()).map((c) => [c.key, c.label])) : new Map<string, string>()
+    // A Custom Field column is headed with the field's name: as the Assets carry it, or else from Snipe-IT's list of
+    // fields. A key no Asset has and the list can't name (the Operator's key may not read /fields) stays as the key.
+    const fieldNames = new Map<string, string>()
+    for (const a of kept) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) fieldNames.set(c.field, label)
+    if (columns.some((c) => CUSTOM_FIELD_KEY.test(c) && !fieldNames.has(c))) for (const c of await customFieldList().catch(() => [])) fieldNames.set(c.key, c.label)
     const baseUrl = config.baseUrl.replace(/\/+$/, '')
     return {
       columns: columns.map((c) => CUSTOM_CELLS.get(c)?.label ?? fieldNames.get(c) ?? c),

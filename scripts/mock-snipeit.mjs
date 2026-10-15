@@ -209,7 +209,7 @@ const lists = {
   hardware: { rows: () => assets, search: (a) => text(a.asset_tag, a.name, a.serial, a.notes, a.model?.name, a.model_number, a.manufacturer.name, a.category.name, a.status_label.name,
     a.location?.name, a.assigned_to?.name, ...Object.values(a.custom_fields).map((f) => f.value)), filters: {
     status_id: (a, v) => a.status_label.id === +v, location_id: (a, v) => a.location?.id === +v, model_id: (a, v) => a.model?.id === +v, category_id: (a, v) => a.category.id === +v,
-    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : !a.assigned_to && a.status_label.status_meta === 'deployable'),
+    assigned_to: (a, v) => a.assigned_to?.type === 'user' && a.assigned_to.id === +v, status: (a, v) => (v === 'Deployed' ? !!a.assigned_to : v === 'Archived' ? a.status_label.status_meta === 'archived' : v === 'Deleted' ? !!a.deleted_at : !a.assigned_to && a.status_label.status_meta === 'deployable'),
   }, sorts: { asset_tag: (a) => a.asset_tag, name: (a) => a.name, status: (a) => a.status_label.name, model: (a) => a.model?.name ?? '', category: (a) => a.category.name, location: (a) => a.location?.name, assigned_to: (a) => a.assigned_to?.name ?? '', serial: (a) => a.serial ?? '',
     next_audit_date: (a) => a.next_audit_date?.date ?? '', last_audit_date: (a) => a.last_audit_date?.datetime ?? '', asset_eol_date: (a) => a.asset_eol_date?.date ?? '',
     purchase_cost: (a) => a.purchase_cost?.replace(/,/g, '') ?? '' }, archived: (a) => a.status_label.status_meta === 'archived' },
