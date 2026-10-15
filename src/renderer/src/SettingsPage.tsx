@@ -4,6 +4,13 @@ import { formatCalendar } from '../../main/calendar'
 import { ScheduledReports } from './ReportsView'
 
 // onSaved: the connection may have changed, so the session starts over. onAppearance: only the look did.
+/** Plain HTTP to another machine, LAN included: the token and data cross the network readable. Allowed, but warned (ADR 0002). */
+export function unencryptedRemote(baseUrl: string) {
+  let url: URL
+  try { url = new URL(baseUrl.trim()) } catch { return false }
+  return url.protocol === 'http:' && !['localhost', '[::1]'].includes(url.hostname) && !/^127(\.\d+){3}$/.test(url.hostname)
+}
+
 export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
   const [apiKey, setApiKey] = useState('')
@@ -60,6 +67,7 @@ export function SettingsPage({ settings, onSaved, onAppearance }: { settings: Se
           <h2>Connection</h2><p className="dim">Use your personal Snipe-IT API token.</p>
           <label htmlFor="server-url">Snipe-IT server URL</label>
           <input id="server-url" type="url" required placeholder="https://snipeit.example.org" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setApiKey(''); setVersion('Not connected'); setMessage('') }} />
+          {unencryptedRemote(baseUrl) && <p className="notice warning" role="status">This server uses unencrypted HTTP. Your API token and inventory data can be read by anyone on the same network. Use https:// if your server supports it.</p>}
           <label htmlFor="api-token">API token</label>
           <div className="connection-row"><input id="api-token" type="password" autoComplete="new-password" value={apiKey} placeholder={settings.hasToken && baseUrl === settings.baseUrl ? (settings.plaintext ? 'Saved (unencrypted)' : 'Saved securely') + '. Leave blank to keep it.' : 'Paste your API token'} onChange={(e) => { setApiKey(e.target.value); setMessage(''); setVersion('Not connected') }} />
             <button type="button" onClick={() => run(async () => {
