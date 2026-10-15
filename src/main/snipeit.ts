@@ -112,12 +112,13 @@ export type MaintenanceChange = { supplierId?: number | null; cost?: string | nu
 export type CheckoutOptions = { targetType: Assignee['type']; targetId: number; statusId?: number; fromStatusId?: number; fromLocationId?: number | null; expectedCheckin?: string; note?: string }
 const TARGET_NAME: Record<Assignee['type'], string> = { user: 'User', location: 'Location', asset: 'Asset' }
 
-/** Accessories and Consumables go to a User only, qty at a time (see CONTEXT.md). */
-export type StockKind = 'accessories' | 'consumables'
+/** Accessories, Consumables and License seats go to a User only, qty at a time (see CONTEXT.md). */
+export type StockKind = 'accessories' | 'consumables' | 'licenses'
 export type StockCheckout = { userId: number; qty: number; note?: string }
-/** One checked-out unit of an Accessory: rowId is Snipe-IT's checkout row, which a Checkin names; since is when it went out. */
+/** One checked-out unit of an Accessory, or one License seat in use: rowId is Snipe-IT's checkout row (the seat), which
+ *  a Checkin names; since is when it went out (for a seat, when it last changed hands: Snipe-IT keeps no more). */
 export type AccessoryCheckout = { rowId: number; assignee: Assignee; since: string; note: string }
-/** An Accessory a User holds, and how many of it. */
+/** An Accessory (or License) a User holds, and how many units (seats) of it. */
 export type HeldAccessory = { id: number; name: string; count: number; can: Can }
 
 /** What the rail shows for a match or a recent scan. */
@@ -1280,6 +1281,37 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     if (isError(result)) throw new Error(reason(result.messages))
   }
 
+  // Who holds each seat of a License that's In use, by seat id. A seat can be an Asset's; the app checks out to Users only.
+  async function licenseHolders(id: number): Promise<AccessoryCheckout[]> {
+    checkId(id, 'License')
+    const rows = await allRows<{ id: number; assigned_user: Named | null; assigned_asset: Named | null; notes: string | null; updated_at: { datetime: string } | null }>(`/licenses/${id}/seats?status=assigned`)
+    return rows.flatMap((r) => {
+      const to: Assignee | null = r.assigned_user ? { type: 'user', id: r.assigned_user.id, name: r.assigned_user.name } : r.assigned_asset ? { type: 'asset', id: r.assigned_asset.id, name: r.assigned_asset.name } : null
+      return to ? [{ rowId: r.id, assignee: to, since: r.updated_at?.datetime ?? '', note: plainText(r.notes ?? '') }] : []
+    }).sort((a, b) => a.rowId - b.rowId)
+  }
+
+  // Frees one seat of a License (seatId: a licenseHolders row's). Snipe-IT's note field here is "notes".
+  async function checkinLicense(licenseId: number, seatId: number, note?: string): Promise<void> {
+    checkId(licenseId, 'License')
+    checkId(seatId, 'seat')
+    const result = await request(`/licenses/${licenseId}/checkin`, { seat_id: seatId, ...(note?.trim() && { notes: note.trim() }) })
+    if (isError(result)) throw new Error(reason(result.messages))
+  }
+
+  // Rows that name one thing per unit held (an Accessory per unit, a License per seat), counted per thing: of() says
+  // which row field is the thing (the row itself, or the License a seat row names).
+  function heldOf(rows: RawRow[], of: (r: RawRow) => NonNullable<Named>): HeldAccessory[] {
+    const held = new Map<number, HeldAccessory>()
+    for (const r of rows) {
+      const it = of(r)
+      const h = held.get(it.id)
+      if (h) h.count++
+      else held.set(it.id, { id: it.id, name: it.name, count: 1, can: canFrom(r.available_actions) })
+    }
+    return [...held.values()]
+  }
+
   // The custom fields an Asset Model's Assets have (its fieldset's), as form fields; none when it has no fieldset.
   async function customFields(modelId: number): Promise<FormField[]> {
     checkId(modelId, 'Asset Model')
@@ -1638,7 +1670,8 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       const body = await request<RawRow>(`${LISTS[kind].path}/${id}`)
       if (isError(body)) throw new Error(reason(body.messages))
       return { kind, id, name: String(body.name ?? ''), fields: fieldsOf(body), can: canFrom(body.available_actions), ...(kind === 'categories' && { categoryType: text(body.category_type) }),
-        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }) }
+        ...((kind === 'accessories' || kind === 'consumables') && { remaining: count(body.remaining_qty ?? body.remaining) }),
+        ...(kind === 'licenses' && { remaining: count(body.free_seats_count) }) }
     },
 
     // A record's form: the kind's fields and, editing, its current values; an Asset's include its Asset Model's custom fields.
@@ -2076,30 +2109,53 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // Snipe-IT refuses more than it has left, with its reason. An Accessory goes as checkout_to_type user, which newer
     // Snipe-ITs need and older ones ignore; a Consumable names its User as assigned_to.
     async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<void> {
-      if (kind !== 'accessories' && kind !== 'consumables') throw new Error(`Unknown record: ${kind}`)
+      if (kind !== 'accessories' && kind !== 'consumables' && kind !== 'licenses') throw new Error(`Unknown record: ${kind}`)
       checkId(id, 'record')
       checkId(userId, 'User')
       if (!Number.isInteger(qty) || qty < 1) throw new Error(`Invalid quantity: ${qty}`)
+      const text = note?.trim()
+      // A License gives one seat per Checkout (Snipe-IT picks the next Free one), so qty seats take qty Checkouts; a
+      // refusal partway says how many went through. Its note is "notes" (v8's checkout route).
+      if (kind === 'licenses') {
+        for (let i = 0; i < qty; i++) {
+          const result = await request(`/licenses/${id}/checkout`, { target_type: 'user', assigned_to: userId, ...(text && { notes: text }) })
+          if (isError(result)) throw new Error(i ? `Checked out ${i} of ${qty}: ${reason(result.messages)}` : reason(result.messages))
+        }
+        return
+      }
       const to = kind === 'accessories' ? { checkout_to_type: 'user', assigned_user: userId } : { assigned_to: userId }
-      const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(note?.trim() && { note: note.trim() }) })
+      const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(text && { note: text }) })
       if (isError(result)) throw new Error(reason(result.messages))
     },
 
     accessoryHolders,
     checkinAccessory,
+    licenseHolders,
+    checkinLicense,
 
     // What a User holds; Snipe-IT lists an Accessory once per unit, so they're counted here.
     async userAccessories(userId: number): Promise<HeldAccessory[]> {
       checkId(userId, 'User')
       const body = await request<{ rows: RawRow[] }>(`/users/${userId}/accessories`)
       if (isError(body)) throw new Error(reason(body.messages))
-      const held = new Map<number, HeldAccessory>()
-      for (const r of body.rows) {
-        const h = held.get(r.id)
-        if (h) h.count++
-        else held.set(r.id, { id: r.id, name: r.name, count: 1, can: canFrom(r.available_actions) })
-      }
-      return [...held.values()]
+      return heldOf(body.rows, (r) => r)
+    },
+
+    // The Licenses a User has a seat of, counted per License. v8.8+ lists each seat (with its License under "license");
+    // earlier v8s list the License itself once per seat.
+    async userLicenses(userId: number): Promise<HeldAccessory[]> {
+      checkId(userId, 'User')
+      const body = await request<{ rows: RawRow[] }>(`/users/${userId}/licenses`)
+      if (isError(body)) throw new Error(reason(body.messages))
+      return heldOf(body.rows, (r) => (r.license as NonNullable<Named> | undefined) ?? r)
+    },
+
+    // A User hands back one seat of a License: their seat is looked up (Snipe-IT checks a seat in by its id) and freed.
+    async returnLicense(licenseId: number, userId: number, note?: string): Promise<void> {
+      checkId(userId, 'User')
+      const theirs = (await licenseHolders(licenseId)).filter((h) => h.assignee.type === 'user' && h.assignee.id === userId)
+      if (!theirs.length) throw new Error('Not checked out to that User')
+      await checkinLicense(licenseId, theirs[0].rowId, note)
     },
 
     // A User hands back qty of an Accessory: their checkout rows are checked in oldest first. Short, it checks in what

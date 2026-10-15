@@ -113,6 +113,9 @@ const money = (v) => (v === null || v === undefined || v === '' ? null : Number(
 // One row per checked-out unit of an Accessory, as Snipe-IT keeps them; a Checkin names the row.
 const accessoryCheckouts = [[1, 3], [1, 5], [1, 5], [2, 8]].map(([accessory, user], i) =>
   ({ id: i + 1, accessory, assigned_to: { id: users[user].id, name: users[user].name, type: 'user' }, note: null, created_at: { datetime: local(new Date(Date.now() - (9 - i) * 864e5)) } }))
+// A License's seats In use, as Snipe-IT keeps them (one row per seat; free_seats_count above counts the rest). A Checkin names the seat.
+const licenseSeats = [[1, 3], [1, 5], [3, 8]].map(([license, user], i) =>
+  ({ id: i + 1, license_id: license, assigned_user: { id: users[user].id, name: users[user].name }, assigned_asset: null, notes: null, updated_at: { datetime: local(new Date(Date.now() - (6 - i) * 864e5)) } }))
 const log = []
 // item is an Asset, or an Accessory or Consumable given as { id, name, type }.
 const act = (action_type, item, target, note = null, when = new Date(), operator = 'Demo Operator') =>
@@ -373,8 +376,8 @@ const routes = [
   [/^(users\/me|users\/selectlist|suppliers\/selectlist|version|reports\/activity|hardware\/bytag\/.+|hardware\/(audit|checkins)\/(due|overdue)|fieldsets\/\d+|maintenance-types)$/, ['GET']],
   // GitHub's, outside /api/v1/.
   [/^\/repos\/grokability\/snipe-it\/releases\/latest$/, ['GET']],
-  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store|(accessories|consumables)\/\d+\/checkout|accessories\/\d+\/checkin)$/, ['POST']],
-  [/^(accessories\/\d+\/checkedout|users\/\d+\/accessories)$/, ['GET']],
+  [/^(fieldsets\/\d+\/fields|hardware\/\d+\/(check(in|out)|audit)|maintenances\/\d+\/complete|imports\/process\/\d+|notes\/\d+\/store|(accessories|consumables|licenses)\/\d+\/checkout|(accessories|licenses)\/\d+\/checkin)$/, ['POST']],
+  [/^(accessories\/\d+\/checkedout|licenses\/\d+\/seats|users\/\d+\/(accessories|licenses))$/, ['GET']],
   ...(labelEngine === 'none' ? [] : [[/^hardware\/labels$/, ['POST']]]),
   [/^[a-z]+$/, ['GET', 'POST']],
   [/^[a-z]+\/\d+$/, ['GET', 'PATCH', 'PUT', 'DELETE']],
@@ -585,6 +588,33 @@ createServer(async (req, res) => {
   if ((m = path.match(/^accessories\/(\d+)\/checkedout$/))) return send(listPage({ rows: () => accessoryCheckouts.filter((c) => c.accessory === +m[1]) }, url.searchParams))
   if ((m = path.match(/^users\/(\d+)\/accessories$/))) {
     const rows = accessoryCheckouts.filter((c) => c.assigned_to.id === +m[1]).map((c) => accessories.find((a) => a.id === c.accessory))
+    return send({ total: rows.length, rows })
+  }
+  // License seats: one goes to a User per Checkout (the next Free one), and comes back by seat id. v8.8+ lists a User's as seat rows.
+  if ((m = path.match(/^licenses\/(\d+)\/checkout$/))) {
+    const license = licenses.find((l) => l.id === +m[1])
+    const user = users.find((u) => u.id === body.assigned_to)
+    if (!license) return send({ status: 'error', messages: 'Not found' }, 404)
+    if (body.target_type !== 'user' || !user) return fail('User does not exist.')
+    if (license.free_seats_count < 1) return fail('There are not enough free seats available.')
+    license.free_seats_count--
+    const seat = { id: Math.max(0, ...licenseSeats.map((s) => s.id)) + 1, license_id: license.id, assigned_user: { id: user.id, name: user.name }, assigned_asset: null, notes: body.notes ?? null, updated_at: { datetime: local(new Date()) } }
+    licenseSeats.push(seat)
+    act('checkout', { id: license.id, name: license.name, type: 'license' }, user, body.notes)
+    return send({ status: 'success', messages: 'License checked out successfully.', payload: seat })
+  }
+  if ((m = path.match(/^licenses\/(\d+)\/checkin$/))) {
+    const seat = licenseSeats.find((s) => s.id === body.seat_id && s.license_id === +m[1])
+    if (!seat) return fail('License seat not found.')
+    const license = licenses.find((l) => l.id === seat.license_id)
+    licenseSeats.splice(licenseSeats.indexOf(seat), 1)
+    license.free_seats_count++
+    act('checkin from', { id: license.id, name: license.name, type: 'license' }, { ...seat.assigned_user, type: 'user' }, body.notes)
+    return send({ status: 'success', messages: 'License checked in successfully.', payload: { ...seat, assigned_user: null } })
+  }
+  if ((m = path.match(/^licenses\/(\d+)\/seats$/))) return send(listPage({ rows: () => licenseSeats.filter((s) => s.license_id === +m[1]) }, url.searchParams))
+  if ((m = path.match(/^users\/(\d+)\/licenses$/))) {
+    const rows = licenseSeats.filter((s) => s.assigned_user.id === +m[1]).map((s) => ({ id: s.id, license: { id: s.license_id, name: licenses.find((l) => l.id === s.license_id).name }, name: licenses.find((l) => l.id === s.license_id).name, assigned_user: s.assigned_user.id, available_actions: { checkin: true } }))
     return send({ total: rows.length, rows })
   }
   // One record of any other kind by id.

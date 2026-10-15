@@ -3034,3 +3034,45 @@ describe('Accessory checkin', () => {
     expect((await createSnipeIt(config, fetch).userAccessories(311)).map(({ name, count }) => [name, count])).toEqual([['Charger', 2], ['Mouse', 1]])
   })
 })
+
+describe('License seats', () => {
+  const ok = { body: { status: 'success', messages: 'Checked out.', payload: { id: 77 } } }
+  const posted = (requests: FakeRequest[]) => requests.filter((r) => r.method === 'POST')
+  const seat = (id: number, user: number | null, name: string) => ({ id, assigned_user: user === null ? null : { id: user, name }, assigned_asset: user === null ? { id: 9, name } : null, notes: '<b>lab</b>', updated_at: { datetime: `2026-09-0${id} 10:00:00` } })
+  const seats = { body: { total: 3, rows: [seat(5, 311, 'Jordan Reyes'), seat(2, 311, 'Jordan Reyes'), seat(3, null, 'NOMMA-000009 (Chromebook)')] } }
+  const checkedIn = { body: { status: 'success', messages: 'Checked in.', payload: null } }
+
+  it('a seat goes to a User per Checkout, qty times, with the note as "notes"', async () => {
+    const { fetch, requests } = fakeFetch({ 'POST /licenses/4/checkout': ok })
+    await createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 2, note: ' lab ' })
+    expect(posted(requests)).toEqual([1, 2].map(() => ({ method: 'POST', path: '/licenses/4/checkout', body: { target_type: 'user', assigned_to: 311, notes: 'lab' } })))
+  })
+
+  it('a refusal partway says how many went through', async () => {
+    let n = 0
+    const { fetch } = fakeFetch({ 'POST /licenses/4/checkout': { body: () => (++n > 1 ? { status: 'error', messages: 'Not enough seats.', payload: null } : ok.body) } })
+    await expect(createSnipeIt(config, fetch).checkoutStock('licenses', 4, { userId: 311, qty: 3 })).rejects.toThrow('Checked out 1 of 3: Not enough seats.')
+  })
+
+  it('lists who holds each seat In use, by seat id, an Asset holder too', async () => {
+    const { fetch, queries } = fakeFetch({ '/licenses/4/seats': seats })
+    expect((await createSnipeIt(config, fetch).licenseHolders(4)).map((h) => [h.rowId, h.assignee.type, h.assignee.name, h.note])).toEqual([[2, 'user', 'Jordan Reyes', 'lab'], [3, 'asset', 'NOMMA-000009 (Chromebook)', 'lab'], [5, 'user', 'Jordan Reyes', 'lab']])
+    expect(queries[0]).toMatchObject({ status: 'assigned' })
+  })
+
+  it("returning frees that User's lowest seat; a User with none is refused before anything is sent", async () => {
+    const { fetch, requests } = fakeFetch({ '/licenses/4/seats': seats, 'POST /licenses/4/checkin': checkedIn })
+    await createSnipeIt(config, fetch).returnLicense(4, 311, 'done')
+    expect(posted(requests)).toEqual([{ method: 'POST', path: '/licenses/4/checkin', body: { seat_id: 2, notes: 'done' } }])
+    await expect(createSnipeIt(config, fetch).returnLicense(4, 999)).rejects.toThrow('Not checked out to that User')
+    expect(posted(requests)).toHaveLength(1)
+  })
+
+  it("a User's Licenses are counted per License, from seat rows (v8.8) or License rows (earlier)", async () => {
+    const seatRow = (id: number, license: number, name: string) => ({ id, license: { id: license, name }, name, available_actions: { checkin: true } })
+    const v88 = fakeFetch({ '/users/311/licenses': { body: { total: 3, rows: [seatRow(21, 4, 'Office'), seatRow(22, 4, 'Office'), seatRow(23, 6, 'Filter')] } } })
+    expect((await createSnipeIt(config, v88.fetch).userLicenses(311)).map(({ id, name, count }) => [id, name, count])).toEqual([[4, 'Office', 2], [6, 'Filter', 1]])
+    const v87 = fakeFetch({ '/users/311/licenses': { body: { total: 2, rows: [{ id: 4, name: 'Office', available_actions: { checkin: false } }, { id: 4, name: 'Office' }] } } })
+    expect((await createSnipeIt(config, v87.fetch).userLicenses(311)).map(({ id, count, can }) => [id, count, can.checkin])).toEqual([[4, 2, false]])
+  })
+})

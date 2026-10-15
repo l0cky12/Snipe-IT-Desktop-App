@@ -16,10 +16,10 @@ _Avoid_: ID, barcode (the barcode *encodes* the Asset Tag)
 The manufacturer's serial number of an Asset. Not guaranteed unique across manufacturers.
 
 **Checkout**:
-Assigning an Asset to an Assignee, or handing a quantity of an Accessory or Consumable to a User, recorded in Snipe-IT.
+Assigning an Asset to an Assignee, or handing a quantity of an Accessory or Consumable, or seats of a License, to a User, recorded in Snipe-IT.
 
 **Checkin**:
-Returning a checked-out Asset to inventory, clearing its Assignee; or taking back units of an Accessory from the User who has them. A Consumable is never checked in.
+Returning a checked-out Asset to inventory, clearing its Assignee; or taking back units of an Accessory, or seats of a License, from the User who has them. A Consumable is never checked in.
 
 **Assignee**:
 Whoever an Asset is currently checked out to: a **User** or a **Location**.
@@ -236,7 +236,7 @@ _Avoid_: custom report, saved search
 When a Saved Report or built-in Report emails itself to the Operator: daily, weekly or monthly at a set time. An Activity Report, Overdue, Last audited, Temp checkout history or Maintenances Schedule also sets its dates relative to each send (the previous 1, 7 or 30 days, or since the last send). A built-in Report's Schedule sends every Location and Category. A send missed while the app was closed goes out once at the next launch; a failed send tries again each hour.
 
 **License**:
-A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise. Its **Minimum quantity** is the fewest Free seats it should have. A License is **Running out** when its Free seats drop below its Minimum quantity, or reach 0 when none is set; a Minimum quantity of 0 silences it.
+A software license in Snipe-IT with a fixed number of seats. A seat is **In use** when assigned, **Free** otherwise. Seats are checked out to a User one at a time (Snipe-IT picks the next Free one), and each comes back on its own Checkin. Its **Minimum quantity** is the fewest Free seats it should have. A License is **Running out** when its Free seats drop below its Minimum quantity, or reach 0 when none is set; a Minimum quantity of 0 silences it.
 
 **Accessory**:
 A stocked item tracked by quantity, not individually (a charger, a keyboard). Each unit is **Checked out** or **Available**. Checked out to a User a quantity at a time; each unit comes back on its own Checkin.

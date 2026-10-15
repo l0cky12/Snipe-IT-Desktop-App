@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useState } from 'react'
-import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind } from '../../main/snipeit'
+import { EDIT_KINDS, type EditKind, type Field, type ListKind, type RecordDetail, type RecordKind, type StockKind } from '../../main/snipeit'
 import { drillLabel, listName, type Drill } from './ListView'
 import { DeleteButton } from './RecordForm'
 import { UserAccessSection, type CanManage } from './AccessView'
 import { CheckoutForm, NOT_ALLOWED } from './App'
-import { HoldersSection, UserAccessoriesSection } from './StockView'
+import { HoldersSection, UserHeldSection } from './StockView'
 
 export const editable = (kind: ListKind): kind is EditKind => (EDIT_KINDS as readonly string[]).includes(kind)
 
@@ -53,10 +53,10 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
 
   if (error) return <p className="message error" role="alert">{error}</p>
   if (!record) return <p className="empty">Loading…</p>
-  const stock = kind === 'accessories' || kind === 'consumables' ? kind : null
+  const stock = kind === 'accessories' || kind === 'consumables' || kind === 'licenses' ? kind : null
   const changed = () => setVersion((v) => v + 1)
   // Throws nothing: CheckoutForm waits on it, and a refusal shows here as Snipe-IT's reason.
-  async function checkoutStock(stockKind: 'accessories' | 'consumables', userId: number, qty: number, note?: string) {
+  async function checkoutStock(stockKind: StockKind, userId: number, qty: number, note?: string) {
     try {
       await window.snipeIt.checkoutStock(stockKind, id, { userId, qty, note })
       setMessage({ text: `Checked out ${qty}`, error: false })
@@ -91,8 +91,9 @@ export function RecordView({ kind, id, onOpenRecord, onOpenAsset, onDrill, onEdi
       {stock && checkingOut && !checkoutOff && <CheckoutForm defaultLocation={null} available={record.remaining} onCheckout={(o) => checkoutStock(stock, o.targetId, o.qty, o.note)} onUnfinished={(text) => setMessage({ text, error: true })} />}
       <FieldGrid fields={record.fields} onOpenRecord={onOpenRecord} onOpenAsset={onOpenAsset} />
       {record.fields.length === 0 && <p className="empty">No fields</p>}
-      {kind === 'accessories' && <HoldersSection id={id} canCheckin={record.can.checkin} version={version} onChanged={changed} onOpenRecord={onOpenRecord} />}
-      {kind === 'users' && <UserAccessoriesSection userId={id} onOpenRecord={onOpenRecord} />}
+      {(kind === 'accessories' || kind === 'licenses') && <HoldersSection kind={kind} id={id} canCheckin={record.can.checkin} version={version} onChanged={changed} onOpenRecord={onOpenRecord} />}
+      {kind === 'users' && <UserHeldSection kind="accessories" userId={id} onOpenRecord={onOpenRecord} />}
+      {kind === 'users' && <UserHeldSection kind="licenses" userId={id} onOpenRecord={onOpenRecord} />}
       {kind === 'users' && <UserAccessSection userId={id} canManage={canManage} />}
     </>
   )
