@@ -5,7 +5,7 @@ import { dueLabel } from '../../main/calendar'
 import { localDate } from '../../main/export'
 import type { StatusLabel } from '../../main/snipeit'
 import { OutcomeText } from './ListView'
-import { assigneeName, cleanTag, fieldKey, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type IncomingRepair, type RepairIntake, type Row, type Runner } from './workflows'
+import { assigneeName, cleanTag, fieldKey, handoutKind, NOT_SURE, pauseSays, type BulkCheckout, type BulkReturn, type Handout, type IncomingRepair, type RepairIntake, type Row, type Runner } from './workflows'
 
 // The Workflows built so far; the rest join as they're built. Ctrl+N follows glossary order from the start (WORKFLOWS).
 export const BUILT: Workflow[] = ['Bulk checkout', 'Bulk return', 'Repair intake', 'Incoming repair', 'Temp checkout']
@@ -297,6 +297,10 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   const [moved, setMoved] = useState<{ q: string; i: number } | null>(null)
   // Temp checkout: the due time's date and time while the Operator changes it, or null.
   const [editing, setEditing] = useState<{ date: string; time: string } | null>(null)
+  // Handouts (#188): what's typed into Also hand out, the matches it's for, and the quantity the next pick gets.
+  const [stockText, setStockText] = useState('')
+  const [stock, setStock] = useState<{ q: string; rows: Omit<Handout, 'qty'>[] } | null>(null)
+  const [qty, setQty] = useState('1')
   const temp = flow.workflow === 'Temp checkout'
   // Temp checkout's header reads the clock, so it re-renders now and then to roll past the end-of-day time.
   const [, tick] = useReducer((n: number) => n + 1, 0)
@@ -315,8 +319,16 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   const hi = moved?.q === q ? Math.min(moved.i, shown.length - 1) : 0
   // A new step or round starts the field empty; the User's Asset count changing mid-round keeps what's being typed.
   useEffect(() => {
-    setText(''); setList(null); setMoved(null); setEditing(null); field.current?.focus()
+    setText(''); setList(null); setMoved(null); setEditing(null); setStockText(''); setStock(null); field.current?.focus()
   }, [fieldKey(step)])
+  // Stock matches as the Operator types into Also hand out, after a short pause.
+  const sq = stockText.trim()
+  useEffect(() => {
+    if (!user || !sq) return setStock(null)
+    let stale = false
+    const timer = setTimeout(() => flow.suggestStock(sq).then((rows) => !stale && setStock({ q: sq, rows }), (e: Error) => !stale && setStatus(e.message)), 250)
+    return () => { stale = true; clearTimeout(timer) }
+  }, [sq, user])
   // Leaving closes an open confirm or Undo confirm without writing; the queue keeps running.
   useEffect(() => {
     flow.runner.enter()
@@ -364,6 +376,18 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
   function fix() {
     setStatus(flow.runner.fixOpen())
     field.current?.focus()
+  }
+  function handOut(h: Handout) {
+    flow.handOut(h).then(setStatus)
+    field.current?.focus()
+  }
+  // A pick is handed out now and kept as a button for the next Users.
+  function pickStock(r: Omit<Handout, 'qty'>) {
+    const h = { ...r, qty: Number(qty) || 1 }
+    flow.addQuick(h)
+    setStockText('')
+    setStock(null)
+    handOut(h)
   }
   function setDue(e: React.FormEvent) {
     e.preventDefault()
@@ -486,6 +510,28 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
             </div>
           )}
         </form>
+        {user && !temp && (
+          // Beside the scans: stock has no tag, so it's found by name and sent at once. Buttons keep focus in the scan field.
+          <section className="handouts" aria-label="Hand out">
+            <div className="actions">
+              {flow.quick.map((h) => (
+                <span key={`${h.kind}-${h.id}`} className="quick">
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handOut(h)} title={`${handoutKind[h.kind]}: hand out to ${user.name}`}>{h.name} ×{h.qty}</button>
+                  <button type="button" className="link" aria-label={`Forget ${h.name}`} title="Forget" onMouseDown={(e) => e.preventDefault()} onClick={() => flow.removeQuick(h)}>×</button>
+                </span>
+              ))}
+              <input value={stockText} onChange={(e) => (setStockText(e.target.value), setStatus(''))} onKeyDown={(e) => e.key === 'Enter' && stock?.q === sq && stock.rows[0] && (e.preventDefault(), pickStock(stock.rows[0]))}
+                placeholder="Also hand out an Accessory, Consumable or License…" aria-label="Also hand out" role="combobox" aria-expanded={!!sq && stock?.q === sq} aria-controls="handout-stock" />
+              <label className="dim">Quantity <input type="number" min={1} step={1} value={qty} onChange={(e) => setQty(e.target.value)} aria-label="Handout quantity" /></label>
+            </div>
+            {sq && stock?.q === sq && (
+              <ul className="pick-list" id="handout-stock" role="listbox" aria-label="Stock matches">
+                {stock.rows.map((r) => <li key={`${r.kind}-${r.id}`} role="option" aria-selected={false} onClick={() => pickStock(r)}>{r.name} <span className="dim">{handoutKind[r.kind]}</span></li>)}
+                {stock.rows.length === 0 && <li className="dim">No Accessory, Consumable or License matches "{sq}"</li>}
+              </ul>
+            )}
+          </section>
+        )}
         {!user && (
           <>
             <ul className="pick-list" id="checkout-users" role="listbox" aria-label="Users">
@@ -516,7 +562,7 @@ export function BulkCheckoutView({ flow, field, onOpenAsset, onSettings }: {
         : undoConfirm
         ? <KeysPanel keys={[['Enter', 'Undo'], ['Esc', 'Cancel']]} hint="Scanning another Asset Tag cancels the undo." />
         : user
-        ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}${temp ? ' until the due time' : ''}.`} />
+        ? <KeysPanel keys={[['Enter', 'Scan'], ['Esc', 'Done for this User'], [UNDO_KEY, 'Undo last']]} hint={`Each scanned Asset is confirmed, then checked out to ${user.name}${temp ? ' until the due time' : ''}.${temp ? '' : ' Also hand out finds an Accessory, Consumable or License by name and sends it at once.'}`} />
         : <KeysPanel keys={[['Enter', 'Find User'], ['↑ ↓', 'Move the highlight'], [UNDO_KEY, 'Undo last']]} hint="Type a name, email or employee number, or scan an ID card." />}
     </div>
   )

@@ -2108,7 +2108,9 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
 
     // Snipe-IT refuses more than it has left, with its reason. An Accessory goes as checkout_to_type user, which newer
     // Snipe-ITs need and older ones ignore; a Consumable names its User as assigned_to.
-    async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<void> {
+    // Resolves to the checkout rows (seats) it wrote, so a Workflow's Undo can check in exactly those: an Accessory's are
+    // read back (Snipe-IT answers with the last one only); a Consumable's never come back, so none.
+    async checkoutStock(kind: StockKind, id: number, { userId, qty, note }: StockCheckout): Promise<{ rowIds: number[] }> {
       if (kind !== 'accessories' && kind !== 'consumables' && kind !== 'licenses') throw new Error(`Unknown record: ${kind}`)
       checkId(id, 'record')
       checkId(userId, 'User')
@@ -2117,15 +2119,21 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
       // A License gives one seat per Checkout (Snipe-IT picks the next Free one), so qty seats take qty Checkouts; a
       // refusal partway says how many went through. Its note is "notes" (v8's checkout route).
       if (kind === 'licenses') {
+        const rowIds: number[] = []
         for (let i = 0; i < qty; i++) {
-          const result = await request(`/licenses/${id}/checkout`, { target_type: 'user', assigned_to: userId, ...(text && { notes: text }) })
+          const result = await request<{ payload?: { id?: number } | null }>(`/licenses/${id}/checkout`, { target_type: 'user', assigned_to: userId, ...(text && { notes: text }) })
           if (isError(result)) throw new Error(i ? `Checked out ${i} of ${qty}: ${reason(result.messages)}` : reason(result.messages))
+          if (typeof result.payload?.id === 'number') rowIds.push(result.payload.id)
         }
-        return
+        return { rowIds }
       }
       const to = kind === 'accessories' ? { checkout_to_type: 'user', assigned_user: userId } : { assigned_to: userId }
       const result = await request(`/${kind}/${id}/checkout`, { ...to, checkout_qty: qty, ...(text && { note: text }) })
       if (isError(result)) throw new Error(reason(result.messages))
+      if (kind === 'consumables') return { rowIds: [] }
+      // The User's newest qty rows are the ones just written (rows are numbered as they're made).
+      const theirs = (await accessoryHolders(id).catch((): AccessoryCheckout[] => [])).filter((h) => h.assignee.type === 'user' && h.assignee.id === userId)
+      return { rowIds: theirs.slice(-qty).map((h) => h.rowId) }
     },
 
     accessoryHolders,

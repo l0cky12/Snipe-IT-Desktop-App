@@ -1,7 +1,7 @@
 // The Workflows shell (#56): each Workflow's scan queue and Running list, and the Workflows built on it.
 // No React here: App keeps one of each Workflow for the session and re-renders on changed(); Snipe-IT is reached only
 // through the bridge passed in, so the tests drive it with a fake.
-import type { Asset, Assignee, CheckoutOptions, Failure, OpenMaintenance, SnipeItBridge, StatusLabel, UserCard } from '../../main/snipeit'
+import type { Asset, Assignee, CheckoutOptions, Failure, OpenMaintenance, SnipeItBridge, StatusLabel, StockKind, UserCard } from '../../main/snipeit'
 import { dueAt, dueLabel, realDate, realTime, stamp, type SchoolTimes } from '../../main/calendar'
 import { localDate } from '../../main/export'
 import { cleanText, parseWorkflowNote, repairCost, undoNote, userNotesLine, workflowNote } from '../../main/notes'
@@ -31,6 +31,8 @@ export type Row<C = unknown> = {
   sub?: string[]; copy?: string
   /** A line the Workflow adds between scans (Bulk checkout's "Checked out N Assets to <User>"); its text is the "what" cell. */
   line?: true
+  /** A row the Workflow settled itself, with no scan or Asset (a Handout): Undo re-reads nothing for it. */
+  stock?: true
 }
 export type Events = { changed: () => void; failed?: () => void }
 /** A done row: its result text, "what" cell, how to undo it, and any sub-results and line to copy. */
@@ -120,7 +122,7 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     events.changed()
   }
   const settle = (row: Row<C>, result: Outcome | { state: 'neutral'; text: string }, change: Partial<Row<C>> = {}) => {
-    announce = `${row.tag}: ${result.state === 'failed' ? result.reason : result.state === 'working' ? '' : result.text}`
+    announce = `${row.tag || row.name}: ${result.state === 'failed' ? result.reason : result.state === 'working' ? '' : result.text}`
     update(row.key, { ...change, result })
     if (result.state === 'failed') events.failed?.()
   }
@@ -400,6 +402,14 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
     enter() {
       away = false
     },
+    /** Adds a row the Workflow settled itself (a Handout: no scan, no queue), done with its undo, or failed. */
+    add(row: Pick<Row<C>, 'tag' | 'name' | 'what' | 'ctx' | 'undo'> & { result: Outcome }) {
+      // "Last" is about to change: an open Undo confirm closes.
+      confirming = null
+      const r: Row<C> = { key: ++next, time: hhmm(now()), assetId: null, before: null, stock: true, ...row }
+      rows = [r, ...rows]
+      settle(r, row.result)
+    },
     /** Adds a line row (e.g. a summary when a round ends). */
     addLine(ctx: C) {
       rows = [{ key: ++next, time: hhmm(now()), tag: '', assetId: null, name: '', what: '', ctx, result: { state: 'neutral', text: '' }, before: null, line: true }, ...rows]
@@ -429,19 +439,20 @@ export function createRunner<C>(bridge: Pick<SnipeItBridge, 'assetByTag' | 'keyR
       undoing = new Promise((r) => { release = r })
       events.changed()
       try {
-        const now = await bridge.assetByTag(row.tag)
+        // A Handout has no Asset to re-read; its undo ignores what it's given.
+        const now = row.stock ? null : await bridge.assetByTag(row.tag)
         if (mine !== generation) return
         // The tag may have been edited or given to another Asset since; undo only ever touches the Asset it acted on.
-        if (now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
-        const got = await run(now, () => mine === generation)
+        if (!row.stock && now?.id !== row.assetId) throw new Error(now ? `${row.tag} is another Asset's tag now` : `No Asset with tag ${row.tag} now`)
+        const got = await run(now as Asset, () => mine === generation)
         if (mine !== generation) return
         const left = (typeof got === 'string' && got) || undefined
-        announce = `${row.tag}: Undone${left ? `, but ${left}` : ''}`
+        announce = `${row.tag || row.name}: Undone${left ? `, but ${left}` : ''}`
         // An Undone row shows the Undo's own sub-results, never the ones from when it was done ("Maintenance closed").
         update(row.key, { result: { state: 'undone' }, undoFailed: left, sub: Array.isArray(got) ? got : undefined, copy: undefined })
       } catch (e) {
         if (mine !== generation) return
-        announce = `${row.tag}: ${(e as Error).message}`
+        announce = `${row.tag || row.name}: ${(e as Error).message}`
         update(row.key, { undoFailed: (e as Error).message })
         events.failed?.()
       } finally {
@@ -606,7 +617,12 @@ export type CheckoutCtx = CheckoutSession & { user: UserCard; round: number }
 const NO_OPTIONS: CheckoutSession = { expectedCheckin: '', note: '' }
 
 export const NO_SCHOOL_DAY = 'No School day in the next year. Check the School calendar in Settings.'
-type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard'>
+type CheckoutBridge = Pick<SnipeItBridge, 'assetByTag' | 'keyRefused' | 'checkin' | 'checkout' | 'getAsset' | 'exactUsers' | 'userSelectlist' | 'userCard' | 'lookup' | 'checkoutStock' | 'checkinAccessory' | 'checkinLicense'>
+/** A Handout (#188): an Accessory, Consumable or License to give the User from Bulk checkout, and how many. */
+export type Handout = { kind: StockKind; id: number; name: string; qty: number }
+export const handoutKind: Record<StockKind, string> = { accessories: 'Accessory', consumables: 'Consumable', licenses: 'License seat' }
+const isStock = (k: string): k is StockKind => Object.hasOwn(handoutKind, k)
+const sameStock = (a: Handout, b: Handout) => a.kind === b.kind && a.id === b.id
 
 // Bulk checkout (#57): find the User, then each scanned Asset is checked, confirmed and checked out to them until Done.
 // Someone else's Asset opens a choice instead: Move to this User, or Stop.
@@ -628,6 +644,8 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
   // Temp checkout: "Temp, due 2:50 pm"; Bulk checkout: "To <User>".
   const whatFor = (user: UserCard, due: string | null) => (!times ? `To ${user.name}` : due ? `Temp, due ${dueLabel(due, now(), true)}` : 'Temp')
   let options = NO_OPTIONS
+  // Handouts picked this session, kept across Users as buttons until forgotten (like Options).
+  let quick: Handout[] = []
   let round = 0
   // Bumped by every find, Done and reset, so a slower find never lands after a newer one or after Done.
   let attempt = 0
@@ -802,6 +820,54 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
     },
     /** Snipe-IT's User picker list for the typeahead. */
     suggest: (text: string) => bridge.userSelectlist(text),
+    /** Handouts picked this session, kept across Users until forgotten. */
+    get quick() { return quick },
+    addQuick(h: Handout) {
+      if (!quick.some((q) => sameStock(q, h))) quick = [...quick, h]
+      events.changed()
+    },
+    removeQuick(h: Handout) {
+      quick = quick.filter((q) => !sameStock(q, h))
+      events.changed()
+    },
+    /** Accessories, Consumables and Licenses whose name (or another field) holds text, for the Also hand out picker. */
+    async suggestStock(text: string): Promise<Omit<Handout, 'qty'>[]> {
+      const q = text.trim()
+      if (!q) return []
+      const found = await bridge.lookup(q)
+      return found.exact ? [] : found.others.flatMap((m) => (isStock(m.kind) && 'rows' in m ? m.rows.map((r) => ({ kind: m.kind as StockKind, id: r.id, name: r.name })) : []))
+    },
+    /** Hands h to the User now, with the Workflow note: no confirm, no queue (stock has no tag to scan). A row in the
+     *  Running list either way; done, its Undo checks in exactly the rows (seats) written. Returns why not ('' when sent). */
+    async handOut(h: Handout): Promise<string> {
+      if (step.step !== 'scan') return 'Find the User first'
+      if (times) return 'Temp checkout hands out Assets only'
+      if (!Number.isInteger(h.qty) || h.qty < 1) return 'Choose how many'
+      const { user, round } = step
+      const ctx: CheckoutCtx = { ...options, user, round }
+      const name = `${h.name} ×${h.qty}`
+      const what = `${handoutKind[h.kind]} to ${user.name}`
+      const mine = session
+      try {
+        const { rowIds } = await bridge.checkoutStock(h.kind, h.id, { userId: user.id, qty: h.qty, note: workflowNote(workflow, { text: options.note }) })
+        if (mine !== session) return ''
+        const back = (id: number) => (h.kind === 'licenses' ? bridge.checkinLicense(h.id, id, undoNote(workflow)) : bridge.checkinAccessory(id, undoNote(workflow)))
+        const run = async (_now: Asset, current: () => boolean) => {
+          for (const [i, id] of rowIds.entries()) {
+            if (!current()) return
+            await back(id).catch((e: Error) => { throw new Error(i ? `Checked in ${i} of ${rowIds.length}: ${e.message}` : e.message) })
+          }
+        }
+        const undo: Undo | string = h.kind === 'consumables' ? 'A Consumable is never checked in'
+          : rowIds.length < h.qty ? `Couldn't read back which ${h.qty === 1 ? 'one' : 'ones'} went out. Open ${user.name} to check ${h.qty === 1 ? 'it' : 'them'} in by hand.`
+          : { says: `${name} → ${user.name}`, run }
+        runner.add({ tag: '', name, what, ctx, result: { state: 'done', text: 'Handed out' }, undo })
+      } catch (e) {
+        if (mine !== session) return ''
+        runner.add({ tag: '', name, what, ctx, result: { state: 'failed', reason: (e as Error).message } })
+      }
+      return ''
+    },
     /** Enter in step 1: a single exact match (employee number or email, then username) goes straight to step 2; then the
      *  highlighted row of a list the Operator has seen; else the picker list, picked when it has one row, else listed. */
     async find(text: string, shown?: StatusLabel[] | null, hi = 0): Promise<{ users?: StatusLabel[]; status: string }> {
@@ -838,8 +904,10 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
     },
     /** "Checked out N Assets to <User>" for a round's line: its done rows, counted as they land. */
     summary(line: Row<CheckoutCtx>) {
-      const n = runner.rows.filter((r) => !r.line && r.ctx.round === line.ctx.round && r.result.state === 'done').length
-      return `Checked out ${n} Asset${n === 1 ? '' : 's'} to ${line.ctx.user.name}`
+      const done = runner.rows.filter((r) => !r.line && r.ctx.round === line.ctx.round && r.result.state === 'done')
+      const n = done.filter((r) => !r.stock).length
+      const m = done.length - n
+      return `Checked out ${n} Asset${n === 1 ? '' : 's'}${m ? ` and ${m} handout${m === 1 ? '' : 's'}` : ''} to ${line.ctx.user.name}`
     },
     /** Done (or Esc): skips an open confirm, ends this User with a line in the Running list, and goes back to step 1. */
     done() {
@@ -856,6 +924,7 @@ function checkoutFlow(workflow: 'Bulk checkout' | 'Temp checkout', bridge: Check
       step = { step: 'user' }
       dueSets.clear()
       options = NO_OPTIONS
+      quick = []
       runner.reset()
     },
   }
