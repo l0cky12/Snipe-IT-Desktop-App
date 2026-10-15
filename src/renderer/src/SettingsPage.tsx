@@ -18,6 +18,13 @@ export function unencryptedRemote(baseUrl: string) {
 /** The page's tabs: what talks to Snipe-IT, email and the Report Schedules, the Temp checkout rules, and this PC alone. */
 const TABS = [['snipeit', 'Snipe-IT'], ['mail', 'Email & Reports'], ['checkouts', 'Checkouts'], ['pc', 'This PC']] as const
 
+// Each Sidebar tick saves on top of the one before it, answered or not, so two quick ticks both stick. One that fails is undone.
+export function sidebarTicks<T>(start: SidebarPage[], save: (sidebar: SidebarPage[]) => Promise<T>) {
+  let current = start
+  const flip = (page: SidebarPage, on: boolean) => (current = on ? [...current, page] : current.filter((s) => s !== page))
+  return (page: SidebarPage, on: boolean) => save(flip(page, on)).catch((err: unknown) => { flip(page, !on); throw err })
+}
+
 // onStatusLabels: opens the Status Labels List, where they're added, edited and deleted (they're Snipe-IT's, not this PC's).
 export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }: { settings: Settings; onSaved: (value: Settings) => void; onAppearance: (value: Settings) => void; onStatusLabels: () => void }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
@@ -35,6 +42,7 @@ export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }
   const [calendar, setCalendar] = useState(() => formatCalendar(settings.schoolCalendar))
   const [mail, setMail] = useState<MailInput>({ ...settings.mail, password: '' })
   const [appearanceError, setAppearanceError] = useState('')
+  const [tickSidebar] = useState(() => sidebarTicks(settings.sidebar, (s) => window.settings.saveSidebar(s)))
   const [repairType, setRepairType] = useState(settings.repairTypeId?.toString() ?? '')
   const [recipient, setRecipient] = useState<{ to?: string; error?: string }>({})
   const setMailField = (change: Partial<MailInput>) => { setMail((m) => ({ ...m, ...change })); setMessage('') }
@@ -218,7 +226,7 @@ export function SettingsPage({ settings, onSaved, onAppearance, onStatusLabels }
       <h2>Sidebar</h2><p className="dim">On this PC only. The pages the sidebar lists; every page is still on All records, and Import only shows when your token may import.</p>
       {SIDEBAR_PAGES.map((p) => <label key={p} className="check"><input type="checkbox" checked={settings.sidebar.includes(p)} onChange={(e) => {
         setAppearanceError('')
-        window.settings.saveSidebar(e.target.checked ? [...settings.sidebar, p] : settings.sidebar.filter((s) => s !== p)).then(onAppearance, (err: Error) => setAppearanceError(err.message))
+        tickSidebar(p, e.target.checked).then(onAppearance, (err: Error) => setAppearanceError(err.message))
       }} /><span>{sidebarName[p]}</span></label>)}
     </section>
     {appearanceError && <p className="message error" role="alert">{appearanceError}</p>}

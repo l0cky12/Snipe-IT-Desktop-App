@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../main/config'
 import { SIDEBAR_DEFAULT } from '../../main/sidebar'
-import { SettingsPage, unencryptedRemote } from './SettingsPage'
+import { SettingsPage, sidebarTicks, unencryptedRemote } from './SettingsPage'
 
 describe('the unencrypted connection warning', () => {
   it('shows for HTTP to any other machine, LAN included', () => {
@@ -44,5 +44,24 @@ describe('the Settings tabs', () => {
     expect(panels.map((p) => p.headings)).toEqual([
       ['Connection', 'About', 'Repairs', 'Status Labels'], ['Email', 'Scheduled Reports'], ['Temp checkout', 'School calendar'], ['Running in the background', 'Appearance', 'Sidebar'],
     ])
+  })
+})
+
+describe('the Sidebar checkboxes', () => {
+  it('two quick ticks both stick, the second saved on top of the first before it answers', () => {
+    const saved: string[][] = []
+    const tick = sidebarTicks(['assets', 'users'], (s) => (saved.push(s), new Promise(() => {})))
+    tick('licenses', true)
+    tick('accessories', true)
+    tick('users', false)
+    expect(saved).toEqual([['assets', 'users', 'licenses'], ['assets', 'users', 'licenses', 'accessories'], ['assets', 'licenses', 'accessories']])
+  })
+
+  it("a tick that fails to save is left out of the next one", async () => {
+    const saved: string[][] = []
+    const tick = sidebarTicks(['assets'], async (s) => { saved.push(s); if (s.includes('licenses')) throw new Error('disk full') })
+    await expect(tick('licenses', true)).rejects.toThrow('disk full')
+    await tick('reports', true)
+    expect(saved.at(-1)).toEqual(['assets', 'reports'])
   })
 })
