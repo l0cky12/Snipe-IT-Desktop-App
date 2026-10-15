@@ -52,6 +52,7 @@ const snipeIt: SnipeItBridge = {
   checkinLicense: call('snipeit:checkinLicense'),
   userLicenses: call('snipeit:userLicenses'),
   returnLicense: call('snipeit:returnLicense'),
+  returnAll: call('snipeit:returnAll'),
   dashboard: call('snipeit:dashboard'),
   health: call('snipeit:health'),
   list: call('snipeit:list'),

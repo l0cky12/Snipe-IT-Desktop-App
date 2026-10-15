@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { HeldAccessory, AccessoryCheckout, RecordKind } from '../../main/snipeit'
+import type { HeldAccessory, AccessoryCheckout, RecordKind, ReturnedLine } from '../../main/snipeit'
 import { NOT_ALLOWED } from './App'
 
 // Runs one Checkin, then has the page reload; a refusal shows as Snipe-IT's reason.
@@ -69,17 +69,62 @@ export function HoldersSection({ kind, id, canCheckin, version, onChanged, onOpe
   )
 }
 
+// Check in everything (#190): every Accessory unit and License seat the User holds, one Checkin at a time with one note,
+// and a line per thing saying what happened; nothing is rolled back. Assets are Bulk return's. onChanged: when it ends.
+export function UserReturnAll({ userId, onChanged }: { userId: number; onChanged: () => void }) {
+  const [asking, setAsking] = useState(false)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [lines, setLines] = useState<ReturnedLine[] | null>(null)
+  const [error, setError] = useState('')
+  async function run() {
+    setBusy(true)
+    setError('')
+    try {
+      setLines(await window.snipeIt.returnAll(userId, note))
+      setAsking(false)
+      setNote('')
+      onChanged()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="access">
+      <div className="actions stock-note">
+        <button disabled={busy} onClick={() => (setAsking((a) => !a), setLines(null))}>{asking ? 'Cancel' : 'Check in everything…'}</button>
+        {asking && (
+          <>
+            <input value={note} onChange={(e) => setNote(e.target.value)} disabled={busy} placeholder="Checkin note (optional)" aria-label="Checkin note" />
+            <button disabled={busy} onClick={run}>{busy ? 'Checking in…' : 'Check in every Accessory and License seat'}</button>
+          </>
+        )}
+      </div>
+      {error && <p className="message error" role="alert">{error}</p>}
+      {lines && lines.length === 0 && <p className="dim stock-note" role="status">Nothing to check in</p>}
+      {lines && lines.length > 0 && (
+        <ul className="stock-note" role="status">
+          {lines.map((l, i) => <li key={i} className={l.failed ? 'late' : undefined}>{l.name}: {l.outcome}</li>)}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 // The Accessories (Licenses) a User holds; Checkin takes back one unit (seat) at a time, their oldest first.
-export function UserHeldSection({ kind, userId, onOpenRecord }: { kind: HeldKind; userId: number; onOpenRecord: (kind: RecordKind, id: number) => void }) {
+// version: bumped by Check in everything, so the list reloads.
+export function UserHeldSection({ kind, userId, version = 0, onOpenRecord }: { kind: HeldKind; userId: number; version?: number; onOpenRecord: (kind: RecordKind, id: number) => void }) {
   const [held, setHeld] = useState<HeldAccessory[] | null>(null)
   const [loadError, setLoadError] = useState('')
-  const [version, setVersion] = useState(0)
-  const { busy, error, checkin, noteInput } = useCheckin(() => setVersion((v) => v + 1))
+  const [own, setOwn] = useState(0)
+  const { busy, error, checkin, noteInput } = useCheckin(() => setOwn((v) => v + 1))
   useEffect(() => {
     let stale = false
     HELD[kind].held(userId).then((h) => !stale && (setHeld(h), setLoadError('')), (e: Error) => !stale && setLoadError(e.message))
     return () => { stale = true }
-  }, [kind, userId, version])
+  }, [kind, userId, version, own])
 
   return (
     <section className="access">

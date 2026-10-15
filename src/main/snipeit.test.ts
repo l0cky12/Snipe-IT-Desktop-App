@@ -3034,10 +3034,32 @@ describe('Accessory checkin', () => {
     await expect(createSnipeIt(config, fetch).returnAccessory(7, 999, 1)).rejects.toThrow('Not checked out to that User')
   })
 
-  it("a User's Accessories are counted per Accessory", async () => {
+  it("a User's Accessories are counted per Accessory, from unit rows (v8.8) or Accessory rows (earlier)", async () => {
     const acc = (id: number, name: string) => ({ id, name, available_actions: { checkin: true } })
     const { fetch } = fakeFetch({ '/users/311/accessories': { body: { total: 3, rows: [acc(7, 'Charger'), acc(7, 'Charger'), acc(8, 'Mouse')] } } })
     expect((await createSnipeIt(config, fetch).userAccessories(311)).map(({ name, count }) => [name, count])).toEqual([['Charger', 2], ['Mouse', 1]])
+    const unit = (id: number, accessory: number, name: string) => ({ id, accessory: { id: accessory, name }, name, available_actions: { checkin: false } })
+    const v88 = fakeFetch({ '/users/311/accessories': { body: { total: 3, rows: [unit(21, 7, 'Charger'), unit(25, 7, 'Charger'), unit(30, 8, 'Mouse')] } } })
+    expect((await createSnipeIt(config, v88.fetch).userAccessories(311)).map(({ id, count, can }) => [id, count, can.checkin])).toEqual([[7, 2, false], [8, 1, false]])
+  })
+
+  it('Check in everything returns each unit and seat one at a time, a line per thing, and carries on past a refusal', async () => {
+    const checkedIn = { body: { status: 'success', messages: 'Checked in.', payload: null } }
+    const unit = (id: number, accessory: number, name: string) => ({ id, accessory: { id: accessory, name }, name })
+    const seatRow = (id: number, license: number, name: string) => ({ id, license: { id: license, name }, name })
+    const seat = (id: number, user: number) => ({ id, assigned_user: { id: user, name: 'Jordan Reyes' }, assigned_asset: null, notes: null, updated_at: null })
+    const { fetch, requests } = fakeFetch({
+      '/users/311/accessories': { body: { total: 3, rows: [unit(21, 7, 'Charger'), unit(25, 7, 'Charger'), unit(30, 8, 'Mouse')] } },
+      '/users/311/licenses': { body: { total: 1, rows: [seatRow(2, 4, 'Office')] } },
+      '/accessories/7/checkedout': holders, '/accessories/8/checkedout': { body: { total: 1, rows: [row(30, 311, 'Jordan Reyes')] } },
+      'POST /accessories/2/checkin': checkedIn, 'POST /accessories/5/checkin': { body: { status: 'error', messages: 'Not allowed.', payload: null } }, 'POST /accessories/30/checkin': checkedIn,
+      '/licenses/4/seats': { body: { total: 2, rows: [seat(2, 311), seat(9, 40)] } }, 'POST /licenses/4/checkin': checkedIn,
+    })
+    expect(await createSnipeIt(config, fetch).returnAll(311, 'left')).toEqual([
+      { name: 'Charger', outcome: 'Checked in 1 of 2: Not allowed.', failed: true }, { name: 'Mouse', outcome: 'Checked in 1' }, { name: 'Office', outcome: 'Checked in 1' },
+    ])
+    expect(checkins(requests)).toEqual(['/accessories/2/checkin', '/accessories/5/checkin', '/accessories/30/checkin', '/licenses/4/checkin'])
+    expect(requests.at(-1)!.body).toEqual({ seat_id: 2, notes: 'left' })
   })
 })
 
