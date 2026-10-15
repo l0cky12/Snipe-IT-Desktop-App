@@ -348,12 +348,12 @@ const olderThan = (a: readonly number[], b: readonly number[]) => {
 
 /** The Reports: the Activity Report over a date range, the Overdue and Warranty expiring lists in full, the audit Reports, End of life, two snapshots, Maintenances, Temp checkout history, Damaged,
  * and Duplicates: every Asset whose Serial or Asset Tag another Asset shares. */
-export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged', 'duplicates'] as const
+export const REPORTS = ['activity', 'overdue', 'expiring', 'auditDue', 'auditLate', 'lastAudited', 'endOfLife', 'statusLocation', 'checkedOut', 'maintenances', 'tempHistory', 'damaged', 'duplicates', 'custom'] as const
 export type ReportKind = (typeof REPORTS)[number]
 export const REPORT_NAMES: Record<ReportKind, string> = {
   activity: 'Activity Report', overdue: 'Overdue', expiring: 'Warranty expiring', auditDue: 'Audit due', auditLate: 'Audit late', lastAudited: 'Last audited', endOfLife: 'End of life',
   statusLocation: 'Assets by Status Label and Location', checkedOut: 'Checked out per User', maintenances: 'Maintenances',
-  tempHistory: 'Temp checkout history', damaged: 'Damaged', duplicates: 'Duplicate Serials and Asset Tags',
+  tempHistory: 'Temp checkout history', damaged: 'Damaged', duplicates: 'Duplicate Serials and Asset Tags', custom: 'Custom Asset Report',
 }
 /** The Reports whose Schedule sets their dates relative to each send (see Schedule's range); the others look ahead or take every date. */
 export const RANGED_REPORTS: readonly ReportKind[] = ['activity', 'overdue', 'lastAudited', 'maintenances', 'tempHistory']
@@ -371,9 +371,9 @@ export const itemTypeName: Record<(typeof ACTIVITY_ITEM_TYPES)[number], string> 
 /**
  * from/to are "YYYY-MM-DD", both included; what they bound depends on the report (when it happened, Expected Checkin, warranty
  * end, next audit, last audit, End of life, Maintenance start, Checkout day). locationId/categoryId: Snipe-IT ids, for LOCATION_CATEGORY_REPORTS. search: Snipe-IT's own
- * search of the Activity Report (notes, among other things).
+ * search of the Activity Report (notes, among other things). columns, filters: the Custom Asset Report's (see CUSTOM_COLUMN_GROUPS, CUSTOM_FILTERS).
  */
-export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string }
+export type ReportQuery = { from?: string; to?: string; itemType?: string; actionType?: string; locationId?: string; categoryId?: string; search?: string; columns?: string[]; filters?: Record<string, string> }
 /** A report as a table of text, ready to show or export. capped: more rows matched than a report holds. */
 export type Report = { columns: string[]; rows: string[][]; capped: boolean }
 
@@ -485,7 +485,7 @@ type RawAsset = {
   location: Named
   rtd_location: Named
   // employee_number only for a User the Operator may view (Snipe-IT's AssetsTransformer, v8.7+).
-  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null } | null
+  assigned_to: { id: number; name: string; type: Assignee['type']; username?: string | null; employee_number?: string | null; email?: string | null } | null
   last_checkout?: { date?: string; datetime?: string } | null
   purchase_date: { date: string } | null
   warranty_expires: { date: string } | null
@@ -498,6 +498,22 @@ type RawAsset = {
   // Formatted text, e.g. "1,234.56"; null when none.
   purchase_cost?: string | number | null
   available_actions?: unknown
+  // The rest the Custom Asset Report reads.
+  company?: Named | null
+  manufacturer?: Named | null
+  supplier?: Named | null
+  model_number?: string | null
+  order_number?: string | null
+  // Rendered to inline HTML by Snipe-IT (see markdownOf).
+  notes?: string | null
+  // "36 months", or null.
+  warranty_months?: string | null
+  created_at?: { date?: string; datetime?: string } | null
+  updated_at?: { date?: string; datetime?: string } | null
+  deleted_at?: { date?: string; datetime?: string } | null
+  last_checkin?: { date?: string; datetime?: string } | null
+  // Under each Custom Field's name: its db column and the Asset's value.
+  custom_fields?: Record<string, { field?: string; value?: unknown } | null>
 }
 type RawActivity = {
   id: number
@@ -976,6 +992,82 @@ function fieldsOf(raw: RawRow): Field[] {
 }
 
 // `today` is injectable so the date rules can be tested with a fixed date.
+/**
+ * The Custom Asset Report (Snipe-IT's Reports → Custom Asset Report): the Operator picks which Asset fields are its
+ * columns and narrows the Assets, then exports or emails it, or saves it as a template (a Saved Report). Column keys are
+ * Snipe-IT's own checkbox names, so a template reads like its form; a Custom Field's key is its db column (_snipeit_…).
+ */
+export type CustomColumn = { key: string; label: string }
+const stamp = (d: { date?: string; datetime?: string } | null | undefined) => (d?.datetime ?? d?.date)?.slice(0, 16) ?? ''
+// ponytail: the fields an Asset row carries. Snipe-IT's form also offers the Assignee's manager, department, title, phone
+// and address, and each Location's address; those need a request per User or Location, so add them when asked for.
+const CUSTOM_COLUMNS: { group: string; key: string; label: string; cell: (a: RawAsset, baseUrl: string) => string }[] = [
+  { group: 'Asset', key: 'id', label: 'ID', cell: (a) => String(a.id) },
+  { group: 'Asset', key: 'company', label: 'Company', cell: (a) => nameOf(a.company) },
+  { group: 'Asset', key: 'asset_tag', label: 'Asset Tag', cell: (a) => a.asset_tag },
+  { group: 'Asset', key: 'asset_name', label: 'Name', cell: (a) => a.name ?? '' },
+  { group: 'Asset', key: 'manufacturer', label: 'Manufacturer', cell: (a) => nameOf(a.manufacturer) },
+  { group: 'Asset', key: 'model', label: 'Asset Model', cell: (a) => nameOf(a.model) },
+  { group: 'Asset', key: 'model_number', label: 'Model No.', cell: (a) => text(a.model_number) },
+  { group: 'Asset', key: 'category', label: 'Category', cell: (a) => nameOf(a.category) },
+  { group: 'Asset', key: 'serial', label: 'Serial', cell: (a) => a.serial ?? '' },
+  { group: 'Asset', key: 'purchase_date', label: 'Purchase date', cell: (a) => dayOf(a.purchase_date) ?? '' },
+  { group: 'Asset', key: 'purchase_cost', label: 'Purchase cost', cell: (a) => plainNumber(a.purchase_cost) },
+  { group: 'Asset', key: 'eol', label: 'End of life', cell: (a) => dayOf(a.asset_eol_date) ?? '' },
+  { group: 'Asset', key: 'warranty', label: 'Warranty (months)', cell: (a) => plainNumber(a.warranty_months) },
+  { group: 'Asset', key: 'warranty_expires', label: 'Warranty ends', cell: (a) => dayOf(a.warranty_expires) ?? '' },
+  { group: 'Asset', key: 'order', label: 'Order number', cell: (a) => text(a.order_number) },
+  { group: 'Asset', key: 'supplier', label: 'Supplier', cell: (a) => nameOf(a.supplier) },
+  { group: 'Asset', key: 'location', label: 'Location', cell: (a) => nameOf(a.location) },
+  { group: 'Asset', key: 'rtd_location', label: 'Default Location', cell: (a) => nameOf(a.rtd_location) },
+  // As Snipe-IT's own export writes it: the label, then its type in brackets.
+  { group: 'Asset', key: 'status', label: 'Status Label', cell: (a) => (a.status_label ? `${a.status_label.name}${a.status_label.status_meta ? ` (${a.status_label.status_meta})` : ''}` : '') },
+  { group: 'Asset', key: 'checkout_date', label: 'Checked out', cell: (a) => stamp(a.last_checkout) },
+  { group: 'Asset', key: 'checkin_date', label: 'Last checkin', cell: (a) => stamp(a.last_checkin) },
+  { group: 'Asset', key: 'expected_checkin', label: 'Expected Checkin', cell: (a) => expectedCheckinOf(a.expected_checkin) ?? '' },
+  { group: 'Asset', key: 'created_at', label: 'Created', cell: (a) => stamp(a.created_at) },
+  { group: 'Asset', key: 'updated_at', label: 'Updated', cell: (a) => stamp(a.updated_at) },
+  { group: 'Asset', key: 'deleted_at', label: 'Deleted', cell: (a) => stamp(a.deleted_at) },
+  { group: 'Asset', key: 'last_audit_date', label: 'Last audited', cell: (a) => dayOf(a.last_audit_date) ?? '' },
+  { group: 'Asset', key: 'next_audit_date', label: 'Next audit', cell: (a) => dayOf(a.next_audit_date) ?? '' },
+  { group: 'Asset', key: 'notes', label: 'Notes', cell: (a) => markdownOf(a.notes ?? '') },
+  { group: 'Asset', key: 'url', label: 'URL', cell: (a, baseUrl) => `${baseUrl}/hardware/${a.id}` },
+  { group: 'Checked out to', key: 'assigned_to', label: 'Assignee', cell: (a) => a.assigned_to?.name ?? '' },
+  { group: 'Checked out to', key: 'username', label: 'Username', cell: (a) => a.assigned_to?.username ?? '' },
+  { group: 'Checked out to', key: 'email', label: 'Email', cell: (a) => a.assigned_to?.email ?? '' },
+  { group: 'Checked out to', key: 'employee_num', label: 'Employee No.', cell: (a) => a.assigned_to?.employee_number ?? '' },
+]
+const CUSTOM_CELLS = new Map(CUSTOM_COLUMNS.map((c) => [c.key, c]))
+/** The columns to pick from, grouped as Snipe-IT's form groups them; the Custom Fields come from customFieldList(). */
+export const CUSTOM_COLUMN_GROUPS: { name: string; columns: CustomColumn[] }[] = ['Asset', 'Checked out to']
+  .map((name) => ({ name, columns: CUSTOM_COLUMNS.filter((c) => c.group === name).map(({ key, label }) => ({ key, label })) }))
+const CUSTOM_FIELD_KEY = /^_snipeit_[a-z0-9_]+$/
+const customFieldValue = (a: RawAsset, key: string) => String(Object.values(a.custom_fields ?? {}).find((c) => c?.field === key)?.value ?? '')
+// The Asset dates the Custom Asset Report narrows by (<name>_from and <name>_to, "YYYY-MM-DD", both included), and each one's
+// day. Checked out isn't one: its range matches any Checkout in it (see customReport), as Snipe-IT's report reads its log.
+const CUSTOM_DATES: Record<string, (a: RawAsset) => string | null> = {
+  purchase: (a) => dayOf(a.purchase_date), created: (a) => dayOf(a.created_at), checkin: (a) => dayOf(a.last_checkin), expected_checkin: (a) => dayOf(a.expected_checkin),
+  eol: (a) => dayOf(a.asset_eol_date), last_audit: (a) => dayOf(a.last_audit_date), next_audit: (a) => dayOf(a.next_audit_date), updated: (a) => dayOf(a.updated_at),
+}
+/** The date ranges' names, by their key (purchase: Purchase date, …), in the form's order. */
+export const CUSTOM_DATE_LABELS: Record<string, string> = {
+  purchase: 'Purchase date', created: 'Created', checkout: 'Checked out', checkin: 'Last checkin', expected_checkin: 'Expected Checkin',
+  eol: 'End of life', last_audit: 'Last audited', next_audit: 'Next audit', updated: 'Updated',
+}
+/**
+ * The Custom Asset Report's filters, in Snipe-IT's names. An id, or the Order number as typed, Snipe-IT applies; the rest
+ * the app applies after reading the Assets, as Snipe-IT's own report applies them in SQL the API doesn't offer: a date
+ * range per CUSTOM_DATES, a Purchase cost range, Archived Assets left out, checked out or not, and deleted Assets included or alone.
+ */
+export const CUSTOM_FILTERS: Record<string, 'id' | 'text' | 'date' | 'number' | readonly string[]> = {
+  company_id: 'id', location_id: 'id', rtd_location_id: 'id', supplier_id: 'id', model_id: 'id', manufacturer_id: 'id', category_id: 'id', status_id: 'id',
+  order_number: 'text',
+  ...Object.fromEntries(Object.keys(CUSTOM_DATE_LABELS).flatMap((d) => [[`${d}_from`, 'date'], [`${d}_to`, 'date']])),
+  purchase_cost_min: 'number', purchase_cost_max: 'number',
+  exclude_archived: ['1'], assignment: ['assigned', 'unassigned'], deleted: ['include', 'only'],
+}
+const CUSTOM_FILTER_FORMS = { id: /^[1-9]\d*$/, text: /^[^\r\n]{1,100}$/, date: /^\d{4}-\d{2}-\d{2}$/, number: /^\d{1,12}(\.\d{1,2})?$/ }
+
 export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, today = () => new Date()) {
   const api = `${config.baseUrl.replace(/\/+$/, '')}/api/v1`
 
@@ -1362,6 +1454,83 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     }))
   }
 
+  // Every Custom Field, for the Custom Asset Report's column picker: its db column (the column's key) and its name.
+  async function customFieldList(): Promise<CustomColumn[]> {
+    try {
+      return (await allRows<{ name: string; db_column_name: string }>('/fields')).map((f) => ({ key: f.db_column_name, label: f.name }))
+    } catch (e) {
+      if ((e as Partial<Failure>).kind !== 'forbidden') throw e
+      // A key without customfields.view still reads each Asset's fields, so the Assets name them. ponytail: every Asset
+      // is read (as the Report reads them anyway); a field no Asset has a value for yet is missed.
+      const seen = new Map<string, string>()
+      for (const a of await allRows<RawAsset>('/hardware')) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) seen.set(c.field, label)
+      return [...seen].map(([key, label]) => ({ key, label }))
+    }
+  }
+
+  // The Custom Asset Report. Snipe-IT applies the id and Order number filters; the rest are applied here (see CUSTOM_FILTERS).
+  // Archived Assets come from their own list unless left out or a Status Label is asked for (as Duplicates reads them,
+  // Snipe-IT's "show archived in list" being off); deleted ones from theirs (status=Deleted, the only way the list gives
+  // them) when asked for, alone for Only deleted. columns and filters arrive from the screen over IPC.
+  async function customReport(columns: unknown, filters: unknown): Promise<Report> {
+    if (!Array.isArray(columns) || !columns.length) throw new Error('Choose at least one column.')
+    for (const c of columns) if (typeof c !== 'string' || !(CUSTOM_CELLS.has(c) || CUSTOM_FIELD_KEY.test(c))) throw new Error(`Unknown column: ${c}`)
+    if (typeof filters !== 'object' || filters === null) throw new Error('Invalid filters')
+    const f: Record<string, string> = {}
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === '' || value === undefined) continue
+      const form = Object.hasOwn(CUSTOM_FILTERS, key) ? CUSTOM_FILTERS[key] : undefined
+      if (!form || typeof value !== 'string' || !(typeof form === 'string' ? CUSTOM_FILTER_FORMS[form].test(value) : form.includes(value))) throw new Error(`Invalid filter: ${key}`)
+      f[key] = value
+    }
+    const params = new URLSearchParams(Object.entries(f).filter(([key]) => CUSTOM_FILTERS[key] === 'id' || CUSTOM_FILTERS[key] === 'text'))
+    const list = (status?: string) => allRows<RawAsset>(`/hardware?${params}${status ? `&status=${status}` : ''}`)
+    const lists = f.deleted === 'only' ? [list('Deleted')]
+      : [list(), ...(!f.exclude_archived && !f.status_id ? [list('Archived')] : []), ...(f.deleted ? [list('Deleted')] : [])]
+    // Each list in id order (see allRows), merged in id order; an Asset on two lists (a shared Archived one) counts once.
+    const byId = new Map<number, RawAsset>()
+    for (const rows of await Promise.all(lists)) for (const a of rows) byId.has(a.id) || byId.set(a.id, a)
+    const rows = [...byId.values()].sort((a, b) => a.id - b.id)
+    // A Checked out range matches any Checkout in it, not only the last (an Asset out in September and again in October is
+    // in September's), as Snipe-IT's report does: the log's Checkouts, read down to the range's start.
+    let checkedOut: Set<number> | null = null
+    if (f.checkout_from || f.checkout_to) {
+      checkedOut = new Set()
+      for await (const r of activitySince(f.checkout_from, 'checkout')) {
+        const day = dayOf(r.created_at)
+        if (r.item?.type === 'asset' && day && (!f.checkout_to || day <= f.checkout_to)) checkedOut.add(r.item.id)
+      }
+    }
+    const kept = rows.filter((a) => {
+      if (checkedOut && !checkedOut.has(a.id)) return false
+      if (f.exclude_archived && [a.status_label?.status_type, a.status_label?.status_meta].includes('archived')) return false
+      if (f.assignment === 'assigned' && !a.assigned_to) return false
+      if (f.assignment === 'unassigned' && a.assigned_to) return false
+      // A blank cost or date is never in a range, as Snipe-IT's own report has it.
+      const cost = a.purchase_cost === null || a.purchase_cost === undefined ? null : Number(plainNumber(a.purchase_cost))
+      if (f.purchase_cost_min && !(cost !== null && cost >= Number(f.purchase_cost_min))) return false
+      if (f.purchase_cost_max && !(cost !== null && cost <= Number(f.purchase_cost_max))) return false
+      for (const [name, dayOfAsset] of Object.entries(CUSTOM_DATES)) {
+        const [from, to] = [f[`${name}_from`], f[`${name}_to`]]
+        if (!from && !to) continue
+        const day = dayOfAsset(a)
+        if (!day || (from && day < from) || (to && day > to)) return false
+      }
+      return true
+    })
+    // A Custom Field column is headed with the field's name: as the Assets carry it, or else from Snipe-IT's list of
+    // fields. A key no Asset has and the list can't name (the Operator's key may not read /fields) stays as the key.
+    const fieldNames = new Map<string, string>()
+    for (const a of kept) for (const [label, c] of Object.entries(a.custom_fields ?? {})) if (c?.field) fieldNames.set(c.field, label)
+    if (columns.some((c) => CUSTOM_FIELD_KEY.test(c) && !fieldNames.has(c))) for (const c of await customFieldList().catch(() => [])) fieldNames.set(c.key, c.label)
+    const baseUrl = config.baseUrl.replace(/\/+$/, '')
+    return {
+      columns: columns.map((c) => CUSTOM_CELLS.get(c)?.label ?? fieldNames.get(c) ?? c),
+      rows: kept.slice(0, REPORT_MAX).map((a) => columns.map((c) => CUSTOM_CELLS.get(c)?.cell(a, baseUrl) ?? customFieldValue(a, c))),
+      capped: kept.length > REPORT_MAX,
+    }
+  }
+
   // The Activity Report newest first, a page at a time: the next page is asked for only when the caller reads on past this
   // one, so a caller that stops once it's past its start asks no further. Each page starts where the last one's rows ended:
   // a server may cap pages below PAGE_LIMIT.
@@ -1511,9 +1680,10 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     // newest first, keeps what's in range, and stops once it's past `from`. Overdue and Warranty expiring use the dashboard's rules.
     // Snipe-IT decides which Assets are Audit due (its Audit warning setting) and Audit late; Last audited and End of life read every Asset.
     // Duplicates groups every Asset by Serial, then by Asset Tag, ignoring case and outer spaces; a blank Serial matches nothing.
-    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search }: ReportQuery = {}): Promise<Report> {
+    async report(kind: ReportKind, { from, to, itemType, actionType, locationId, categoryId, search, columns, filters }: ReportQuery = {}): Promise<Report> {
       // The query arrives from the screen over IPC.
       if (!REPORTS.includes(kind)) throw new Error(`Unknown report: ${kind}`)
+      if (kind === 'custom') return customReport(columns, filters ?? {})
       for (const date of [from, to]) if (date !== undefined && date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error('Dates must be YYYY-MM-DD')
       if (itemType && !(ACTIVITY_ITEM_TYPES as readonly string[]).includes(itemType)) throw new Error(`Unknown record type: ${itemType}`)
       if (actionType && !(ACTIVITY_ACTIONS as readonly string[]).includes(actionType)) throw new Error(`Unknown action: ${actionType}`)
@@ -1782,6 +1952,7 @@ export function createSnipeIt(config: Config, fetch: typeof globalThis.fetch, to
     },
 
     customFields,
+    customFieldList,
 
     // Deletes a record; Snipe-IT refuses (e.g. an Asset still checked out) with its reason.
     async remove(kind: DeleteKind, id: number): Promise<void> {

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Activity, Boxes, Briefcase, Building2, Cable, Check, ChevronDown, ChevronRight, Copy, Cpu, Droplet, Factory, FileSpreadsheet, FileUp, KeyRound, Laptop, LayoutGrid, MapPin, Package, ScanBarcode, Settings as SettingsIcon, ShieldCheck, Tag, Tags, Truck, Users, Workflow as WorkflowsIcon, X, type LucideIcon } from 'lucide-react'
 import { ASSET_PIECES, ASSET_VIEWS, DASHBOARD_PIECES, MIN_SNIPEIT, healthLines, lateness, overdueList, toSummary, type HealthPiece, type Asset, type AssetView, type Assignee, type AssetMatch, type AssetSummary, type AssetWithHistory, type Audited, type AuditOptions, type CheckinOptions, type CheckoutOptions, type CheckoutTarget, type AuditDay, type Dashboard, type DashboardPiece, type EditKind, type Failed, type Health, type HealthLine, type ListKind, type Matches, type OtherKind, type RecordKind, type SearchKind, type StatusLabel, type Tally, type Week } from '../../main/snipeit'
 import type { SavedReport, Settings } from '../../main/config'
+import { SIDEBAR_DEFAULT } from '../../main/sidebar'
 import { END_OF_DAY } from '../../main/calendar'
 import { WORKFLOWS, cleanText, type Workflow } from '../../main/notes'
 import type { Release } from '../../main/release'
@@ -95,8 +96,8 @@ const WORKFLOWS_OPEN_KEY = 'sidebarWorkflowsOpen'
 
 // Session only: recent scans live in memory and are never written to disk.
 const RECENT_MAX = 20
-// The Lists in the sidebar's Browse group; every List (these and the rest) is on the All records page.
-const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity']
+// The Lists the sidebar's Browse group can list (Settings chooses which); every List (these and the rest) is on the All records page.
+const LISTS: ListKind[] = ['assets', 'users', 'locations', 'models', 'activity', 'licenses', 'accessories', 'consumables']
 const listIcon: Record<ListKind, LucideIcon> = {
   assets: Laptop, users: Users, locations: MapPin, models: Package, activity: Activity, licenses: KeyRound, accessories: Cable, consumables: Droplet,
   components: Cpu, categories: Tags, manufacturers: Factory, suppliers: Truck, departments: Briefcase, companies: Building2, statuslabels: Tag,
@@ -379,8 +380,9 @@ export function App() {
     window.snipeIt.getAsset(id).then((full) => setPanel((p) => reloadPanel(p, id, n, full)), (e: Error) => epoch === bulkEpoch.current && setMessage({ text: e.message, error: true }))
   }
   const dropPanel = (id: number) => setPanel((p) => ifShowing(p, id, () => null))
-  // The All records item stands for every page not in the sidebar.
-  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !LISTS.includes(page as ListKind))
+  // The pages Settings shows in the sidebar; a hidden page is still on All records, in search results and on its shortcut.
+  const listed = new Set<string>(settings?.sidebar ?? SIDEBAR_DEFAULT)
+  const lists = LISTS.filter((k) => listed.has(k))
   // Scans waiting or working across Workflows, so an Operator who left mid-run sees work is still going.
   const workflowsBusy = Object.values(runners).reduce((n, r) => n + r!.pending, 0)
   // The badge turns red while any Workflow is Paused, for an Operator who left it.
@@ -390,19 +392,32 @@ export function App() {
   useEffect(() => void window.workflows.unsent(unsent), [unsent])
   const openSettings = () => (cancel(), setShowSettings(true))
   const show = (p: 'dashboard' | 'workflows' | 'reports' | 'import' | 'records') => (cancel(), setShowSettings(false), setView({ page: p }))
-  // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
   type Page = { label: string; Icon: LucideIcon; sel: boolean; open: () => void; badge?: number; paused?: boolean; aria?: string; sub?: boolean; kbd?: string; toggle?: { open: boolean; flip: () => void } }
+  // The pages Settings hides from the sidebar; All records still opens them.
+  const unlisted: Omit<Page, 'sel'>[] = [
+    { label: 'Workflows', Icon: WorkflowsIcon, open: () => show('workflows') }, ...(canImport ? [{ label: 'Import', Icon: FileUp, open: () => show('import') }] : []),
+    { label: 'Dashboard', Icon: LayoutGrid, open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, open: () => show('reports') },
+  ].filter((p) => !listed.has(p.label.toLowerCase()))
+  // The All records item stands for every page not in the sidebar.
+  const elsewhere = page === 'records' || page === 'record' || page === 'edit' || page === 'groups' || (!!page && page in listName && !lists.includes(page as ListKind))
+    || (!!page && !listed.has(page === 'workflow' ? 'workflows' : page) && ['workflows', 'workflow', 'import', 'dashboard', 'reports'].includes(page))
+  // The sidebar's pages, grouped by what the Operator is doing: Browse (the Lists), Act (the Workflows, Import), Admin.
   const pages: Page[][] = [
-    [...LISTS.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
+    [...lists.map((k) => ({ label: listName[k], Icon: listIcon[k], sel: page === k, open: () => go(k) })), { label: 'All records', Icon: Boxes, sel: elsewhere, open: () => show('records') }],
     [
-      // With the Workflows hidden, the Workflows item stands for whichever is open.
-      { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
-        toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
-        aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
-      ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
-      ...(canImport ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
+      ...(listed.has('workflows') ? [
+        // With the Workflows hidden, the Workflows item stands for whichever is open.
+        { label: 'Workflows', Icon: WorkflowsIcon, sel: page === 'workflows' || (!workflowsOpen && page === 'workflow'), open: () => show('workflows'), badge: workflowsBusy, paused: workflowsPaused,
+          toggle: { open: workflowsOpen, flip: () => setWorkflowsOpen((o) => !o) },
+          aria: `Workflows${workflowsPaused ? ', paused' : ''}${workflowsBusy ? `, ${workflowsBusy} waiting or working` : ''}` },
+        ...(workflowsOpen ? BUILT : []).map((w) => ({ label: w, Icon: workflowIcon[w]!, sel: view?.page === 'workflow' && view.workflow === w, open: () => openWorkflow(w), sub: true, kbd: shortcut(w) })),
+      ] : []),
+      ...(canImport && listed.has('import') ? [{ label: 'Import', Icon: FileUp, sel: page === 'import', open: () => show('import') }] : []),
     ],
-    [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }, { label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }],
+    [
+      ...(listed.has('dashboard') ? [{ label: 'Dashboard', Icon: LayoutGrid, sel: page === 'dashboard', open: () => show('dashboard') }] : []),
+      ...(listed.has('reports') ? [{ label: 'Reports', Icon: FileSpreadsheet, sel: page === 'reports', open: () => show('reports') }] : []),
+    ],
   ]
 
   // What the sidebar says, under the scan box.
@@ -457,6 +472,8 @@ export function App() {
             {recent.length > 0 && <AssetList label="Recent scans" assets={recent} selected={selected} onPick={(a) => pick(a.id)} />}
           </div>
           {['Browse', 'Act', 'Admin'].map((name, i) => {
+            // A group with every page hidden in Settings isn't listed.
+            if (pages[i].length === 0) return null
             const open = !!openGroups[name]
             const badge = pages[i].reduce((n, p) => n + (p.badge ?? 0), 0)
             const paused = pages[i].some((p) => p.paused)
@@ -487,7 +504,7 @@ export function App() {
         : view?.page === 'workflow' && view.workflow === 'Repair intake' ? <RepairIntakeView flow={repairIntake} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' && view.workflow === 'Incoming repair' ? <IncomingRepairView flow={incomingRepair} field={workflowField} repairTypeId={settings?.repairTypeId ?? null} onOpenAsset={pick} onSettings={openSettings} />
         : view?.page === 'workflow' ? <BulkReturnView flow={bulkReturn} locations={locations} field={workflowField} onOpenAsset={pick} onDone={() => (cancel(), bulkReturn.done(), setView({ page: 'workflows' }))} onSettings={openSettings} />
-        : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} />
+        : view?.page === 'records' ? <RecordsIndex onGo={go} onGroups={() => (cancel(), setView({ page: 'groups' }))} pages={unlisted} />
         : view?.page === 'groups' ? <GroupsView canManage={canManage} onDrill={go} />
         : view?.page === 'record' ? <RecordView key={view.n} kind={view.kind} id={view.id} onOpenRecord={openRecord} onOpenAsset={pick} onDrill={go} onEdit={editRecord} onDeleted={deleted} canManage={canManage} />
         : view?.page === 'edit' ? <RecordForm key={view.n} kind={view.kind} id={view.id} onSaved={(id) => (reloadLabels(view.kind), shown(view.kind, id))} onUnfinished={(text) => setMessage({ text, error: true })} onCancel={() => (view.id === null ? go(view.kind) : shown(view.kind, view.id))} />
@@ -499,8 +516,8 @@ export function App() {
   )
 }
 
-// Every List, the ones in the sidebar and the rest.
-function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGroups: () => void }) {
+// Every List, the ones in the sidebar and the rest, then the pages hidden from the sidebar.
+export function RecordsIndex({ onGo, onGroups, pages }: { onGo: (page: ListKind) => void; onGroups: () => void; pages: { label: string; Icon: LucideIcon; open: () => void }[] }) {
   return (
     <>
       <header className="head"><h1>All records</h1></header>
@@ -510,6 +527,7 @@ function RecordsIndex({ onGo, onGroups }: { onGo: (page: ListKind) => void; onGr
           return <button key={k} className="record-kind" onClick={() => onGo(k)}><Icon size={18} />{listName[k]}</button>
         })}
         <button className="record-kind" onClick={onGroups}><ShieldCheck size={18} />Permission groups</button>
+        {pages.map(({ label, Icon, open }) => <button key={label} className="record-kind" onClick={open}><Icon size={18} />{label}</button>)}
       </div>
     </>
   )
