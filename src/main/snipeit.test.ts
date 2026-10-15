@@ -1886,6 +1886,106 @@ describe('report', () => {
     expect(report.rows.map((r) => r.slice(0, 3))).toEqual([['Serial', 'ABC', 'NOMMA-1'], ['Serial', 'abc ', 'NOMMA-2'], ['Serial', 'XYZ', 'NOMMA-3'], ['Serial', 'xyz', 'NOMMA-7'], ['Asset Tag', 'NOMMA-3', 'NOMMA-3'], ['Asset Tag', 'nomma-3', 'nomma-3']])
   })
 
+  describe('Custom Asset Report', () => {
+    const asset = (id: number, fields: object) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, assigned_to: null, notes: null, purchase_date: null, purchase_cost: null, last_checkout: null, custom_fields: {}, ...fields })
+    const ready = { id: 1, name: 'Ready to Deploy', status_type: 'deployable', status_meta: 'deployable' }
+    const hardware = [
+      asset(1, { purchase_date: { date: '2026-08-01' }, purchase_cost: '1,250.00', last_checkout: { datetime: '2026-09-20 08:15:00' }, notes: '<p>Charger <strong>missing</strong></p>',
+        status_label: { id: 2, name: 'Deployed', status_type: 'deployable', status_meta: 'deployed' },
+        assigned_to: { id: 3, name: 'Jordan Reyes', type: 'user', username: 'jreyes', email: 'jreyes@example.org', employee_number: '4471' },
+        custom_fields: { 'MAC Address': { field: '_snipeit_mac_address_1', value: '00:1A:2B:00:00:01' } } }),
+      asset(2, { purchase_date: { date: '2026-09-10' }, purchase_cost: '300.00', status_label: ready }),
+      asset(3, { status_label: ready }),
+    ]
+    // Archived and deleted Assets come only from their own lists (Snipe-IT's "show archived in list" off; status=Deleted).
+    const shelved = [asset(4, { status_label: { id: 9, name: 'Retired', status_type: 'archived', status_meta: 'archived' } })]
+    const trashed = [asset(5, { status_label: ready, deleted_at: { datetime: '2026-09-30 12:00:00' } })]
+    const fields = [{ id: 1, name: 'MAC Address', db_column_name: '_snipeit_mac_address_1' }, { id: 2, name: 'Cart', db_column_name: '_snipeit_cart_2' }]
+    // The log's Checkouts, newest first: NOMMA-1 out in October and in September, NOMMA-2 (whose last_checkout is blank) in September.
+    const checkout = (id: number, assetId: number, datetime: string) =>
+      ({ id, action_type: 'checkout', created_at: { datetime }, created_by: { id: 5, name: 'E. Caldwell' }, target: { id: 311, name: 'Jordan Reyes' }, note: null, item: { id: assetId, name: `NOMMA-${assetId}`, type: 'asset' } })
+    const log = [checkout(3, 1, '2026-10-02 09:00:00'), checkout(2, 1, '2026-09-20 09:00:00'), checkout(1, 2, '2026-09-15 09:00:00')]
+    function customFetch(fieldsStatus = 200) {
+      const queries: Record<string, string>[] = []
+      const fetch = (async (input: string | URL | Request) => {
+        const url = new URL(String(input))
+        if (url.pathname.endsWith('/fields')) return new Response(JSON.stringify(fieldsStatus === 200 ? { total: fields.length, rows: fields } : { status: 'error', messages: 'You do not have permission to access this area.', payload: null }), { status: fieldsStatus })
+        queries.push(Object.fromEntries(url.searchParams))
+        if (url.pathname.endsWith('/reports/activity')) return new Response(JSON.stringify({ total: log.length, rows: log }))
+        const rows = { Archived: shelved, Deleted: trashed }[url.searchParams.get('status') ?? ''] ?? hardware
+        return new Response(JSON.stringify({ total: rows.length, rows }))
+      }) as typeof globalThis.fetch
+      return { fetch, queries }
+    }
+
+    it('has the columns picked, in that order, from the Asset, its Assignee and its Custom Fields, with Archived Assets read from their own list', async () => {
+      const { fetch, queries } = customFetch()
+      const columns = ['asset_tag', 'status', 'purchase_cost', 'checkout_date', 'notes', 'url', 'assigned_to', 'username', 'email', 'employee_num', '_snipeit_mac_address_1']
+      const r = await createSnipeIt(config, fetch, today).report('custom', { columns, filters: {} })
+      expect(r.columns).toEqual(['Asset Tag', 'Status Label', 'Purchase cost', 'Checked out', 'Notes', 'URL', 'Assignee', 'Username', 'Email', 'Employee No.', 'MAC Address'])
+      expect(r.rows).toEqual([
+        ['NOMMA-1', 'Deployed (deployed)', '1250.00', '2026-09-20 08:15', 'Charger **missing**', 'https://snipe.example.org/hardware/1', 'Jordan Reyes', 'jreyes', 'jreyes@example.org', '4471', '00:1A:2B:00:00:01'],
+        ['NOMMA-2', 'Ready to Deploy (deployable)', '300.00', '', '', 'https://snipe.example.org/hardware/2', '', '', '', '', ''],
+        ['NOMMA-3', 'Ready to Deploy (deployable)', '', '', '', 'https://snipe.example.org/hardware/3', '', '', '', '', ''],
+        ['NOMMA-4', 'Retired (archived)', '', '', '', 'https://snipe.example.org/hardware/4', '', '', '', '', ''],
+      ])
+      expect(r.capped).toBe(false)
+      expect(queries.map((q) => q.status)).toEqual([undefined, 'Archived'])
+    })
+
+    it("heads a Custom Field column as the Assets name it, or as Snipe-IT's field list does; a key neither names, or that the list can't be read for, stays a key", async () => {
+      const columns = ['_snipeit_mac_address_1', '_snipeit_cart_2', '_snipeit_gone_3']
+      expect((await createSnipeIt(config, customFetch().fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', 'Cart', '_snipeit_gone_3'])
+      expect((await createSnipeIt(config, customFetch(403).fetch, today).report('custom', { columns })).columns).toEqual(['MAC Address', '_snipeit_cart_2', '_snipeit_gone_3'])
+      // The picker's list, too, comes from the Assets when /fields is refused.
+      expect(await createSnipeIt(config, customFetch(403).fetch, today).customFieldList()).toEqual([{ key: '_snipeit_mac_address_1', label: 'MAC Address' }])
+    })
+
+    it('a Checked out range matches any Checkout in the log within it, not only the last one', async () => {
+      const { fetch, queries } = customFetch()
+      const run = (filters: Record<string, string>) => createSnipeIt(config, fetch, today).report('custom', { columns: ['asset_tag'], filters }).then((r) => r.rows.map((row) => row[0]))
+      expect(await run({ checkout_from: '2026-09-01', checkout_to: '2026-09-30' })).toEqual(['NOMMA-1', 'NOMMA-2'])
+      expect(queries.find((q) => q.action_type)).toMatchObject({ action_type: 'checkout', sort: 'created_at', order: 'desc' })
+      expect(await run({ checkout_from: '2026-10-01' })).toEqual(['NOMMA-1'])
+      expect(await run({ checkout_to: '2026-09-16' })).toEqual(['NOMMA-2'])
+    })
+
+    it('sends the id and Order number filters to Snipe-IT and applies the dates, cost, checked out, Archived and deleted ones itself', async () => {
+      const { fetch, queries } = customFetch()
+      const snipeIt = createSnipeIt(config, fetch, today)
+      const run = (filters: Record<string, string>) => snipeIt.report('custom', { columns: ['asset_tag'], filters }).then((r) => r.rows.map((row) => row[0]))
+      expect(await run({ category_id: '3', order_number: 'PO-1', purchase_from: '2026-09-01' })).toEqual(['NOMMA-2'])
+      expect(queries[0]).toMatchObject({ category_id: '3', order_number: 'PO-1' })
+      expect(queries[0].purchase_from).toBeUndefined()
+      expect(await run({ purchase_to: '2026-08-31' })).toEqual(['NOMMA-1'])
+      expect(await run({ purchase_cost_min: '300', purchase_cost_max: '1000' })).toEqual(['NOMMA-2'])
+      expect(await run({ assignment: 'assigned' })).toEqual(['NOMMA-1'])
+      // Left out, the Archived list isn't even read; nor with a Status Label, whose list includes them.
+      expect(await run({ assignment: 'unassigned', exclude_archived: '1' })).toEqual(['NOMMA-2', 'NOMMA-3'])
+      expect(queries.at(-1)?.status).toBeUndefined()
+      expect(await run({ status_id: '1' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3'])
+      expect(queries.at(-1)).toMatchObject({ status_id: '1' })
+      expect(queries.at(-1)?.status).toBeUndefined()
+      // Deleted Assets have their own list too, read beside the others or, for Only deleted, alone.
+      expect(await run({ deleted: 'include' })).toEqual(['NOMMA-1', 'NOMMA-2', 'NOMMA-3', 'NOMMA-4', 'NOMMA-5'])
+      expect(queries.slice(-3).map((q) => q.status)).toEqual([undefined, 'Archived', 'Deleted'])
+      expect(await run({ deleted: 'only', category_id: '3' })).toEqual(['NOMMA-5'])
+      expect(queries.slice(-1)).toEqual([{ category_id: '3', status: 'Deleted', limit: '500', offset: '0', sort: 'id', order: 'asc' }])
+    })
+
+    it('refuses an unknown column or filter, a malformed value, or no columns, without asking Snipe-IT', async () => {
+      const { fetch, calls } = fakeFetch({})
+      const snipeIt = createSnipeIt(config, fetch)
+      await expect(snipeIt.report('custom', { columns: [], filters: {} })).rejects.toThrow('at least one column')
+      await expect(snipeIt.report('custom', { columns: ['password'] })).rejects.toThrow('Unknown column')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { search: 'x' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { purchase_from: '9/1/2026' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { company_id: '1 or 1' } })).rejects.toThrow('Invalid filter')
+      await expect(snipeIt.report('custom', { columns: ['asset_tag'], filters: { deleted: 'all' } })).rejects.toThrow('Invalid filter')
+      expect(calls).toEqual([])
+    })
+  })
+
   it('the Overdue Report sorts by how late to the minute, so Assets late on their due day keep their order', async () => {
     const asset = (id: number, datetime: string) => ({ ...chromebook, id, asset_tag: `NOMMA-${id}`, name: `CB-${id}`, expected_checkin: { datetime } })
     const hardware = [asset(1, '2026-09-24 15:30:00'), asset(2, '2026-09-24 14:50:00'), asset(3, '2026-09-23 00:00:00'), asset(4, '2026-09-24 16:30:00')]

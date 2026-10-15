@@ -306,6 +306,19 @@ kbd { font: 400 10.5px/1 var(--mono); color: var(--dim); border: 1px solid var(-
 .customize button { background: var(--bg); border: 1px solid var(--line); color: var(--text); font: 13px var(--sans);
                     width: 28px; height: 28px; padding: 0; border-radius: var(--r-ctl); cursor: pointer; }
 .customize button:disabled { opacity: .35; cursor: default; }
+/* The Custom Asset Report's form: its column groups, then its filters as a label/control grid. */
+.custom-report { flex-wrap: wrap; align-items: flex-start; gap: 20px 32px; }
+/* The Asset fields are many: two columns, the heading across both. */
+.custom-report ol:first-child { columns: 2; column-gap: 24px; min-width: 440px; }
+.custom-report ol:first-child li.k { column-span: all; }
+.custom-report li.k .actions { margin-left: 10px; }
+.custom-report .ranges { display: grid; grid-template-columns: max-content minmax(180px, 1fr); gap: 6px 12px; align-items: center; min-width: 340px; }
+.custom-report .ranges > label { display: contents; }
+.custom-report .ranges .k { grid-column: 1 / -1; font: 600 14px var(--display); color: var(--heading); padding-bottom: 4px; }
+/* Text, number and date boxes, not the 18px checkboxes .customize sizes. */
+.custom-report .ranges input:not([type="checkbox"]) { width: auto; height: auto; min-width: 0; flex: 1; }
+.custom-report .ranges .check { display: flex; grid-column: 1 / -1; }
+.custom-report li.dim { padding-left: 28px; }
 .link { all: unset; color: var(--text); cursor: pointer; font-weight: 600; }
 /* all: unset on .link wipes .mono's font, so it's set again. */
 .link.mono { font-family: var(--mono); font-size: .93em; color: var(--primary); }

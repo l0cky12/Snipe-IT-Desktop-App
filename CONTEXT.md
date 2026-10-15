@@ -85,11 +85,15 @@ The Snipe-IT activity log across the whole inventory: every Checkout, Checkin, a
 _Avoid_: audit log
 
 **Report**:
-A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances, Duplicates) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
+A table over the whole inventory the Operator runs on request, or has emailed on a Schedule, and can export as CSV: one of the built-in Reports (the Activity Report, Overdue, Expiring Warranty, Audit due, Audit late, Last audited, Assets by Status Label and Location, Checked out per User, Damaged, Temp checkout history, End of life, Maintenances, Duplicates, the Custom Asset Report) or a Saved Report. Most can be narrowed to a date range; the audit Reports, Assets by Status Label and Location, Checked out per User and End of life also to a Location and a Category.
 _Avoid_: export (the export is the file a Report is saved to)
 
 **Duplicates**:
 The Report of every Asset whose Serial or Asset Tag another Asset shares, ignoring case and outer spaces. A blank Serial is never a duplicate.
+
+**Custom Asset Report**:
+Snipe-IT's Custom Asset Report, run from the app: the Operator ticks which Asset fields (and Custom Fields) are its columns and narrows the Assets by Company, Location, Default Location, Supplier, Asset Model, Manufacturer, Category, Status Label, Order number, Purchase cost, a date range on any of the Asset's dates, whether checked out, and whether Archived or deleted Assets are included. Saved under a name it's a Saved Report (what Snipe-IT calls a report template).
+_Avoid_: custom report (alone), template (say Saved Report)
 
 **Record type**:
 The kind of thing an Activity Report entry is about: an Asset, License, Accessory, Consumable, Component, or User.
@@ -229,8 +233,8 @@ Creating or updating Records from a CSV through Snipe-IT's own importer, with ea
 _Avoid_: upload, sync
 
 **Saved Report**:
-A List with its filters, Columns and, for Assets, its View, saved under a name by the Operator, which can be emailed to the Operator.
-_Avoid_: custom report, saved search
+A List with its filters, Columns and, for Assets, its View, or a Custom Asset Report with its columns and filters, saved under a name by the Operator, which can be emailed to the Operator.
+_Avoid_: saved search, template
 
 **Schedule**:
 When a Saved Report or built-in Report emails itself to the Operator: daily, weekly or monthly at a set time. An Activity Report, Overdue, Last audited, Temp checkout history or Maintenances Schedule also sets its dates relative to each send (the previous 1, 7 or 30 days, or since the last send). A built-in Report's Schedule sends every Location and Category. A send missed while the app was closed goes out once at the next launch; a failed send tries again each hour.

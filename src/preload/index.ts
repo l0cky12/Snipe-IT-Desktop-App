@@ -58,6 +58,7 @@ const snipeIt: SnipeItBridge = {
   record: call('snipeit:record'),
   form: call('snipeit:form'),
   customFields: call('snipeit:customFields'),
+  customFieldList: call('snipeit:customFieldList'),
   save: call('snipeit:save'),
   remove: call('snipeit:remove'),
   canManagePermissions: call('snipeit:canManagePermissions'),

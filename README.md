@@ -60,6 +60,7 @@ The **Reports** icon in the left rail runs three reports and shows them as a tab
 - **Activity Report**: every Checkout, Checkin, and edit in a date range, optionally narrowed to one record type (Assets, Licenses, Accessories, Consumables, Components, Users) and one action.
 - **Overdue**: every Overdue Asset, most late first, optionally only those whose Expected Checkin falls in a date range.
 - **Warranty expiring**: every Expiring Warranty (the next 90 days), soonest first, optionally within a date range.
+- **Custom Asset Report**: Snipe-IT's own Custom Asset Report, in the app. Tick which Asset fields (and Custom Fields) are its columns, then narrow by Company, Location, Default Location, Supplier, Asset Model, Manufacturer, Category, Status Label, Order number, Purchase cost, a date range on any of the Asset's dates, whether it's checked out, and whether Archived or deleted Assets are included. **Save report…** keeps it as a template under Saved Reports, where it can be emailed now or on a Schedule.
 
 **Export CSV…** saves the table as a CSV file where you choose. Exports include student information, so the app asks you to confirm first: under FERPA the file must stay with authorized district staff (don't email it outside the district, post it, or save it to shared or personal drives), and should be deleted when you're done.
 
